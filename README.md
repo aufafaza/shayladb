@@ -4,7 +4,7 @@
 
 - Java 17+
 - Maven 3.8+
-- No third-party runtime dependencies
+- No third-party runtime dependencies (JUnit 5 is test-only)
 
 ## Modules
 
@@ -27,6 +27,16 @@ mvn clean verify                     # build everything
 mvn -pl mdbms-app -am package        # build the app and its dependencies
 mvn -pl mdbms-storage -am verify     # build a single module and its dependencies
 ```
+
+## Test
+
+```bash
+mvn test                             # run all tests
+mvn -pl mdbms-storage -am test       # run one module's tests
+```
+
+- Tests go in `mdbms-<name>/src/test/java/mdbms/<name>/`
+- CI fails on a PR to `main` if any module has no tests, a failing test, or only skipped tests
 
 ## Run
 
