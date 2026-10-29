@@ -11,11 +11,11 @@ import mdbms.models.RecordImage;
 import mdbms.models.RecoveryResult;
 import mdbms.models.RowId;
 
-/**
- * Implementasi Mock (Stub) dari IFailureRecoveryManager yang mengembalikan nilai dummy.
- * Disediakan bagi kelompok Concurrency Control Manager (CCM) dan Storage Manager (SM)
- * untuk keperluan integrasi awal dan pengujian terisolasi.
- */
+/*
+Implementasi Mock dari IFailureRecoveryManager yang mengembalikan dummy value
+Disediakan untuk komponen Concurrency Control Manager (CCM) dan Storage Manager (SM)
+*/
+
 public class MockFailureRecoveryManager implements IFailureRecoveryManager {
 
     private final AtomicLong dummyLsnCounter = new AtomicLong(1L);
@@ -57,7 +57,6 @@ public class MockFailureRecoveryManager implements IFailureRecoveryManager {
 
     @Override
     public boolean flushLogUpTo(long lsn) {
-        // Selalu mengembalikan true seolah-olah log hingga LSN tersebut sudah ter-flush ke disk
         return lsn >= 0;
     }
 
@@ -115,7 +114,6 @@ public class MockFailureRecoveryManager implements IFailureRecoveryManager {
 
     @Override
     public List<LogRecord> readLogs(Integer filterTxId) {
-        // Mengembalikan list kosong yang aman (tidak null)
         return Collections.emptyList();
     }
 
