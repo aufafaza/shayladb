@@ -1,15 +1,19 @@
 package mdbms.mocks;
 
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.stream.Collectors;
 import mdbms.api.IFailureRecoveryManager;
+import mdbms.models.DataChangeLogRecord;
 import mdbms.models.LogRecord;
 import mdbms.models.LogType;
 import mdbms.models.RecordImage;
 import mdbms.models.RecoveryResult;
 import mdbms.models.RowId;
+import mdbms.models.TransactionLogRecord;
 
 /*
 Implementasi Mock dari IFailureRecoveryManager yang mengembalikan dummy value
@@ -19,6 +23,7 @@ Disediakan untuk komponen Concurrency Control Manager (CCM) dan Storage Manager 
 public class MockFailureRecoveryManager implements IFailureRecoveryManager {
 
     private final AtomicLong dummyLsnCounter = new AtomicLong(1L);
+    private final List<LogRecord> dummyLogs = Collections.synchronizedList(new ArrayList<>());
     private int lastMaxTxId = 0;
 
     public MockFailureRecoveryManager() {
@@ -28,6 +33,7 @@ public class MockFailureRecoveryManager implements IFailureRecoveryManager {
     public RecoveryResult writeTransactionLog(int txId, LogType eventType) {
         updateMaxTxId(txId);
         long lsn = dummyLsnCounter.getAndIncrement();
+        dummyLogs.add(new TransactionLogRecord(lsn, txId, eventType, Instant.now()));
         return new RecoveryResult(
             true,
             lsn,
@@ -47,6 +53,7 @@ public class MockFailureRecoveryManager implements IFailureRecoveryManager {
     ) {
         updateMaxTxId(txId);
         long lsn = dummyLsnCounter.getAndIncrement();
+        dummyLogs.add(new DataChangeLogRecord(lsn, txId, opType, Instant.now(), table, rid, beforeImg, afterImg));
         return new RecoveryResult(
             true,
             lsn,
@@ -114,7 +121,12 @@ public class MockFailureRecoveryManager implements IFailureRecoveryManager {
 
     @Override
     public List<LogRecord> readLogs(Integer filterTxId) {
-        return Collections.emptyList();
+        if (filterTxId == null) {
+            return new ArrayList<>(dummyLogs);
+        }
+        return dummyLogs.stream()
+            .filter(log -> log.getTxId() == filterTxId)
+            .collect(Collectors.toList());
     }
 
     private synchronized void updateMaxTxId(int txId) {
