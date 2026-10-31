@@ -1,16 +1,17 @@
 package mdbms.app;
 
-public final class Main {
-    public static void main(String[] args) {
-        System.out.println("mDBMS 0.1.0-SNAPSHOT"); 
+import java.io.IOException;
+import mdbms.net.DBMSServer;
 
-        // call constructors for all
-        DBMSConfig cfg = new DBMSConfig("null", 0, ConcurrencyAlgorithm.LOCK_BASED);
+public final class Main {
+    public static void main(String[] args) throws IOException {
+        System.out.println("mDBMS 0.1.0-SNAPSHOT");
+
+        DBMSConfig cfg = new DBMSConfig();
         DBMS dbms = new DBMS(cfg);
-        
         dbms.start();
         Runtime.getRuntime().addShutdownHook(new Thread(dbms::shutdown));
-        // new CommandLineInterface(dbms.getQueryProcessor()).run(); 
-        dbms.shutdown(); 
-    }       
+
+        new DBMSServer(cfg.getPort(), dbms.getQueryProcessor(), dbms.getConcurrencyControl()).start();
+    }
 }
