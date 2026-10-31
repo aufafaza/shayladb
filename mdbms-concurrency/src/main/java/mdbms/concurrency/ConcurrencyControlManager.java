@@ -1,12 +1,15 @@
 package mdbms.concurrency;
 
 import java.util.Collections;
+import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
+
 import mdbms.api.IConcurrencyControl;
 import mdbms.api.IFailureRecoveryManager;
+import mdbms.models.Operation;
 import mdbms.models.AccessStatus;
 import mdbms.models.DataItem;
 import mdbms.models.LogType;
@@ -104,6 +107,11 @@ public final class ConcurrencyControlManager implements IConcurrencyControl {
         return Collections.unmodifiableMap(activeTransactions);
     }
 
+    public boolean verifySchedule(List<Operation> manualSchedule) {
+        // TODO
+        return true;
+    }
+    
     private AccessStatus request(int txId, DataItem data, boolean write) {
         Objects.requireNonNull(data, "data");
         Transaction tx = activeTransactions.get(txId);
