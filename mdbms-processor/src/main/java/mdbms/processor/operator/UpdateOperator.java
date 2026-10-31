@@ -12,6 +12,7 @@ import mdbms.models.DataType;
 import mdbms.processor.IResultRow;
 import mdbms.processor.ResultRow;
 import mdbms.processor.ResultTableSchema;
+import mdbms.processor.IResultRow;
 
 public class UpdateOperator extends QueryUnaryOperator {
     private final IDataAccess dataAccess;
@@ -25,6 +26,7 @@ public class UpdateOperator extends QueryUnaryOperator {
     private int columnIndex;
     private List<IResultRow> targetRows;
     private boolean isDone;
+    private int affectedRows;
 
     public UpdateOperator(IQueryOperator childOperator, IDataAccess dataAccess, ISchemaCatalog schemaCatalog,
             IConcurrencyControl concurrencyControlManager, int transactionId, String tableName,
@@ -53,10 +55,12 @@ public class UpdateOperator extends QueryUnaryOperator {
         }
         childOperator.close();
         isDone = false;
+        affectedRows = 0;
     }
 
     public IResultRow next() {
-        if (isDone) return null;
+        if (isDone)
+            return null;
         isDone = true;
 
         for (IResultRow row : targetRows) {
@@ -75,10 +79,18 @@ public class UpdateOperator extends QueryUnaryOperator {
         schema.addColumn(new ColumnDefinition("affected_rows", DataType.INTEGER, 0, false));
         ResultRow result = new ResultRow(schema);
         result.set(schema.getTableName(), "affected_rows", targetRows.size());
+        affectedRows = targetRows.size();
         return result;
+
+        // TODO BUTUH ResultRow dari QP2 untuk return jumlah baris yang diubah
+        // return null;
     }
 
     public void close() {
+    }
+
+    public int getAffectedRows() {
+        return affectedRows;
     }
 
     private void requestWrite(DataItem item) {
