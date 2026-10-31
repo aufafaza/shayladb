@@ -1,5 +1,5 @@
 package mdbms.models;
 
-public class RecordImage {
-    
-}
+import java.util.List;
+
+public record RecordImage(List<Object> values){}

@@ -1,5 +1,11 @@
 package mdbms.models;
 
-public class LogType {
-    
+public enum LogType {
+    BEGIN,
+    COMMIT,
+    ABORT,
+    INSERT,
+    UPDATE,
+    DELETE,
+    CHECKPOINT
 }
