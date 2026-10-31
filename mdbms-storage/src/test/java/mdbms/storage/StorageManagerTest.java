@@ -47,21 +47,21 @@ class StorageManagerTest {
 
     @Test
     void readBlockReturnsNoRows() {
-        DataRetrieval request = new DataRetrieval("users", List.of("id"), CONDITION);
+        DataRetrieval request = new DataRetrieval("users", List.of("id"), List.of(CONDITION));
 
         assertTrue(storage.readBlock(request).rows().isEmpty());
     }
 
     @Test
     void writeBlockReturnsNoRowIds() {
-        DataWrite request = new DataWrite("users", Map.of("id", 1), null);
+        DataWrite request = new DataWrite("users", Map.of("id", 1), List.of());
 
         assertTrue(storage.writeBlock(request).isEmpty());
     }
 
     @Test
     void deleteBlockDeletesNothing() {
-        assertEquals(0, storage.deleteBlock(new DataDeletion("users", CONDITION)));
+        assertEquals(0, storage.deleteBlock(new DataDeletion("users", List.of(CONDITION))));
     }
 
     @Test
