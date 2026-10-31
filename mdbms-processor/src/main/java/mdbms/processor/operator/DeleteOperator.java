@@ -37,6 +37,7 @@ public class DeleteOperator {
         int count=0;for(RowId id:ids){
             access.deleteByRowId(id);
             count++;
-        }return count;
+        }
+        return count;
     }
 }
