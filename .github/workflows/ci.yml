@@ -23,11 +23,18 @@ jobs:
       - name: Build and run tests
         run: mvn -B verify -DskipTests=false -Dmaven.test.skip=false -Dmaven.test.failure.ignore=false
 
-      - name: Require passing tests in every module
+      - name: Require passing tests in every module with code
         run: |
           bad=0
           for module in $(sed -n 's:.*<module>\(.*\)</module>.*:\1:p' pom.xml); do
-            reports=$(ls "$module"/target/surefire-reports/TEST-*.xml 2>/dev/null)
+            # Interfaces only, nothing to test
+            [ "$module" = "mdbms-api" ] && continue
+            # No classes yet, so no tests required
+            if [ -z "$(find "$module/src/main/java" -name '*.java' ! -name package-info.java)" ]; then
+              echo "skip    $module (no code yet)"
+              continue
+            fi
+            reports=$(ls "$module"/target/surefire-reports/TEST-*.xml 2>/dev/null || true)
             if [ -z "$reports" ]; then
               echo "::error::$module has no test cases"
               bad=1

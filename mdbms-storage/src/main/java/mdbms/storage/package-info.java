@@ -1,2 +1,2 @@
-/** Storage Manager. */
+/** Storage Manager.   */
 package mdbms.storage;
