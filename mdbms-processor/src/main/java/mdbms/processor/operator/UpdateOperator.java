@@ -8,7 +8,10 @@ import mdbms.api.ISchemaCatalog;
 import mdbms.models.AccessStatus;
 import mdbms.models.ColumnDefinition;
 import mdbms.models.DataItem;
+import mdbms.models.DataType;
 import mdbms.processor.IResultRow;
+import mdbms.processor.ResultRow;
+import mdbms.processor.ResultTableSchema;
 
 public class UpdateOperator extends QueryUnaryOperator {
     private final IDataAccess dataAccess;
@@ -22,7 +25,6 @@ public class UpdateOperator extends QueryUnaryOperator {
     private int columnIndex;
     private List<IResultRow> targetRows;
     private boolean isDone;
-    private int affectedRows;
 
     public UpdateOperator(IQueryOperator childOperator, IDataAccess dataAccess, ISchemaCatalog schemaCatalog,
             IConcurrencyControl concurrencyControlManager, int transactionId, String tableName,
@@ -51,7 +53,6 @@ public class UpdateOperator extends QueryUnaryOperator {
         }
         childOperator.close();
         isDone = false;
-        affectedRows = 0;
     }
 
     public IResultRow next() {
@@ -69,17 +70,15 @@ public class UpdateOperator extends QueryUnaryOperator {
             // TODO BUTUH method dari CCM untuk kirim catatan perubahan ke FRM
             dataAccess.updateByRowId(row.getRowId(), newValues);
         }
-        affectedRows = targetRows.size();
 
-        // TODO BUTUH ResultRow dari QP2 untuk return jumlah baris yang diubah
-        return null;
+        ResultTableSchema schema = new ResultTableSchema();
+        schema.addColumn(new ColumnDefinition("affected_rows", DataType.INTEGER, 0, false));
+        ResultRow result = new ResultRow(schema);
+        result.set(schema.getTableName(), "affected_rows", targetRows.size());
+        return result;
     }
 
     public void close() {
-    }
-
-    public int getAffectedRows() {
-        return affectedRows;
     }
 
     private void requestWrite(DataItem item) {
