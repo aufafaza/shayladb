@@ -3,6 +3,10 @@ package mdbms.concurrency;
 import java.util.ArrayList;
 import java.util.Map;
 
+import mdbms.models.AccessStatus;
+import mdbms.models.Transaction;
+import mdbms.models.DataItem;
+
 public class LockManager {
     private Map<DataItem, ArrayList<Lock>> lockTable;
 

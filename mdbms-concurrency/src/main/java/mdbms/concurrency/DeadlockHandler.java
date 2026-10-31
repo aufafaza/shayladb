@@ -1,5 +1,7 @@
 package mdbms.concurrency;
 
+import mdbms.models.Transaction;
+
 public class DeadlockHandler {
 
     boolean detectDeadlock() {
