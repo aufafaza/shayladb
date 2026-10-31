@@ -1,12 +1,19 @@
 package mdbms.models;
 
-public record Transaction(int id, TransactionState state, long timestamp) {
+public class Transaction{
+    private int id; 
+    private long timestamp; 
+    private TransactionState state; 
     public int getId(){ 
         return id; 
     }
 
-    public TransactionState getTransactionState(){ 
+    public TransactionState getState(){ 
         return state; 
+    }
+
+    public void setState(TransactionState state){
+        this.state = state; 
     }
 
     public long getTimestamp(){ 
