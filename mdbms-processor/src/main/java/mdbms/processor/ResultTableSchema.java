@@ -70,4 +70,16 @@ public class ResultTableSchema {
         }
         return false;
     }
+
+    public boolean isColumnAmbiguous(String columnName) {
+        boolean hasColumn = false;
+        for (int i = 0; i < columns.size(); i++) {
+            String name = columns.get(i).name();
+            if (name.equals(columnName)) {
+                if (!hasColumn) hasColumn = true;
+                else return true;
+            }
+        }
+        return false;
+    }
 }
