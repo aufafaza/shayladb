@@ -1,12 +1,15 @@
 package mdbms.concurrency;
 
 import java.util.Collections;
+import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
+
 import mdbms.api.IConcurrencyControl;
 import mdbms.api.IFailureRecoveryManager;
+import mdbms.models.Operation;
 import mdbms.models.AccessStatus;
 import mdbms.models.DataItem;
 import mdbms.models.LogType;
@@ -39,12 +42,6 @@ public final class ConcurrencyControlManager implements IConcurrencyControl {
     public ConcurrencyControlManager(ConcurrencyProtocol protocol, IFailureRecoveryManager frm) {
         this.protocol = Objects.requireNonNull(protocol, "protocol");
         this.frm = frm;
-    }
-
-    /** Runs recovery before new work is accepted. Safe to call repeatedly. */
-    public synchronized void initAfterRecovery() {
-        if (frm != null) frm.recoverOnStartup();
-        isRecovered = true;
     }
 
     public void setProtocol(ConcurrencyProtocol protocol) {
@@ -110,6 +107,11 @@ public final class ConcurrencyControlManager implements IConcurrencyControl {
         return Collections.unmodifiableMap(activeTransactions);
     }
 
+    public boolean verifySchedule(List<Operation> manualSchedule) {
+        // TODO
+        return true;
+    }
+    
     private AccessStatus request(int txId, DataItem data, boolean write) {
         Objects.requireNonNull(data, "data");
         Transaction tx = activeTransactions.get(txId);
