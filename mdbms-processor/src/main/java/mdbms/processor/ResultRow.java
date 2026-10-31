@@ -22,6 +22,7 @@ public class ResultRow implements IResultRow {
             if (!values.containsKey(tableName)) {
                 values.put(tableName, new HashMap<>());
             }
+            values.get(tableName).put(column.name(), null);
         }
     }
 
