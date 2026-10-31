@@ -1,7 +1,5 @@
-package mdbms.concurrency;
+package mdbms.models;
 
-import mdbms.models.DataItem;
-import mdbms.models.Transaction;
 
 public class Operation {
     private final Transaction transaction;

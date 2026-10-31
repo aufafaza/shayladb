@@ -1,4 +1,4 @@
-package mdbms.concurrency;
+package mdbms.models;
 
 public enum OperationType {
     READ,
