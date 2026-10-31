@@ -19,6 +19,7 @@
         <module>mdbms-recovery</module>
         <module>mdbms-mocks</module>
         <module>mdbms-app</module>
+        <module>mdbms-net</module>
     </modules>
 
     <properties>
@@ -72,6 +73,11 @@
             <dependency>
                 <groupId>mdbms</groupId>
                 <artifactId>mdbms-app</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>mdbms</groupId>
+                <artifactId>mdbms-net</artifactId>
                 <version>${project.version}</version>
             </dependency>
             <dependency>
