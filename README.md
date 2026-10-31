@@ -17,7 +17,6 @@
 | `mdbms-processor` | `mdbms-api` |
 | `mdbms-concurrency` | `mdbms-api` |
 | `mdbms-recovery` | `mdbms-api` |
-| `mdbms-mocks` | `mdbms-api` |
 | `mdbms-app` | `mdbms-storage`, `mdbms-optimizer`, `mdbms-processor`, `mdbms-concurrency`, `mdbms-recovery` |
 
 ## Build

@@ -34,6 +34,10 @@
             <groupId>mdbms</groupId>
             <artifactId>mdbms-recovery</artifactId>
         </dependency>
+        <dependency>
+            <groupId>mdbms</groupId>
+            <artifactId>mdbms-net</artifactId>
+        </dependency>
     </dependencies>
 
     <build>
