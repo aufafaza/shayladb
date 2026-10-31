@@ -75,7 +75,7 @@
                 <artifactId>mdbms-app</artifactId>
                 <version>${project.version}</version>
             </dependency>
-             <dependency>
+            <dependency>
                 <groupId>mdbms</groupId>
                 <artifactId>mdbms-net</artifactId>
                 <version>${project.version}</version>
