@@ -5,7 +5,7 @@ import java.util.List;
 import mdbms.processor.ExpressionEvaluator;
 import mdbms.processor.IResultRow;
 
-public class SelectOperator {
+public class SelectOperator extends QueryUnaryOperator {
     private final List<Condition> conditions;
     public SelectOperator(IQueryOperator child,List<Condition> c){
         super(child);
