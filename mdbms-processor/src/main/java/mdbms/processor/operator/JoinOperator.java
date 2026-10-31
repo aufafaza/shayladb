@@ -1,38 +1,26 @@
 package mdbms.processor.operator;
 
-import java.util.*;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.function.BiPredicate;
-import mdbms.processor.ResultRow;
+import mdbms.processor.IResultRow;
 
-public class JoinOperator implements IQueryOperator {
-
-    private final IQueryOperator leftOperator;
-    private final IQueryOperator rightOperator;
-    private final BiPredicate<ResultRow, ResultRow> condition;
-    private final boolean naturalJoin;
+public class JoinOperator extends QueryBinaryOperator {
+    private final BiPredicate<IResultRow, IResultRow> condition;
+    private final boolean natural;
     private final int blockSize;
-
-    private final List<ResultRow> rightRows = new ArrayList<>();
-    private final List<ResultRow> leftBlock = new ArrayList<>();
-
+    private final List<IResultRow> rightRows = new ArrayList<>();
+    private final List<IResultRow> leftBlock = new ArrayList<>();
     private int leftIndex;
     private int rightIndex;
 
-    public JoinOperator(
-            IQueryOperator leftOperator,
-            IQueryOperator rightOperator,
-            BiPredicate<ResultRow, ResultRow> condition,
-            boolean naturalJoin,
-            int blockSize) {
-
-        if (blockSize <= 0) {
-            throw new IllegalArgumentException("Invalid block size");
-        }
-
-        this.leftOperator = leftOperator;
-        this.rightOperator = rightOperator;
+    public JoinOperator(IQueryOperator left, IQueryOperator right,
+                        BiPredicate<IResultRow, IResultRow> condition,
+                        boolean natural, int blockSize) {
+        super(left, right);
+        if (blockSize <= 0) throw new IllegalArgumentException("Ukuran blok harus positif");
         this.condition = condition;
-        this.naturalJoin = naturalJoin;
+        this.natural = natural;
         this.blockSize = blockSize;
     }
 
@@ -42,119 +30,49 @@ public class JoinOperator implements IQueryOperator {
         leftBlock.clear();
         leftIndex = 0;
         rightIndex = 0;
-
         leftOperator.open();
         rightOperator.open();
-
-        ResultRow row;
-        while ((row = rightOperator.next()) != null) {
-            rightRows.add(row);
-        }
-
-        loadNextBlock();
+        IResultRow row;
+        while ((row = rightOperator.next()) != null) rightRows.add(row);
+        loadBlock();
     }
 
-    private void loadNextBlock() {
+    private void loadBlock() {
         leftBlock.clear();
         leftIndex = 0;
         rightIndex = 0;
-
         while (leftBlock.size() < blockSize) {
-            ResultRow row = leftOperator.next();
-
-            if (row == null) {
-                break;
-            }
-
+            IResultRow row = leftOperator.next();
+            if (row == null) break;
             leftBlock.add(row);
         }
     }
 
     @Override
-    public ResultRow next() {
-        while (!leftBlock.isEmpty()) {
-
-            while (rightIndex < rightRows.size()) {
-                ResultRow left = leftBlock.get(leftIndex);
-                ResultRow right = rightRows.get(rightIndex++);
-
-                boolean matches = naturalJoin
-                        ? naturalMatch(left, right)
+    public IResultRow next() {
+        while (!leftBlock.isEmpty() && !rightRows.isEmpty()) {
+            while (leftIndex < leftBlock.size()) {
+                IResultRow left = leftBlock.get(leftIndex);
+                while (rightIndex < rightRows.size()) {
+                    IResultRow right = rightRows.get(rightIndex++);
+                    boolean match = natural ? JoinRowUtil.naturalMatch(left, right)
                         : condition == null || condition.test(left, right);
-
-                if (matches) {
-                    return combine(left, right);
+                    if (match) return JoinRowUtil.combine(left, right, natural);
                 }
+                rightIndex = 0;
+                leftIndex++;
             }
-
-            rightIndex = 0;
-            leftIndex++;
-
-            if (leftIndex >= leftBlock.size()) {
-                loadNextBlock();
-            }
+            loadBlock();
         }
-
         return null;
-    }
-
-    private boolean naturalMatch(ResultRow left, ResultRow right) {
-        Map<String, Object> a = left.getValues();
-        Map<String, Object> b = right.getValues();
-
-        for (String column : a.keySet()) {
-            if (b.containsKey(column)) {
-                Object av = a.get(column);
-                Object bv = b.get(column);
-
-                if (av == null || bv == null || !av.equals(bv)) {
-                    return false;
-                }
-            }
-        }
-
-        return true;
-    }
-
-    private ResultRow combine(ResultRow left, ResultRow right) {
-        Map<String, Object> combined =
-                new LinkedHashMap<>(left.getValues());
-
-        for (Map.Entry<String, Object> entry :
-                right.getValues().entrySet()) {
-
-            String key = entry.getKey();
-
-            if (naturalJoin && combined.containsKey(key)) {
-                continue;
-            }
-
-            if (combined.containsKey(key)) {
-                String base = "right." + key;
-                key = base;
-                int suffix = 2;
-
-                while (combined.containsKey(key)) {
-                    key = base + "_" + suffix++;
-                }
-            }
-
-            combined.put(key, entry.getValue());
-        }
-
-        return new ResultRow(combined);
     }
 
     @Override
     public void close() {
-        try {
-            leftOperator.close();
-        } finally {
-            rightOperator.close();
-            rightRows.clear();
-            leftBlock.clear();
-            leftIndex = 0;
-            rightIndex = 0;
+        try { leftOperator.close(); }
+        finally {
+            try { rightOperator.close(); }
+            finally { rightRows.clear(); leftBlock.clear(); leftIndex = 0; rightIndex = 0; }
         }
     }
 }

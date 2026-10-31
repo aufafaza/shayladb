@@ -1,53 +1,31 @@
 package mdbms.processor.operator;
 
-import mdbms.processor.ResultRow;
+import mdbms.processor.IResultRow;
 
-public class LimitOperator implements IQueryOperator {
-
-    private final IQueryOperator childOperator;
+public class LimitOperator extends QueryUnaryOperator {
     private final long limit;
     private long count;
 
-    public LimitOperator(IQueryOperator childOperator, long limit) {
-        if (childOperator == null) {
-            throw new IllegalArgumentException("Child operator cannot be null");
-        }
-        if (limit < 0) {
-            throw new IllegalArgumentException("LIMIT cannot be negative");
-        }
-
-        this.childOperator = childOperator;
+    public LimitOperator(IQueryOperator child, long limit) {
+        super(child);
+        if (limit < 0) throw new IllegalArgumentException("LIMIT tidak boleh negatif");
         this.limit = limit;
     }
 
     @Override
-    public void open() {
-        count = 0;
-        childOperator.open();
-    }
+    public void open() { count = 0; childOperator.open(); }
 
     @Override
-    public ResultRow next() {
-        if (count >= limit) {
-            return null;
-        }
-
-        ResultRow row = childOperator.next();
-
-        if (row == null) {
-            return null;
-        }
-
-        count++;
+    public IResultRow next() {
+        if (count >= limit) return null;
+        IResultRow row = childOperator.next();
+        if (row != null) count++;
         return row;
     }
 
     @Override
     public void close() {
-        try {
-            childOperator.close();
-        } finally {
-            count = 0;
-        }
+        try { childOperator.close(); }
+        finally { count = 0; }
     }
 }

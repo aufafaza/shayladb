@@ -1,87 +1,55 @@
-
 package mdbms.processor.operator;
 
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
-import mdbms.processor.ResultRow;
+import mdbms.processor.IResultRow;
 
-public class SortOperator implements IQueryOperator {
-
-    private final IQueryOperator childOperator;
-    private final String sortColumn;
+public class SortOperator extends QueryUnaryOperator {
+    private final String column;
     private final boolean ascending;
-    private final List<ResultRow> sortedRows = new ArrayList<>();
+    private final List<IResultRow> rows = new ArrayList<>();
+    private int position;
 
-    private int currentIndex = 0;
-
-    public SortOperator(IQueryOperator childOperator,
-                        String sortColumn,
-                        boolean ascending) {
-        this.childOperator = childOperator;
-        this.sortColumn = sortColumn;
+    public SortOperator(IQueryOperator child, String column, boolean ascending) {
+        super(child);
+        this.column = column;
         this.ascending = ascending;
     }
 
     @Override
     public void open() {
-        sortedRows.clear();
-        currentIndex = 0;
-
+        rows.clear();
+        position = 0;
         childOperator.open();
-
-        ResultRow row;
-        while ((row = childOperator.next()) != null) {
-            sortedRows.add(row);
-        }
-
-        Comparator<ResultRow> comparator =
-                (row1, row2) -> compareValues(
-                        row1.getValue(sortColumn),
-                        row2.getValue(sortColumn)
-                );
-
-        if (!ascending) {
-            comparator = comparator.reversed();
-        }
-
-        sortedRows.sort(comparator);
+        IResultRow row;
+        while ((row = childOperator.next()) != null) rows.add(row);
+        Comparator<IResultRow> comparator = (a, b) -> compare(a.get(column), b.get(column));
+        rows.sort(ascending ? comparator : comparator.reversed());
     }
 
     @Override
-    public ResultRow next() {
-        if (currentIndex >= sortedRows.size()) {
-            return null;
-        }
-
-        return sortedRows.get(currentIndex++);
+    public IResultRow next() {
+        return position < rows.size() ? rows.get(position++) : null;
     }
 
     @Override
     public void close() {
-        childOperator.close();
-        sortedRows.clear();
-        currentIndex = 0;
+        try { childOperator.close(); }
+        finally { rows.clear(); position = 0; }
     }
 
     @SuppressWarnings({"rawtypes", "unchecked"})
-    private int compareValues(Object left, Object right) {
-        if (left == right) return 0;
-        if (left == null) return -1;
-        if (right == null) return 1;
-
-        if (left instanceof Number && right instanceof Number) {
-            return Double.compare(
-                    ((Number) left).doubleValue(),
-                    ((Number) right).doubleValue()
-            );
+    private static int compare(Object a, Object b) {
+        if (a == b) return 0;
+        if (a == null) return -1;
+        if (b == null) return 1;
+        if (a instanceof Number && b instanceof Number) {
+            return Double.compare(((Number) a).doubleValue(), ((Number) b).doubleValue());
         }
-
-        if (left instanceof Comparable
-                && left.getClass().isInstance(right)) {
-            return ((Comparable) left).compareTo(right);
+        if (a instanceof Comparable && a.getClass().isInstance(b)) {
+            return ((Comparable) a).compareTo(b);
         }
-
-        return left.toString().compareTo(right.toString());
+        throw new IllegalArgumentException("Tipe kolom tidak dapat dibandingkan");
     }
 }
