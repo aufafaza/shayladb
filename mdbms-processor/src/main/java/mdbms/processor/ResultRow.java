@@ -5,10 +5,12 @@ import java.util.Map;
 import java.util.Objects;
 
 import mdbms.models.ColumnDefinition;
+import mdbms.models.RowId;
 
 public class ResultRow implements IResultRow {
     private final ResultTableSchema tableSchema;
     private final Map<String, Map<String, Object>> values = new HashMap<>();
+    private RowId rowId;
 
     public ResultRow(ResultTableSchema schema) {
         if (schema == null) {
@@ -82,5 +84,14 @@ public class ResultRow implements IResultRow {
             throw new IllegalArgumentException("There is no column from table " + tableName + " named " + columnName);
         }
         values.get(tableName).put(columnName, value);
+    }
+
+    @Override
+    public RowId getRowId() {
+        return rowId;
+    }
+
+    public void setRowId(RowId rowId) {
+        this.rowId = rowId;
     }
 }
