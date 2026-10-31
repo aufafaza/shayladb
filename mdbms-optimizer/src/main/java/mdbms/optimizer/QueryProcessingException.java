@@ -95,7 +95,7 @@ public class QueryProcessingException extends RuntimeException {
     }
 
     public String getFormattedError() {
-        // TODO
-        return null;
-    }
+        return "[" + category + "] " + this.getMessage() + " pada baris " +
+        this.line + ", kolom " + this.column;
+    } 
 }
