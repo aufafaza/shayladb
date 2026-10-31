@@ -1,5 +1,7 @@
 package mdbms.recovery;
 
-public class FailureRecoveryFacade {
-    
+public class FailureRecoveryFacade extends FailureRecoveryManager {
+
+    public FailureRecoveryFacade() {
+    }
 }
