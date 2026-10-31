@@ -1,11 +1,5 @@
-package mdbms.mocks;
+package mdbms.recovery;
 
-import java.time.Instant;
-import java.util.ArrayList;
-import java.util.Collections;
-import java.util.List;
-import java.util.concurrent.atomic.AtomicLong;
-import java.util.stream.Collectors;
 import mdbms.api.IFailureRecoveryManager;
 import mdbms.models.DataChangeLogRecord;
 import mdbms.models.LogRecord;
@@ -15,28 +9,21 @@ import mdbms.models.RecoveryResult;
 import mdbms.models.RowId;
 import mdbms.models.TransactionLogRecord;
 
-/*
-Implementasi Mock dari IFailureRecoveryManager yang mengembalikan dummy value
-Disediakan untuk komponen Concurrency Control Manager (CCM) dan Storage Manager (SM)
-*/
+import java.time.Instant;
+import java.util.List;
 
-public class MockFailureRecoveryManager implements IFailureRecoveryManager {
+public class FailureRecoveryManager implements IFailureRecoveryManager{
 
-    private final AtomicLong dummyLsnCounter = new AtomicLong(1L);
-    private final List<LogRecord> dummyLogs = Collections.synchronizedList(new ArrayList<>());
+    private static final long MOCK_LSN = 1L;
+
     private int lastMaxTxId = 0;
 
-    public MockFailureRecoveryManager() {
-    }
-
     @Override
-    public RecoveryResult writeTransactionLog(int txId, LogType eventType) {
+    public RecoveryResult writeTransactionLog(int txId, LogType eventType){
         updateMaxTxId(txId);
-        long lsn = dummyLsnCounter.getAndIncrement();
-        dummyLogs.add(new TransactionLogRecord(lsn, txId, eventType, Instant.now()));
         return new RecoveryResult(
             true,
-            lsn,
+            MOCK_LSN,
             lastMaxTxId,
             "MOCK: Transaction log [" + eventType + "] recorded for txId=" + txId
         );
@@ -52,38 +39,34 @@ public class MockFailureRecoveryManager implements IFailureRecoveryManager {
         RecordImage afterImg
     ) {
         updateMaxTxId(txId);
-        long lsn = dummyLsnCounter.getAndIncrement();
-        dummyLogs.add(new DataChangeLogRecord(lsn, txId, opType, Instant.now(), table, rid, beforeImg, afterImg));
         return new RecoveryResult(
             true,
-            lsn,
+            MOCK_LSN,
             lastMaxTxId,
             "MOCK: Data log [" + opType + "] on table '" + table + "' recorded for txId=" + txId
         );
     }
 
     @Override
-    public boolean flushLogUpTo(long lsn) {
+    public boolean flushLogUpTo(long lsn){
         return lsn >= 0;
     }
 
     @Override
     public RecoveryResult rollbackTransaction(int txId) {
-        long lsn = dummyLsnCounter.getAndIncrement();
         return new RecoveryResult(
             true,
-            lsn,
+            MOCK_LSN,
             lastMaxTxId,
             "MOCK: Rollback completed for txId=" + txId
         );
     }
 
     @Override
-    public RecoveryResult createCheckpoint() {
-        long lsn = dummyLsnCounter.getAndIncrement();
+    public RecoveryResult createCheckpoint(){
         return new RecoveryResult(
             true,
-            lsn,
+            MOCK_LSN,
             lastMaxTxId,
             "MOCK: Checkpoint created successfully"
         );
@@ -93,7 +76,7 @@ public class MockFailureRecoveryManager implements IFailureRecoveryManager {
     public RecoveryResult recoverOnStartup() {
         return new RecoveryResult(
             true,
-            dummyLsnCounter.get(),
+            MOCK_LSN,
             lastMaxTxId,
             "MOCK: Startup crash recovery completed"
         );
@@ -103,7 +86,7 @@ public class MockFailureRecoveryManager implements IFailureRecoveryManager {
     public RecoveryResult recoverToPointInTime(Instant targetTime) {
         return new RecoveryResult(
             true,
-            dummyLsnCounter.get(),
+            MOCK_LSN,
             lastMaxTxId,
             "MOCK: Point-in-time recovery completed to " + targetTime
         );
@@ -113,7 +96,7 @@ public class MockFailureRecoveryManager implements IFailureRecoveryManager {
     public RecoveryResult recoverToTransaction(int targetTxId) {
         return new RecoveryResult(
             true,
-            dummyLsnCounter.get(),
+            MOCK_LSN,
             targetTxId,
             "MOCK: Recovery completed up to txId=" + targetTxId
         );
@@ -121,12 +104,23 @@ public class MockFailureRecoveryManager implements IFailureRecoveryManager {
 
     @Override
     public List<LogRecord> readLogs(Integer filterTxId) {
-        if (filterTxId == null) {
-            return new ArrayList<>(dummyLogs);
-        }
-        return dummyLogs.stream()
-            .filter(log -> log.getTxId() == filterTxId)
-            .collect(Collectors.toList());
+        // Dummy records; the filter only picks which txId they are stamped with
+        int txId = filterTxId == null ? 1 : filterTxId;
+        Instant now = Instant.now();
+        return List.of(
+            new TransactionLogRecord(1L, txId, LogType.BEGIN, now),
+            new DataChangeLogRecord(
+                2L,
+                txId,
+                LogType.UPDATE,
+                now,
+                "mock_table",
+                new RowId("mock_table", 0, 0),
+                new RecordImage(List.of("before")),
+                new RecordImage(List.of("after"))
+            ),
+            new TransactionLogRecord(3L, txId, LogType.COMMIT, now)
+        );
     }
 
     private synchronized void updateMaxTxId(int txId) {
@@ -134,4 +128,5 @@ public class MockFailureRecoveryManager implements IFailureRecoveryManager {
             this.lastMaxTxId = txId;
         }
     }
+
 }
