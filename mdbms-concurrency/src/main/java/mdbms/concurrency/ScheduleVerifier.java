@@ -1,5 +1,7 @@
 package mdbms.concurrency;
 
+import mdbms.models.Transaction;
+
 import  java.util.List;
 
 public class ScheduleVerifier {
