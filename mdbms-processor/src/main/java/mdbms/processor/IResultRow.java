@@ -1,5 +1,9 @@
 package mdbms.processor;
 
-public class IResultRow {
-    
+public interface IResultRow {
+    public ResultTableSchema getSchema();
+
+    public Object get(String columnName);
+
+    public Object get(String tableName, String columnName);
 }
