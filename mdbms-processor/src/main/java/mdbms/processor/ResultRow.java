@@ -1,21 +1,98 @@
 package mdbms.processor;
 
-import java.util.LinkedHashMap;
+import java.util.HashMap;
 import java.util.Map;
+import java.util.Objects;
 
-public class ResultRow {
+import mdbms.models.ColumnDefinition;
+import mdbms.models.RowId;
 
-    private final Map<String, Object> values;
+public class ResultRow implements IResultRow {
+    private final ResultTableSchema tableSchema;
+    private final Map<String, Map<String, Object>> values = new HashMap<>();
+    private RowId rowId;
 
-    public ResultRow(Map<String, Object> values) {
-        this.values = new LinkedHashMap<>(values);
+    public ResultRow(ResultTableSchema schema) {
+        if (schema == null) {
+            throw new NullPointerException("Schema cannot be null");
+        }
+        this.tableSchema = Objects.requireNonNull(schema, "schema");
+        for (ColumnDefinition column : schema.getColumns()) {
+            String tableName = schema.getColumnTableOrigin(column);
+            if (!values.containsKey(tableName)) {
+                values.put(tableName, new HashMap<>());
+            }
+            values.get(tableName).put(column.name(), null);
+        }
     }
 
-    public Object getValue(String column) {
-        return values.get(column);
+    @Override
+    public ResultTableSchema getSchema() {
+        return tableSchema;
     }
 
-    public Map<String, Object> getValues() {
-        return new LinkedHashMap<>(values);
+    @Override
+    public Object get(String columnName) {
+        if (columnName == null) {
+            throw new NullPointerException("Cannot get null columnName");
+        }
+
+        ColumnDefinition matchingColumn = null;
+        for (ColumnDefinition column : tableSchema.getColumns()) {
+            if (column.name().equals(columnName)) {
+                if (matchingColumn != null) {
+                    throw new IllegalArgumentException("Ambiguous column name: " + columnName);
+                }
+                matchingColumn = column;
+            }
+        }
+
+        if (matchingColumn == null) {
+            return null;
+        }
+
+        return get(tableSchema.getColumnTableOrigin(matchingColumn), columnName);
+    }
+
+    @Override
+    public Object get(String tableName, String columnName) {
+        if (tableName == null) {
+            throw new NullPointerException("tableName cannot be null");
+        }
+        if (columnName == null) {
+            throw new NullPointerException("columnName cannot be null");
+        }
+
+        Map<String, Object> tableValues = values.get(tableName);
+        if (tableValues == null)
+            return null;
+        else
+            return tableValues.get(columnName);
+    }
+
+    public void set(String tableName, String columnName, Object value) {
+        if (tableName == null) {
+            throw new NullPointerException("tableName cannot be null");
+        }
+        if (columnName == null) {
+            throw new NullPointerException("columnName cannot be null");
+        }
+
+        if (!values.containsKey(tableName)) {
+            throw new IllegalArgumentException("There is no table named " + tableName);
+        }
+        if (!values.get(tableName).containsKey(columnName)) {
+            throw new IllegalArgumentException("There is no column from table " + tableName + " named " + columnName);
+        }
+        values.get(tableName).put(columnName, value);
+    }
+
+    @Override
+    public RowId getRowId() {
+        return rowId;
+    }
+
+    public void setRowId(RowId rowId) {
+        this.rowId = rowId;
     }
 }

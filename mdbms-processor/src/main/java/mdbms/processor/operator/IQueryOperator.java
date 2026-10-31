@@ -1,9 +1,11 @@
 package mdbms.processor.operator;
 
-import mdbms.processor.ResultRow;
+import mdbms.processor.IResultRow;
 
 public interface IQueryOperator {
-    void open();
-    ResultRow next();
-    void close();
+    public void open();
+
+    public IResultRow next();
+
+    public void close();
 }
