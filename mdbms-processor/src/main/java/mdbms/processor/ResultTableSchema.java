@@ -7,6 +7,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import mdbms.models.ColumnDefinition;
+import mdbms.models.TableSchema;
 
 public class ResultTableSchema {
     private final String tableName;
@@ -19,6 +20,13 @@ public class ResultTableSchema {
 
     public ResultTableSchema(String tableName) {
         this.tableName = Objects.requireNonNull(tableName, "tableName");
+    }
+
+    public ResultTableSchema(TableSchema tableSchema) {
+        this.tableName = tableSchema.tableName();
+        for (ColumnDefinition columnDefinition : tableSchema.columns()) {
+            addColumn(columnDefinition);
+        }
     }
 
     public List<ColumnDefinition> getColumns() {
