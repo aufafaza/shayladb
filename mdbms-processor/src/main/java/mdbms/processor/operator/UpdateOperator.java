@@ -8,7 +8,6 @@ import mdbms.api.ISchemaCatalog;
 import mdbms.models.AccessStatus;
 import mdbms.models.ColumnDefinition;
 import mdbms.models.DataItem;
-import mdbms.models.Row;
 import mdbms.processor.IResultRow;
 
 public class UpdateOperator extends QueryUnaryOperator {
@@ -19,15 +18,16 @@ public class UpdateOperator extends QueryUnaryOperator {
     private final String tableName;
     private final String columnName;
     private final Object newValue;
+    private List<String> columnNames;
     private int columnIndex;
-    private List<Row> targetRows;
+    private List<IResultRow> targetRows;
     private boolean isDone;
     private int affectedRows;
 
     public UpdateOperator(IQueryOperator childOperator, IDataAccess dataAccess, ISchemaCatalog schemaCatalog,
             IConcurrencyControl concurrencyControlManager, int transactionId, String tableName,
             String columnName, Object newValue) {
-        // TODO BUTUH QueryUnaryOperator  QP2
+        super(childOperator);
         this.dataAccess = dataAccess;
         this.schemaCatalog = schemaCatalog;
         this.concurrencyControlManager = concurrencyControlManager;
@@ -38,13 +38,18 @@ public class UpdateOperator extends QueryUnaryOperator {
     }
 
     public void open() {
-        columnIndex = schemaCatalog.getTableSchema(tableName).columns().stream()
+        columnNames = schemaCatalog.getTableSchema(tableName).columns().stream()
                 .map(ColumnDefinition::name)
-                .toList()
-                .indexOf(columnName);
+                .toList();
+        columnIndex = columnNames.indexOf(columnName);
 
         targetRows = new ArrayList<>();
-        // TODO BUTUH open()/next()/close() IQueryOperator, IResultRow dengan RowId + nilai kolom. QP2
+        childOperator.open();
+        IResultRow row;
+        while ((row = childOperator.next()) != null) {
+            targetRows.add(row);
+        }
+        childOperator.close();
         isDone = false;
         affectedRows = 0;
     }
@@ -53,13 +58,16 @@ public class UpdateOperator extends QueryUnaryOperator {
         if (isDone) return null;
         isDone = true;
 
-        for (Row row : targetRows) {
-            requestWrite(new DataItem(tableName, row.rowId()));
-            List<Object> newValues = new ArrayList<>(row.values());
+        for (IResultRow row : targetRows) {
+            requestWrite(new DataItem(tableName, row.getRowId()));
+            List<Object> newValues = new ArrayList<>();
+            for (String name : columnNames) {
+                newValues.add(row.get(name));
+            }
             // TODO BUTUH ExpressionEvaluator dari QP2
             newValues.set(columnIndex, newValue);
             // TODO BUTUH method dari CCM untuk kirim catatan perubahan ke FRM
-            dataAccess.updateByRowId(row.rowId(), newValues);
+            dataAccess.updateByRowId(row.getRowId(), newValues);
         }
         affectedRows = targetRows.size();
 
