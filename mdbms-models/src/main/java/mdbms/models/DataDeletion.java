@@ -1,3 +1,5 @@
 package mdbms.models;
 
-public record DataDeletion(String table, Condition condition){}
+import java.util.List;
+
+public record DataDeletion(String table, List<Condition> conditions){}
