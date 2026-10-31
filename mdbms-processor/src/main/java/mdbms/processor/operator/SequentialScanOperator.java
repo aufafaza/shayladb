@@ -36,7 +36,9 @@ public final class SequentialScanOperator implements IQueryOperator{
         if(pos>=rows.size()) return null;
         Row r=rows.get(pos++);
 
-        return ResultRow.from(table,catalog.getTableSchema(table).columns(),r.values());
+        ResultRow row=ResultRow.from(table,catalog.getTableSchema(table).columns(),r.values());
+        row.setRowId(r.rowId());
+        return row;
     }
 
     public ResultTableSchema getSchema(){

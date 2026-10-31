@@ -9,10 +9,11 @@ import mdbms.models.AccessStatus;
 import mdbms.models.ColumnDefinition;
 import mdbms.models.DataItem;
 import mdbms.models.DataType;
+import mdbms.models.ExpressionTree;
+import mdbms.processor.ExpressionEvaluator;
 import mdbms.processor.IResultRow;
 import mdbms.processor.ResultRow;
 import mdbms.processor.ResultTableSchema;
-import mdbms.processor.IResultRow;
 
 public class UpdateOperator extends QueryUnaryOperator {
     private final IDataAccess dataAccess;
@@ -21,16 +22,15 @@ public class UpdateOperator extends QueryUnaryOperator {
     private final int transactionId;
     private final String tableName;
     private final String columnName;
-    private final Object newValue;
+    private final ExpressionTree newValue;
     private List<String> columnNames;
     private int columnIndex;
     private List<IResultRow> targetRows;
     private boolean isDone;
-    private int affectedRows;
 
     public UpdateOperator(IQueryOperator childOperator, IDataAccess dataAccess, ISchemaCatalog schemaCatalog,
             IConcurrencyControl concurrencyControlManager, int transactionId, String tableName,
-            String columnName, Object newValue) {
+            String columnName, ExpressionTree newValue) {
         super(childOperator);
         this.dataAccess = dataAccess;
         this.schemaCatalog = schemaCatalog;
@@ -55,12 +55,10 @@ public class UpdateOperator extends QueryUnaryOperator {
         }
         childOperator.close();
         isDone = false;
-        affectedRows = 0;
     }
 
     public IResultRow next() {
-        if (isDone)
-            return null;
+        if (isDone) return null;
         isDone = true;
 
         for (IResultRow row : targetRows) {
@@ -69,8 +67,7 @@ public class UpdateOperator extends QueryUnaryOperator {
             for (String name : columnNames) {
                 newValues.add(row.get(name));
             }
-            // TODO BUTUH ExpressionEvaluator dari QP2
-            newValues.set(columnIndex, newValue);
+            newValues.set(columnIndex, ExpressionEvaluator.evaluate(newValue, row));
             // TODO BUTUH method dari CCM untuk kirim catatan perubahan ke FRM
             dataAccess.updateByRowId(row.getRowId(), newValues);
         }
@@ -79,18 +76,10 @@ public class UpdateOperator extends QueryUnaryOperator {
         schema.addColumn(new ColumnDefinition("affected_rows", DataType.INTEGER, 0, false));
         ResultRow result = new ResultRow(schema);
         result.set(schema.getTableName(), "affected_rows", targetRows.size());
-        affectedRows = targetRows.size();
         return result;
-
-        // TODO BUTUH ResultRow dari QP2 untuk return jumlah baris yang diubah
-        // return null;
     }
 
     public void close() {
-    }
-
-    public int getAffectedRows() {
-        return affectedRows;
     }
 
     private void requestWrite(DataItem item) {
