@@ -1,5 +1,7 @@
 package mdbms.concurrency;
 
+import mdbms.models.AccessStatus;
+
 public class LockBasedProtocol {
     private LockManager lockManager;
     private DeadlockHandler deadlockHandler;

@@ -1,5 +1,8 @@
 package mdbms.concurrency;
 
+import mdbms.models.Transaction;
+import mdbms.models.DataItem;
+
 public class Lock {
     private Transaction tx;
     private DataItem data;
