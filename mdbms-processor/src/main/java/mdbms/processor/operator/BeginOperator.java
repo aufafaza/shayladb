@@ -6,11 +6,13 @@ import mdbms.models.DataType;
 import mdbms.processor.IResultRow;
 import mdbms.processor.ResultRow;
 import mdbms.processor.ResultTableSchema;
+import mdbms.processor.IResultRow;
 
 public class BeginOperator implements IQueryOperator {
     private final IConcurrencyControl concurrencyControlManager;
     private int transactionId;
     private boolean isDone;
+    private String message;
 
     public BeginOperator(IConcurrencyControl concurrencyControlManager) {
         this.concurrencyControlManager = concurrencyControlManager;
@@ -18,6 +20,7 @@ public class BeginOperator implements IQueryOperator {
 
     public void open() {
         isDone = false;
+        message = null;
     }
 
     public IResultRow next() {
@@ -34,6 +37,9 @@ public class BeginOperator implements IQueryOperator {
         ResultRow result = new ResultRow(schema);
         result.set(schema.getTableName(), "message", message);
         return result;
+
+        // TODO BUTUH ResultRow dari QP2 untuk return pesan konfirmasi
+        // return null;
     }
 
     public void close() {
@@ -41,5 +47,9 @@ public class BeginOperator implements IQueryOperator {
 
     public int getTransactionId() {
         return transactionId;
+    }
+
+    public String getMessage() {
+        return message;
     }
 }
