@@ -1,6 +1,7 @@
 package mdbms.processor;
 
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 
@@ -23,6 +24,14 @@ public class ResultRow implements IResultRow {
                 values.put(tableName, new HashMap<>());
             }
             values.get(tableName).put(column.name(), null);
+        }
+    }
+
+    public ResultRow(ResultTableSchema schema, List<Object> values) {
+        this(schema);
+        for (ColumnDefinition column : schema.getColumns()) {
+            String tableName = schema.getColumnTableOrigin(column);
+            this.values.get(tableName).put(column.name(), null);
         }
     }
 
