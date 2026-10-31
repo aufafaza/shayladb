@@ -41,12 +41,6 @@ public final class ConcurrencyControlManager implements IConcurrencyControl {
         this.frm = frm;
     }
 
-    /** Runs recovery before new work is accepted. Safe to call repeatedly. */
-    public synchronized void initAfterRecovery() {
-        if (frm != null) frm.recoverOnStartup();
-        isRecovered = true;
-    }
-
     public void setProtocol(ConcurrencyProtocol protocol) {
         this.protocol = Objects.requireNonNull(protocol, "protocol");
     }
