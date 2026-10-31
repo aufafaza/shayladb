@@ -1,5 +1,9 @@
 package mdbms.concurrency;
 
+import mdbms.models.AccessStatus;
+import mdbms.models.DataItem;
+import mdbms.models.Transaction;
+
 /** Strategy boundary implemented by lock-based or timestamp-based protocols. */
 public interface ConcurrencyProtocol {
     AccessStatus requestRead(Transaction tx, DataItem data);

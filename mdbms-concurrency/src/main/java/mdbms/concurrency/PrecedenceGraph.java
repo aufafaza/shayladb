@@ -1,5 +1,7 @@
 package mdbms.concurrency;
 
+import mdbms.models.Transaction;
+
 import  java.util.Set;
 import  java.util.Map;
 import  java.util.List;

@@ -1,5 +1,9 @@
 package mdbms.concurrency;
 
+import mdbms.models.AccessStatus;
+import mdbms.models.DataItem;
+import mdbms.models.Transaction;
+
 public class TimestampsBasedProtocol implements ConcurrencyProtocol {
     public  AccessStatus requestRead(Transaction tx, DataItem data) {
         // TODO
