@@ -31,6 +31,7 @@ public class CommandLineInterface {
     }
 
     public void printResult(ExecutionResult result) {
+        // TODO: print result as table
         writer.println("Result printed");
     }
 }
