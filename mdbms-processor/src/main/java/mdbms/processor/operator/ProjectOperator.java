@@ -2,7 +2,7 @@ package mdbms.processor.operator;
 
 import java.util.List;
 
-import mdbms.models.ColumnDefinition;
+import mdbms.models.schema.ColumnDefinition;
 import mdbms.processor.IResultRow;
 import mdbms.processor.ResultRow;
 import mdbms.processor.ResultTableSchema;
@@ -52,7 +52,7 @@ public class ProjectOperator extends QueryUnaryOperator{
                 }
             }
             
-            if(def==null)def=new ColumnDefinition(name,mdbms.models.DataType.VARCHAR,0,true);
+            if(def==null)def=new ColumnDefinition(name,mdbms.models.schema.DataType.VARCHAR,0,true);
             
             out.addColumn(origin,def);
             row.set(origin==null?"":origin,name,v);

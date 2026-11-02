@@ -1,8 +1,8 @@
 package mdbms.optimizer;
 
-import mdbms.models.DataType;
-import mdbms.models.ExpressionTree;
-import mdbms.models.QueryTree;
+import mdbms.models.query.ExpressionTree;
+import mdbms.models.query.QueryTree;
+import mdbms.models.schema.DataType;
 
 public class QueryValidator implements IQueryValidator {
     @Override

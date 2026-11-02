@@ -1,8 +1,8 @@
 package mdbms.processor.operator;
 
 import mdbms.api.IConcurrencyControl;
-import mdbms.models.ColumnDefinition;
-import mdbms.models.DataType;
+import mdbms.models.schema.ColumnDefinition;
+import mdbms.models.schema.DataType;
 import mdbms.processor.IResultRow;
 import mdbms.processor.ResultRow;
 import mdbms.processor.ResultTableSchema;

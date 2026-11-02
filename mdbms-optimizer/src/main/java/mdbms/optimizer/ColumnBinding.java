@@ -1,7 +1,7 @@
 package mdbms.optimizer;
 
-import mdbms.models.ColumnDefinition;
-import mdbms.models.DataType;
+import mdbms.models.schema.ColumnDefinition;
+import mdbms.models.schema.DataType;
 
 public class ColumnBinding {
     private final String tableName;

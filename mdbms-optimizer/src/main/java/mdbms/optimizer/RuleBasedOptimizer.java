@@ -1,7 +1,7 @@
 package mdbms.optimizer;
 
 import java.util.List;
-import mdbms.models.QueryTree;
+import mdbms.models.query.QueryTree;
 
 public class RuleBasedOptimizer {
     private final List<IOptimizationRule> rules;
