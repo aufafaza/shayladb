@@ -1,8 +1,8 @@
 package mdbms.api;
 
 import java.util.List;
-import mdbms.models.IndexInfo;
-import mdbms.models.TableSchema;
+import mdbms.models.schema.IndexInfo;
+import mdbms.models.schema.TableSchema;
 
 public interface ISchemaCatalog{
     TableSchema getTableSchema(String table);

@@ -1,6 +1,6 @@
 package mdbms.recovery;
 
-import mdbms.models.RecoveryResult;
+import mdbms.models.log.RecoveryResult;
 
 public class RollbackManager {
 

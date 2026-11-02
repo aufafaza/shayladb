@@ -1,6 +1,6 @@
 package mdbms.api;
 
-import mdbms.models.BufferStats;
+import mdbms.models.access.BufferStats;
 
 public interface IDurableStorage{
     void flushBuffer();

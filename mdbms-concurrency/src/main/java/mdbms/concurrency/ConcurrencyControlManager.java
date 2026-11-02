@@ -9,12 +9,12 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 import mdbms.api.IConcurrencyControl;
 import mdbms.api.IFailureRecoveryManager;
-import mdbms.models.Operation;
-import mdbms.models.AccessStatus;
-import mdbms.models.DataItem;
-import mdbms.models.LogType;
-import mdbms.models.Transaction;
-import mdbms.models.TransactionState;
+import mdbms.models.data.DataItem;
+import mdbms.models.log.LogType;
+import mdbms.models.transaction.AccessStatus;
+import mdbms.models.transaction.Operation;
+import mdbms.models.transaction.Transaction;
+import mdbms.models.transaction.TransactionState;
 
 /**
  * CC1 transaction manager and facade. It owns transaction lifecycle and

@@ -4,10 +4,10 @@ import java.util.List;
 
 import mdbms.api.IDataAccess;
 import mdbms.api.ISchemaCatalog;
-import mdbms.models.ColumnDefinition;
-import mdbms.models.DataRetrieval;
-import mdbms.models.Row;
-import mdbms.models.TableSchema;
+import mdbms.models.access.DataRetrieval;
+import mdbms.models.data.Row;
+import mdbms.models.schema.ColumnDefinition;
+import mdbms.models.schema.TableSchema;
 import mdbms.processor.IResultRow;
 import mdbms.processor.ResultRow;
 import mdbms.processor.ResultTableSchema;
