@@ -18,6 +18,7 @@ public final class SequentialScanOperator implements IQueryOperator{
     private final String table; 
     private List<Row> rows=List.of();
     private int pos;
+    private ResultTableSchema tableSchema;
 
     public SequentialScanOperator(IDataAccess a,ISchemaCatalog c,String t){
         access=a;
@@ -28,6 +29,7 @@ public final class SequentialScanOperator implements IQueryOperator{
     public void open(){
         TableSchema s=catalog.getTableSchema(table);
         if(s==null)throw new IllegalArgumentException("Tabel tidak ditemukan: "+table);
+        tableSchema = new ResultTableSchema(s);
         rows=access.readBlock(new DataRetrieval(table,s.columns().stream().map(ColumnDefinition::name).toList(),List.of())).rows();
         pos=0;
     }
@@ -36,7 +38,7 @@ public final class SequentialScanOperator implements IQueryOperator{
         if(pos>=rows.size()) return null;
         Row r=rows.get(pos++);
 
-        ResultRow row=ResultRow.from(table,catalog.getTableSchema(table).columns(),r.values());
+        ResultRow row= new ResultRow(tableSchema,r.values());
         row.setRowId(r.rowId());
         return row;
     }
