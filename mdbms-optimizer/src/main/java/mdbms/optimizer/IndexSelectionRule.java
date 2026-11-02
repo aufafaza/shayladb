@@ -1,6 +1,6 @@
 package mdbms.optimizer;
 
-import mdbms.models.QueryTree;
+import mdbms.models.query.QueryTree;
 
 public class IndexSelectionRule implements IOptimizationRule {
     @Override

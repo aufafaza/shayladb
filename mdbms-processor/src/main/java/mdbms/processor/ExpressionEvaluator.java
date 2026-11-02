@@ -1,6 +1,6 @@
 package mdbms.processor;
 
-import mdbms.models.ExpressionTree;
+import mdbms.models.query.ExpressionTree;
 
 public class ExpressionEvaluator {
     // TODO: evaluate expression tree for general use

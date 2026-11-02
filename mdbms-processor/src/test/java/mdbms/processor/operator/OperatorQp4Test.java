@@ -1,6 +1,6 @@
 package mdbms.processor.operator;
 
-import mdbms.models.RowId;
+import mdbms.models.data.RowId;
 import mdbms.processor.IResultRow;
 import mdbms.processor.ResultTableSchema;
 import org.junit.jupiter.api.Test;

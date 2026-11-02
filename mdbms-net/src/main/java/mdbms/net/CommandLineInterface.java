@@ -6,7 +6,7 @@ import java.io.InputStreamReader;
 import java.io.PrintWriter;
 import java.net.Socket;
 
-import mdbms.models.ExecutionResult;
+import mdbms.models.query.ExecutionResult;
 
 public class CommandLineInterface {
     private BufferedReader reader;

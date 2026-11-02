@@ -2,10 +2,10 @@ package mdbms.api;
 
 import java.util.List;
 
-import mdbms.models.AccessStatus;
-import mdbms.models.DataItem;
-import mdbms.models.Transaction;
-import mdbms.models.Operation;
+import mdbms.models.data.DataItem;
+import mdbms.models.transaction.AccessStatus;
+import mdbms.models.transaction.Operation;
+import mdbms.models.transaction.Transaction;
 
 public interface IConcurrencyControl {
     int beginTransaction();

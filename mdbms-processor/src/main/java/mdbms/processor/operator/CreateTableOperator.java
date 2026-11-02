@@ -1,7 +1,7 @@
 package mdbms.processor.operator;
 
 import mdbms.api.ISchemaCatalog;
-import mdbms.models.TableSchema;
+import mdbms.models.schema.TableSchema;
 
 public final class CreateTableOperator {
     private final ISchemaCatalog catalog;

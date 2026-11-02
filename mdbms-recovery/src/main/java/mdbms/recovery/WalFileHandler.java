@@ -1,7 +1,7 @@
 package mdbms.recovery;
 
 import java.util.List;
-import mdbms.models.LogRecord;
+import mdbms.models.log.LogRecord;
 
 public class WalFileHandler {
 
