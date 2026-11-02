@@ -5,7 +5,7 @@ import java.net.Socket;
 
 import mdbms.api.IConcurrencyControl;
 import mdbms.api.IQueryProcessor;
-import mdbms.models.ExecutionResult;
+import mdbms.models.query.ExecutionResult;
 
 public class ClientHandler implements Runnable {
     private Socket clientSocket;

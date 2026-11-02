@@ -1,6 +1,6 @@
 package mdbms.processor;
 
-import mdbms.models.RowId;
+import mdbms.models.data.RowId;
 
 public interface IResultRow {
     public ResultTableSchema getSchema();

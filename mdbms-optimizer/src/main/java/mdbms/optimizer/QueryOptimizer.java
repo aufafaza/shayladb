@@ -3,7 +3,7 @@ package mdbms.optimizer;
 import java.util.List;
 import mdbms.api.IQueryOptimizer;
 import mdbms.api.ISchemaCatalog;
-import mdbms.models.ParsedQuery;
+import mdbms.models.query.ParsedQuery;
 
 public class QueryOptimizer implements IQueryOptimizer {
     private final ISchemaCatalog schemaCatalog;

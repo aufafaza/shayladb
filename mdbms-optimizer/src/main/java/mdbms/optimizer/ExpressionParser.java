@@ -1,7 +1,7 @@
 package mdbms.optimizer;
 
-import mdbms.models.ExpressionNode;
-import mdbms.models.ExpressionTree;
+import mdbms.models.query.ExpressionNode;
+import mdbms.models.query.ExpressionTree;
 
 public class ExpressionParser {
     public ExpressionTree parseExpression(TokenStream stream) {

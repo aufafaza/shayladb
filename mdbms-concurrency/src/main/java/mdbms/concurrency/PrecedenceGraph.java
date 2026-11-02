@@ -1,6 +1,6 @@
 package mdbms.concurrency;
 
-import mdbms.models.Transaction;
+import mdbms.models.transaction.Transaction;
 
 import  java.util.Set;
 import  java.util.Map;

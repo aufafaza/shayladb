@@ -5,7 +5,7 @@ import mdbms.api.IDataAccess;
 import mdbms.api.IFailureRecoveryManager;
 import mdbms.api.IQueryOptimizer;
 import mdbms.api.ISchemaCatalog;
-import mdbms.models.ParsedQuery;
+import mdbms.models.query.ParsedQuery;
 import mdbms.processor.operator.IQueryOperator;
 
 public class PlanTranslator {

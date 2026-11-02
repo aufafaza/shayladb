@@ -1,10 +1,10 @@
 package mdbms.optimizer;
 
 import java.util.List;
-import mdbms.models.ColumnReference;
-import mdbms.models.ExpressionTree;
-import mdbms.models.OrderByItem;
-import mdbms.models.QueryTree;
+import mdbms.models.query.ColumnReference;
+import mdbms.models.query.ExpressionTree;
+import mdbms.models.query.OrderByItem;
+import mdbms.models.query.QueryTree;
 
 public class SelectParser {
     private final ExpressionParser expressionParser;

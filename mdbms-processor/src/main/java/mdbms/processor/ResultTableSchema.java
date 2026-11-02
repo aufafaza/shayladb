@@ -6,8 +6,8 @@ import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
-import mdbms.models.ColumnDefinition;
-import mdbms.models.TableSchema;
+import mdbms.models.schema.ColumnDefinition;
+import mdbms.models.schema.TableSchema;
 
 public class ResultTableSchema {
     private final String tableName;

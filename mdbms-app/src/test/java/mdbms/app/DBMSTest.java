@@ -13,7 +13,7 @@ import java.util.ArrayList;
 import java.util.List;
 import mdbms.api.IDurableStorage;
 import mdbms.api.IFailureRecoveryManager;
-import mdbms.models.RecoveryResult;
+import mdbms.models.log.RecoveryResult;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
