@@ -16,12 +16,20 @@ import mdbms.models.data.Rows;
 import mdbms.models.schema.IndexInfo;
 import mdbms.models.schema.Statistic;
 import mdbms.models.schema.TableSchema;
+import mdbms.storage.block.BlockManager;
+import mdbms.storage.block.BufferPool;
 
 public final class StorageManager implements IDataAccess, ISchemaCatalog, IStatisticsProvider, IDurableStorage{
 
-    public StorageManager(String dataDirectory, int bufferCapacity, int indexMaxDegree){}
+    private final BufferPool bufferPool;
+
+    public StorageManager(String dataDirectory, int bufferCapacity, int indexMaxDegree){
+        bufferPool = new BufferPool(new BlockManager(dataDirectory), bufferCapacity);
+    }
     
-    public void attachRecoveryManager(IFailureRecoveryManager frm){}
+    public void attachRecoveryManager(IFailureRecoveryManager frm){
+        bufferPool.attachRecoveryManager(frm);
+    }
 
     @Override
     public Rows readBlock(DataRetrieval request){
@@ -95,10 +103,13 @@ public final class StorageManager implements IDataAccess, ISchemaCatalog, IStati
     }
 
     @Override
-    public void flushBuffer(){}
+    public void flushBuffer(){
+        bufferPool.flushBuffer();
+    }
+
 
     @Override
     public BufferStats getBufferStats(){
-        return null;
+        return bufferPool.getBufferStats();
     }
 }
