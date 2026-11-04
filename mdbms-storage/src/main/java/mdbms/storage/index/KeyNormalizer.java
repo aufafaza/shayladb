@@ -3,14 +3,11 @@ package mdbms.storage.index;
 import mdbms.models.schema.ColumnDefinition;
 import mdbms.models.schema.DataType;
 
-/**
- * Mengubah nilai key mentah ke bentuk kanonik sesuai tipe kolom,
- * agar nilai SQL yang sama menjadi key B+Tree yang sama (mis. 1, 1L, "1").
- * INTEGER -> Integer, FLOAT -> Double, CHAR/VARCHAR -> String.
- */
+// ubah key mentah jadi satu bentuk baku per tipe kolom, biar angka 1 dari Integer, Long, atau String jadi key yang sama
+// INTEGER jadi Integer, FLOAT jadi Double, CHAR dan VARCHAR jadi String
 public final class KeyNormalizer {
 
-    /** Normalisasi key untuk kolom; null tetap null (tidak diindeks). */
+    // pilih konverter sesuai tipe kolom, key null dibalikin null karena NULL ga diindeks
     public Object normalize(Object key, ColumnDefinition column) {
         if (column == null) {
             throw new IllegalArgumentException("column must not be null");
@@ -26,7 +23,8 @@ public final class KeyNormalizer {
         };
     }
 
-    /** Ke Integer; tolak pecahan, overflow, dan teks non-angka. */
+    // ubah ke Integer, Long dicek rangenya dulu biar ga overflow diam diam pas di cast
+    // pecahan ditolak biar ga kebulatin, NaN ikut ketolak karena NaN ga pernah sama dengan dirinya sendiri
     private Integer toInteger(Object value) {
         if (value instanceof Integer i) {
             return i;
@@ -56,7 +54,8 @@ public final class KeyNormalizer {
         throw mismatch(value, DataType.INTEGER, "unsupported value type");
     }
 
-    /** Ke Double; tolak NaN/Infinity, -0.0 disamakan dengan 0.0. */
+    // ubah ke Double, NaN dan Infinity ditolak karena ga punya urutan yang jelas di B+Tree
+    // nol negatif disamain jadi nol biasa karena Double compare nganggep keduanya beda
     private Double toDouble(Object value) {
         double d;
         if (value instanceof Number n) {
@@ -76,21 +75,21 @@ public final class KeyNormalizer {
         return d == 0.0 ? 0.0 : d;
     }
 
-    /** CHAR(n): buang spasi di belakang, lalu cek panjang maksimal n. */
+    // CHAR dipadding spasi di SQL, jadi spasi di belakang dibuang dulu baru dicek panjangnya
     private String toCharKey(Object value, int length) {
         String s = stripTrailingSpaces(asString(value, DataType.CHAR));
         checkLength(s, length, DataType.CHAR, value);
         return s;
     }
 
-    /** VARCHAR(n): tanpa trim, hanya cek panjang maksimal n. */
+    // VARCHAR ga di trim, kalau kepanjangan ditolak bukan dipotong biar ga salah cocok
     private String toVarcharKey(Object value, int length) {
         String s = asString(value, DataType.VARCHAR);
         checkLength(s, length, DataType.VARCHAR, value);
         return s;
     }
 
-    /** Terima String atau Character saja. */
+    // cuma nerima String atau Character, selain itu ditolak
     private static String asString(Object value, DataType type) {
         if (value instanceof String s) {
             return s;
@@ -101,7 +100,7 @@ public final class KeyNormalizer {
         throw mismatch(value, type, "unsupported value type");
     }
 
-    /** Hapus spasi ' ' di akhir string (semantik padding CHAR). */
+    // buang spasi di akhir aja, ga pakai stripTrailing karena itu ikut buang tab dan newline
     private static String stripTrailingSpaces(String s) {
         int end = s.length();
         while (end > 0 && s.charAt(end - 1) == ' ') {
@@ -110,14 +109,15 @@ public final class KeyNormalizer {
         return s.substring(0, end);
     }
 
-    /** Cek panjang string; length <= 0 berarti tanpa batas. */
+    // cek panjang maksimal kolom, length 0 artinya ga ada batas
     private static void checkLength(String s, int length, DataType type, Object original) {
         if (length > 0 && s.length() > length) {
             throw mismatch(original, type, "longer than " + length + " characters");
         }
     }
 
-    /** Buat exception untuk nilai yang tidak cocok dengan tipe kolom. */
+    // bikin pesan error yang seragam untuk semua penolakan key
+    // TODO ganti jadi StorageException SCHEMA_VIOLATION kalau punya SM1 udah ada, cukup ubah method ini
     private static IllegalArgumentException mismatch(Object value, DataType type, String reason) {
         return new IllegalArgumentException(
                 "Cannot use " + value.getClass().getSimpleName() + " '" + value
