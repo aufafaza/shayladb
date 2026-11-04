@@ -6,6 +6,7 @@ import mdbms.api.IFailureRecoveryManager;
 import mdbms.api.IQueryProcessor;
 import mdbms.concurrency.ConcurrencyControlManager;
 import mdbms.concurrency.ConcurrencyProtocol;
+import mdbms.concurrency.LockBasedProtocol;
 import mdbms.concurrency.TimestampsBasedProtocol;
 import mdbms.models.RecoveryResult;
 import mdbms.recovery.FailureRecoveryManager;
@@ -40,6 +41,7 @@ public class DBMS {
         ConcurrencyProtocol protocol = createProtocol(cfg.getConcurrencyAlgorithm());
         recoverOnStartup();
         concurrencyControl = new ConcurrencyControlManager(protocol, frm);
+        System.out.println("Concurrency protocol: " + ((ConcurrencyControlManager) concurrencyControl).getActiveProtocolName());
         // TODO: assign the real QueryProcessor here once it implements IQueryProcessor
         running = true;
     }
@@ -79,7 +81,8 @@ public class DBMS {
     private static ConcurrencyProtocol createProtocol(ConcurrencyAlgorithm algorithm){
         return switch (algorithm) {
             case TIMESTAMP_BASED -> new TimestampsBasedProtocol();
-            case LOCK_BASED, VALIDATION_BASED -> throw new UnsupportedOperationException(
+            case LOCK_BASED -> new LockBasedProtocol();
+            case VALIDATION_BASED -> throw new UnsupportedOperationException(
                     "Concurrency algorithm not implemented yet: " + algorithm);
         };
     }
