@@ -3,27 +3,28 @@ package mdbms.concurrency;
 import mdbms.models.DataItem;
 
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 
 
 public class TimestampManaager {
-    private Map<DataItem, DataTimestamp> dataTimestamps;
+    private final Map<DataItem, DataTimestamp> dataTimestamps = new ConcurrentHashMap<>();
 
     public long getReadTS(DataItem data) {
-        // TODO
-        return  -1;
+        return dataTimestamps.computeIfAbsent(data, ignored -> new DataTimestamp(Long.MIN_VALUE, Long.MIN_VALUE)).getReadTS();
     }
 
     public  long getWriteTS(DataItem data) {
-        // TODO
-        return  -1;
+        return dataTimestamps.computeIfAbsent(data, ignored -> new DataTimestamp(Long.MIN_VALUE, Long.MIN_VALUE)).getWriteTS();
     }
 
     public void updateReadTS(DataItem data, long timestamp) {
-        // TODO
+        dataTimestamps.computeIfAbsent(data, ignored -> new DataTimestamp(Long.MIN_VALUE, Long.MIN_VALUE))
+                .setReadTS(Math.max(getReadTS(data), timestamp));
     }
 
     public void updateWriteTS(DataItem data, long timestamp) {
-        // TODO
+        dataTimestamps.computeIfAbsent(data, ignored -> new DataTimestamp(Long.MIN_VALUE, Long.MIN_VALUE))
+                .setWriteTS(Math.max(getWriteTS(data), timestamp));
     }
     
 }
