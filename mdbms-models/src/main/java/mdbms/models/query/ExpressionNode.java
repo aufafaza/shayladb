@@ -2,14 +2,16 @@ package mdbms.models.query;
 
 import java.util.Objects;
 
-/** A literal, column reference, or binary arithmetic expression. */
+/** A literal, column reference, arithmetic expression, comparison, or logical expression. */
 public class ExpressionNode {
     public enum Type {
         INTEGER_LITERAL,
         REAL_LITERAL,
         STRING_LITERAL,
         COLUMN_REFERENCE,
-        BINARY_OPERATION
+        BINARY_OPERATION,
+        COMPARISON,
+        LOGICAL_AND
     }
 
     private final Type type;
@@ -49,6 +51,20 @@ public class ExpressionNode {
             throw new IllegalArgumentException("Unsupported arithmetic operator: " + operator);
         }
         return new ExpressionNode(Type.BINARY_OPERATION, operator, null,
+            Objects.requireNonNull(left), Objects.requireNonNull(right));
+    }
+
+    public static ExpressionNode comparison(String operator, ExpressionNode left, ExpressionNode right) {
+        if (!"=".equals(operator) && !"<>".equals(operator) && !">".equals(operator)
+            && !">=".equals(operator) && !"<".equals(operator) && !"<=".equals(operator)) {
+            throw new IllegalArgumentException("Unsupported comparison operator: " + operator);
+        }
+        return new ExpressionNode(Type.COMPARISON, operator, null,
+            Objects.requireNonNull(left), Objects.requireNonNull(right));
+    }
+
+    public static ExpressionNode logicalAnd(ExpressionNode left, ExpressionNode right) {
+        return new ExpressionNode(Type.LOGICAL_AND, "AND", null,
             Objects.requireNonNull(left), Objects.requireNonNull(right));
     }
 
