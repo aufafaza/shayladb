@@ -11,6 +11,7 @@ public class QueryTree {
     private int estimatedCost;
     private final List<ColumnReference> projectionColumns;
     private final boolean naturalJoin;
+    private List<OrderByClause> orderByClauses = List.of();
 
     public QueryTree(
         QueryNodeType nodeType,
@@ -45,6 +46,18 @@ public class QueryTree {
         this.estimatedCost = estimatedCost;
         this.projectionColumns = List.copyOf(projectionColumns);
         this.naturalJoin = naturalJoin;
+    }
+
+    public List<OrderByClause> getOrderByClauses() {
+        return orderByClauses;
+    }
+
+    /** Attaches sort keys without changing the existing six/eight-parameter constructors */
+    public void setOrderByClauses(List<OrderByClause> orderByClauses) {
+        if (nodeType != QueryNodeType.SORT) {
+            throw new IllegalStateException("Only SORT nodes can carry ORDER BY clauses");
+        }
+        this.orderByClauses = List.copyOf(orderByClauses);
     }
 
     //Ordered SELECT items, including an unresolved wildcard for SELECT
