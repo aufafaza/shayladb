@@ -25,6 +25,11 @@ import mdbms.storage.exception.StorageException;
 import mdbms.storage.crud.ConditionEvaluator;
 import mdbms.storage.crud.HeapFile;
 import mdbms.storage.crud.RowIterator;
+import mdbms.storage.block.BufferPool;
+import mdbms.storage.serializer.IRecordSerializer;
+import mdbms.storage.catalog.CatalogManager;
+import mdbms.storage.catalog.StatisticsManager;
+import mdbms.storage.index.IndexManager;
 
 public final class StorageManager implements IDataAccess, ISchemaCatalog, IStatisticsProvider, IDurableStorage{
     private BufferPool bufferPool;
@@ -57,7 +62,7 @@ public final class StorageManager implements IDataAccess, ISchemaCatalog, IStati
             while (iterator.hasNext()){
                 Row row = iterator.next();
 
-                if (request.conditions() != null && !request.consitions().isEmpty() && !matchesAll(request.conditions(), row, schema)){
+                if (request.conditions() != null && !request.conditions().isEmpty() && !matchesAll(request.conditions(), row, schema)){
                     continue;
                 }
 
@@ -175,7 +180,7 @@ public final class StorageManager implements IDataAccess, ISchemaCatalog, IStati
         HeapFile heapFile = heapFileOf(rowId.tableName());
         heapFile.insertAt(rowId, values);
 
-        Row newRow = new Row(rowId, List.copyOf(values));
+        Row newRow = new Row(rowId, new ArrayList<>(values));
 
         try{
             afterWrite(rowId.tableName(), null, newRow);
@@ -255,6 +260,9 @@ public final class StorageManager implements IDataAccess, ISchemaCatalog, IStati
 
     @Override
     public void updateTableSchema(TableSchema schema){}
+
+    @Override
+    public void dropTable(String table){}
 
     @Override
     public List<IndexInfo> getIndexes(String table){

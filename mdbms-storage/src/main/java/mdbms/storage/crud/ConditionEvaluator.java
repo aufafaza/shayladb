@@ -15,7 +15,7 @@ public class ConditionEvaluator{
         List<ColumnDefinition> cd = schema.columns();
 
         for (int i=0; i<cd.size(); i++){
-            if cd.get(i).name().equals(condition.column()){
+            if (cd.get(i).name().equals(condition.column())){
                 return compare(row.values().get(i), condition.value(), condition.operator(), cd.get(i).type());
             }
         } 
@@ -67,6 +67,6 @@ public class ConditionEvaluator{
             case GT -> cmp > 0;
             case LTE -> cmp <= 0;
             case GTE -> cmp >= 0;
-        }
+        };
     }
 }  
