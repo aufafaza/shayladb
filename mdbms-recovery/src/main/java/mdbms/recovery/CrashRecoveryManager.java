@@ -1,7 +1,7 @@
 package mdbms.recovery;
 
 import java.time.Instant;
-import mdbms.models.RecoveryResult;
+import mdbms.models.log.RecoveryResult;
 
 public class CrashRecoveryManager {
 

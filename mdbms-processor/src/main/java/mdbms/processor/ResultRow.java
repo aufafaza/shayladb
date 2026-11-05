@@ -5,8 +5,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 
-import mdbms.models.ColumnDefinition;
-import mdbms.models.RowId;
+import mdbms.models.data.RowId;
+import mdbms.models.schema.ColumnDefinition;
 
 public class ResultRow implements IResultRow {
     private final ResultTableSchema tableSchema;

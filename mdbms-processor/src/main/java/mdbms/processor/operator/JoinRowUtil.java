@@ -1,6 +1,6 @@
 package mdbms.processor.operator;
 
-import mdbms.models.ColumnDefinition;
+import mdbms.models.schema.ColumnDefinition;
 import mdbms.processor.IResultRow;
 import mdbms.processor.ResultRow;
 import mdbms.processor.ResultTableSchema;

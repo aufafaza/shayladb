@@ -4,8 +4,8 @@ import java.util.List;
 
 import mdbms.api.ISchemaCatalog;
 import mdbms.api.IStatisticsProvider;
-import mdbms.models.IndexInfo;
-import mdbms.models.Statistic;
+import mdbms.models.schema.IndexInfo;
+import mdbms.models.schema.Statistic;
 
 public class OptimizationContext {
     private final BindingContext bindingContext;

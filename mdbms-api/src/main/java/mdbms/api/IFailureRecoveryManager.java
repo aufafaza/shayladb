@@ -2,11 +2,11 @@ package mdbms.api;
 
 import java.time.Instant;
 import java.util.List;
-import mdbms.models.LogRecord;
-import mdbms.models.LogType;
-import mdbms.models.RecordImage;
-import mdbms.models.RecoveryResult;
-import mdbms.models.RowId;
+import mdbms.models.data.RowId;
+import mdbms.models.log.LogRecord;
+import mdbms.models.log.LogType;
+import mdbms.models.log.RecordImage;
+import mdbms.models.log.RecoveryResult;
 
 /*
 Interface dari komponen Failure Recovery Manager (FRM)

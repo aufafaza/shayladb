@@ -2,20 +2,20 @@ package mdbms.storage;
 
 import java.util.List;
 import mdbms.api.IDataAccess;
-import mdbms.api.ISchemaCatalog;
-import mdbms.api.IStatisticsProvider;
 import mdbms.api.IDurableStorage;
 import mdbms.api.IFailureRecoveryManager;
-import mdbms.models.BufferStats;
-import mdbms.models.DataDeletion;
-import mdbms.models.DataRetrieval;
-import mdbms.models.DataWrite;
-import mdbms.models.IndexInfo;
-import mdbms.models.Row;
-import mdbms.models.RowId;
-import mdbms.models.Rows;
-import mdbms.models.Statistic;
-import mdbms.models.TableSchema;
+import mdbms.api.ISchemaCatalog;
+import mdbms.api.IStatisticsProvider;
+import mdbms.models.access.BufferStats;
+import mdbms.models.access.DataDeletion;
+import mdbms.models.access.DataRetrieval;
+import mdbms.models.access.DataWrite;
+import mdbms.models.data.Row;
+import mdbms.models.data.RowId;
+import mdbms.models.data.Rows;
+import mdbms.models.schema.IndexInfo;
+import mdbms.models.schema.Statistic;
+import mdbms.models.schema.TableSchema;
 
 public final class StorageManager implements IDataAccess, ISchemaCatalog, IStatisticsProvider, IDurableStorage{
 
