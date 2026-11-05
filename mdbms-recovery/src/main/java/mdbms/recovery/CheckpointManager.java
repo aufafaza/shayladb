@@ -2,7 +2,7 @@ package mdbms.recovery;
 
 import java.time.Instant;
 import java.util.List;
-import mdbms.models.CheckpointLogRecord;
+import mdbms.models.log.CheckpointLogRecord;
 
 public class CheckpointManager {
 

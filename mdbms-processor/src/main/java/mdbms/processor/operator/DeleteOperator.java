@@ -5,13 +5,13 @@ import java.util.List;
 
 import mdbms.api.IDataAccess;
 import mdbms.api.ISchemaCatalog;
-import mdbms.models.ColumnDefinition;
-import mdbms.models.Condition;
-import mdbms.models.DataRetrieval;
-import mdbms.models.Row;
-import mdbms.models.RowId;
-import mdbms.models.Rows;
-import mdbms.models.TableSchema;
+import mdbms.models.access.DataRetrieval;
+import mdbms.models.data.Condition;
+import mdbms.models.data.Row;
+import mdbms.models.data.RowId;
+import mdbms.models.data.Rows;
+import mdbms.models.schema.ColumnDefinition;
+import mdbms.models.schema.TableSchema;
 import mdbms.processor.ExpressionEvaluator;
 import mdbms.processor.ResultRow;
 

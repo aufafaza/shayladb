@@ -7,7 +7,7 @@ import mdbms.api.IQueryProcessor;
 import mdbms.concurrency.ConcurrencyControlManager;
 import mdbms.concurrency.ConcurrencyProtocol;
 import mdbms.concurrency.TimestampsBasedProtocol;
-import mdbms.models.RecoveryResult;
+import mdbms.models.log.RecoveryResult;
 import mdbms.recovery.FailureRecoveryManager;
 import mdbms.storage.StorageManager;
 

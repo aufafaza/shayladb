@@ -1,6 +1,6 @@
 package mdbms.concurrency;
 
-import mdbms.models.AccessStatus;
+import mdbms.models.transaction.AccessStatus;
 
 public class LockBasedProtocol {
     private LockManager lockManager;
