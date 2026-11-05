@@ -1,7 +1,7 @@
 package mdbms.storage.crud;
 
 import java.util.List;
-import mdbms.models.data.TableSchema;
+import mdbms.models.schema.TableSchema;
 import mdbms.models.data.Row;
 import mdbms.models.data.RowId;
 import mdbms.storage.block.BufferPool;
