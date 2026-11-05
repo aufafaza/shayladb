@@ -6,10 +6,11 @@ import java.util.Objects;
 
 import mdbms.models.query.ColumnReference;
 import mdbms.models.query.ExpressionTree;
-import mdbms.models.query.OrderByItem;
+import mdbms.models.query.OrderByClause;
 import mdbms.models.query.PhysicalAlgorithm;
 import mdbms.models.query.QueryNodeType;
 import mdbms.models.query.QueryTree;
+import mdbms.models.query.SortDirection;
 
 public class SelectParser {
     private final ExpressionParser expressionParser;
@@ -27,14 +28,27 @@ public class SelectParser {
         this.errorCollector = errorCollector;
     }
 
-    //Reads SELECT and FROM, the facade owns the following semicolon/EOF
+    //Reads one SELECT; the facade owns the following semicolon/EOF
     public QueryTree parseSelect(TokenStream stream) {
         stream.expect(TokenType.selectTok);
         List<ColumnReference> columns = parseSelectList(stream);
         stream.expect(TokenType.fromTok);
         QueryTree source = parseFromClause(stream);
+        if (stream.peek().getType() == TokenType.whereTok) {
+            ExpressionTree predicate = parseWhereClause(stream);
+            source = new QueryTree(QueryNodeType.SELECT, PhysicalAlgorithm.DEFAULT, null,
+                List.of(predicate), List.of(source), 0);
+        }
+        if (isKeyword(stream, "ORDER")) {
+            List<OrderByClause> orderBy = parseOrderBy(stream);
+            // Keep sort columns available even when they are outside the SELECT projection
+            QueryTree sort = new QueryTree(QueryNodeType.SORT, PhysicalAlgorithm.DEFAULT, null,
+                List.of(), List.of(source), 0);
+            sort.setOrderByClauses(orderBy);
+            source = sort;
+        }
         if (stream.peek().getType() != TokenType.semicolon && !stream.isAtEnd()) {
-            throw syntaxError(stream, "Expected ';' or end of SELECT; unsupported or misplaced clause");
+            throw syntaxError(stream, "Expected ';' or end of SELECT; unexpected or misplaced clause");
         }
         return new QueryTree(QueryNodeType.PROJECT, PhysicalAlgorithm.DEFAULT, null,
             List.of(), List.of(source), 0, columns, false);
@@ -46,14 +60,17 @@ public class SelectParser {
         }
         List<ColumnReference> columns = new ArrayList<>();
         do {
-            Token first = expectIdentifier(stream);
-            if (stream.match(TokenType.period)) {
-                columns.add(new ColumnReference(first.getLexeme(), expectIdentifier(stream).getLexeme()));
-            } else {
-                columns.add(new ColumnReference(null, first.getLexeme()));
-            }
+            columns.add(parseColumnReference(stream));
         } while (stream.match(TokenType.comma));
         return List.copyOf(columns);
+    }
+
+    private ColumnReference parseColumnReference(TokenStream stream) {
+        Token first = expectIdentifier(stream);
+        if (stream.match(TokenType.period)) {
+            return new ColumnReference(first.getLexeme(), expectIdentifier(stream).getLexeme());
+        }
+        return new ColumnReference(null, first.getLexeme());
     }
 
     private QueryTree parseFromClause(TokenStream stream) {
@@ -129,12 +146,26 @@ public class SelectParser {
     }
 
     private ExpressionTree parseWhereClause(TokenStream stream) {
-        // TODO
-        return null;
+        stream.expect(TokenType.whereTok);
+        return expressionParser.parsePredicate(stream);
     }
 
-    private List<OrderByItem> parseOrderBy(TokenStream stream) {
-        // TODO
-        return List.of();
+    private List<OrderByClause> parseOrderBy(TokenStream stream) {
+        expectKeyword(stream, "ORDER");
+        expectKeyword(stream, "BY");
+        List<OrderByClause> clauses = new ArrayList<>();
+        do {
+            if (isKeyword(stream, "ASC") || isKeyword(stream, "DESC")) {
+                throw syntaxError(stream, "Expected an ORDER BY column before its direction");
+            }
+            ColumnReference field = parseColumnReference(stream);
+            SortDirection direction = SortDirection.ASC;
+            if (isKeyword(stream, "ASC") || isKeyword(stream, "DESC")) {
+                direction = isKeyword(stream, "DESC") ? SortDirection.DESC : SortDirection.ASC;
+                stream.advance();
+            }
+            clauses.add(new OrderByClause(field, direction));
+        } while (stream.match(TokenType.comma));
+        return List.copyOf(clauses);
     }
 }
