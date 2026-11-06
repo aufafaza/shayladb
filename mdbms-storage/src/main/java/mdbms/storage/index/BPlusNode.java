@@ -31,7 +31,6 @@ public final class BPlusNode {
         return blockNumber;
     }
 
-    // true kalau node ini leaf
     public boolean isLeaf() {
         return leaf;
     }
