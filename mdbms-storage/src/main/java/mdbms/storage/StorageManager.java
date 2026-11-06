@@ -2,6 +2,7 @@ package mdbms.storage;
 
 import java.util.List;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.Map;
 import mdbms.api.IDataAccess;
 import mdbms.api.IDurableStorage;
@@ -25,27 +26,29 @@ import mdbms.storage.exception.StorageException;
 import mdbms.storage.crud.ConditionEvaluator;
 import mdbms.storage.crud.HeapFile;
 import mdbms.storage.crud.RowIterator;
+import mdbms.storage.block.BlockManager;
 import mdbms.storage.block.BufferPool;
+import mdbms.storage.serializer.BinaryRecordSerializer;
 import mdbms.storage.serializer.IRecordSerializer;
 import mdbms.storage.catalog.CatalogManager;
 import mdbms.storage.statistics.StatisticsManager;
-import mdbms.storage.index.IndexManager;
 
 public final class StorageManager implements IDataAccess, ISchemaCatalog, IStatisticsProvider, IDurableStorage{
-    private BufferPool bufferPool;
-    private IRecordSerializer serializer;
-    private CatalogManager catalog;
-    private StatisticsManager statistics;
-    private IndexManager indexManager;
-    private ConditionEvaluator evaluator;
-    private Map<String, HeapFile> tables;
-
     private final BufferPool bufferPool;
+    private final IRecordSerializer serializer;
+    private final CatalogManager catalog;
+    private final StatisticsManager statistics;
+    private final ConditionEvaluator evaluator;
+    private final Map<String, HeapFile> tables;
 
+    // TODO tambah field IndexManager pakai indexMaxDegree kalau kelasnya udah diimplementasi SM5
     public StorageManager(String dataDirectory, int bufferCapacity, int indexMaxDegree){
         bufferPool = new BufferPool(new BlockManager(dataDirectory), bufferCapacity);
+        serializer = new BinaryRecordSerializer();
         catalog = new CatalogManager(dataDirectory);
         statistics = new StatisticsManager(catalog);
+        evaluator = new ConditionEvaluator();
+        tables = new HashMap<>();
     }
     
     public void attachRecoveryManager(IFailureRecoveryManager frm){
