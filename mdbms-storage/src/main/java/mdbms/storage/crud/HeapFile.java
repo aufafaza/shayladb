@@ -143,20 +143,21 @@ public class HeapFile{
         }
     }
 
-    public int truncate(){
-        int rowCount = 0;
-
-        try (RowIterator iterator = scan()){
-            while (iterator.hasNext()){
-                iterator.next();
-                rowCount++;
-            }
-        }
-
-        pool.truncate(fileName);
-
-        return rowCount;
-    }
+    // TODO nyalain lagi kalau BufferPool dan BlockManager SM2 udah punya truncate(fileName)
+    // public int truncate(){
+    //     int rowCount = 0;
+    //
+    //     try (RowIterator iterator = scan()){
+    //         while (iterator.hasNext()){
+    //             iterator.next();
+    //             rowCount++;
+    //         }
+    //     }
+    //
+    //     pool.truncate(fileName);
+    //
+    //     return rowCount;
+    // }
 
     public int blockCount(){
         return pool.blockCount(fileName);
