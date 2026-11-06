@@ -57,14 +57,7 @@ public final class StorageManager implements IDataAccess, ISchemaCatalog, IStati
 
     @Override
     public Rows readBlock(DataRetrieval request){
-        TableSchema schema = catalog.getSchema(request.table());
-
-        if (schema == null){
-            throw new StorageException(
-                StorageErrorCode.TABLE_NOT_FOUND,
-                "Table not found: " + request.table()
-            );
-        }
+        TableSchema schema = requireSchema(request.table());
 
         HeapFile heapFile = heapFileOf(request.table());
         List<Row> result = new ArrayList<>();
@@ -86,13 +79,7 @@ public final class StorageManager implements IDataAccess, ISchemaCatalog, IStati
 
     @Override
     public List<RowId> writeBlock(DataWrite request){
-        TableSchema schema = catalog.getSchema(request.table());
-        if (schema == null){
-            throw new StorageException(
-                StorageErrorCode.TABLE_NOT_FOUND,
-                "Table not found: " + request.table()
-            );
-        }
+        TableSchema schema = requireSchema(request.table());
 
         HeapFile heapFile = heapFileOf(request.table());
         List<RowId> result = new ArrayList<>();
@@ -137,13 +124,7 @@ public final class StorageManager implements IDataAccess, ISchemaCatalog, IStati
 
     @Override
     public int deleteBlock(DataDeletion request){
-        TableSchema schema = catalog.getSchema(request.table());
-        if (schema == null){
-            throw new StorageException(
-                StorageErrorCode.TABLE_NOT_FOUND,
-                "Table not found: " + request.table()
-            );
-        }
+        TableSchema schema = requireSchema(request.table());
 
         HeapFile heapFile = heapFileOf(request.table());
         List<RowId> rowsToDelete = new ArrayList<>();
@@ -177,14 +158,7 @@ public final class StorageManager implements IDataAccess, ISchemaCatalog, IStati
 
     @Override
     public void insertAt(RowId rowId, List<Object> values){
-        TableSchema schema = catalog.getSchema(rowId.tableName());
-
-        if (schema == null){
-            throw new StorageException(
-                StorageErrorCode.TABLE_NOT_FOUND,
-                "Table not found: " + rowId.tableName()
-            );
-        }
+        TableSchema schema = requireSchema(rowId.tableName());
 
         validateRow(schema, values);
 
@@ -203,14 +177,7 @@ public final class StorageManager implements IDataAccess, ISchemaCatalog, IStati
 
     @Override
     public Row updateByRowId(RowId rowId, List<Object> values){
-        TableSchema schema = catalog.getSchema(rowId.tableName());
-
-        if (schema == null){
-            throw new StorageException(
-                StorageErrorCode.TABLE_NOT_FOUND,
-                "Table not found: " + rowId.tableName()
-            );
-        }
+        TableSchema schema = requireSchema(rowId.tableName());
 
         validateRow(schema, values);
 
@@ -261,7 +228,7 @@ public final class StorageManager implements IDataAccess, ISchemaCatalog, IStati
 
     @Override
     public TableSchema getTableSchema(String table){
-        return catalog.getSchema(table);
+        return catalog.tableExists(table) ? catalog.getSchema(table) : null;
     }
 
     @Override
@@ -276,11 +243,13 @@ public final class StorageManager implements IDataAccess, ISchemaCatalog, IStati
 
     @Override
     public void dropTable(String table){
+        requireSchema(table);
         catalog.dropTable(table);
     }
 
     @Override
     public List<IndexInfo> getIndexes(String table){
+        requireSchema(table);
         return catalog.getIndexes(table);
     }
 
@@ -305,6 +274,18 @@ public final class StorageManager implements IDataAccess, ISchemaCatalog, IStati
         return bufferPool.getBufferStats();
     }
 
+    // ambil schema tabel, lempar TABLE_NOT_FOUND kalau ga ada karena getSchema SM4 lempar IllegalArgumentException
+    private TableSchema requireSchema(String table){
+        if (!catalog.tableExists(table)){
+            throw new StorageException(
+                StorageErrorCode.TABLE_NOT_FOUND,
+                "Table not found: " + table
+            );
+        }
+
+        return catalog.getSchema(table);
+    }
+
     private HeapFile heapFileOf(String table){
         HeapFile heapFile = tables.get(table);
 
@@ -312,13 +293,7 @@ public final class StorageManager implements IDataAccess, ISchemaCatalog, IStati
             return heapFile;
         }
 
-        TableSchema schema = catalog.getSchema(table);
-        if (schema == null){
-            throw new StorageException(
-                StorageErrorCode.TABLE_NOT_FOUND,
-                "Table not found: " + table
-            );
-        }
+        TableSchema schema = requireSchema(table);
 
         heapFile = new HeapFile(schema, bufferPool, serializer);
         tables.put(table, heapFile);
