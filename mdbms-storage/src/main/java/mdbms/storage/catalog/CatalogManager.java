@@ -1,4 +1,4 @@
-package mdbms.storage;
+package mdbms.storage.catalog;
 import java.io.*;
 import java.nio.file.AtomicMoveNotSupportedException;
 import java.nio.file.Files;
