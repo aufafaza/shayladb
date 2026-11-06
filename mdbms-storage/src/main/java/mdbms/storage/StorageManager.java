@@ -1,6 +1,8 @@
 package mdbms.storage;
 
 import java.util.List;
+import java.util.ArrayList;
+import java.util.Map;
 import mdbms.api.IDataAccess;
 import mdbms.api.IDurableStorage;
 import mdbms.api.IFailureRecoveryManager;
@@ -13,11 +15,30 @@ import mdbms.models.access.DataWrite;
 import mdbms.models.data.Row;
 import mdbms.models.data.RowId;
 import mdbms.models.data.Rows;
+import mdbms.models.data.Condition;
 import mdbms.models.schema.IndexInfo;
 import mdbms.models.schema.Statistic;
 import mdbms.models.schema.TableSchema;
+import mdbms.models.schema.ColumnDefinition;
+import mdbms.storage.exception.StorageErrorCode;
+import mdbms.storage.exception.StorageException;
+import mdbms.storage.crud.ConditionEvaluator;
+import mdbms.storage.crud.HeapFile;
+import mdbms.storage.crud.RowIterator;
+import mdbms.storage.block.BufferPool;
+import mdbms.storage.serializer.IRecordSerializer;
+import mdbms.storage.catalog.CatalogManager;
+import mdbms.storage.catalog.StatisticsManager;
+import mdbms.storage.index.IndexManager;
 
 public final class StorageManager implements IDataAccess, ISchemaCatalog, IStatisticsProvider, IDurableStorage{
+    private BufferPool bufferPool;
+    private IRecordSerializer serializer;
+    private CatalogManager catalog;
+    private StatisticsManager statistics;
+    private IndexManager indexManager;
+    private ConditionEvaluator evaluator;
+    private Map<String, HeapFile> tables;
 
     public StorageManager(String dataDirectory, int bufferCapacity, int indexMaxDegree){}
     
@@ -25,35 +46,196 @@ public final class StorageManager implements IDataAccess, ISchemaCatalog, IStati
 
     @Override
     public Rows readBlock(DataRetrieval request){
-        return new Rows(List.of());
+        TableSchema schema = catalog.getSchema(request.table());
+
+        if (schema == null){
+            throw new StorageException(
+                StorageErrorCode.TABLE_NOT_FOUND,
+                "Table not found: " + request.table()
+            );
+        }
+
+        HeapFile heapFile = heapFileOf(request.table());
+        List<Row> result = new ArrayList<>();
+
+        try (RowIterator iterator = heapFile.scan()){
+            while (iterator.hasNext()){
+                Row row = iterator.next();
+
+                if (request.conditions() != null && !request.conditions().isEmpty() && !matchesAll(request.conditions(), row, schema)){
+                    continue;
+                }
+
+                result.add(projectRow(row, schema, request.columns()));
+            }
+        }
+
+        return new Rows(result);
     }
 
     @Override
     public List<RowId> writeBlock(DataWrite request){
-        return List.of();
+        TableSchema schema = catalog.getSchema(request.table());
+        if (schema == null){
+            throw new StorageException(
+                StorageErrorCode.TABLE_NOT_FOUND,
+                "Table not found: " + request.table()
+            );
+        }
+
+        HeapFile heapFile = heapFileOf(request.table());
+        List<RowId> result = new ArrayList<>();
+
+        if (request.conditions() == null || request.conditions().isEmpty()){
+            List<Object> values = toPositional(schema, request.values());
+            validateRow(schema, values);
+
+            RowId rowId = heapFile.insert(values);
+            result.add(rowId);
+
+            afterWrite(request.table(), null, new Row(rowId, values));
+            return result;
+        }
+
+        try (RowIterator iterator = heapFile.scan()){
+            while (iterator.hasNext()){
+                Row oldRow = iterator.next();
+
+                if (!matchesAll(request.conditions(), oldRow, schema)){
+                    continue;
+                }
+
+                List<Object> newValues = new ArrayList<>(oldRow.values());
+
+                for (Map.Entry<String, Object> entry : request.values().entrySet()){
+                    int index = columnIndex(schema, entry.getKey());
+                    newValues.set(index, entry.getValue());
+                }
+
+                validateRow(schema, newValues);
+
+                Row newRow = heapFile.update(oldRow.rowId(), newValues);
+                result.add(newRow.rowId());
+
+                afterWrite(request.table(), oldRow, newRow);
+            }
+        }
+
+        return result;
     }
 
     @Override
     public int deleteBlock(DataDeletion request){
-        return 0;
+        TableSchema schema = catalog.getSchema(request.table());
+        if (schema == null){
+            throw new StorageException(
+                StorageErrorCode.TABLE_NOT_FOUND,
+                "Table not found: " + request.table()
+            );
+        }
+
+        HeapFile heapFile = heapFileOf(request.table());
+        List<RowId> rowsToDelete = new ArrayList<>();
+
+        try (RowIterator iterator = heapFile.scan()){
+            while (iterator.hasNext()){
+                Row row = iterator.next();
+
+                if (request.conditions() != null
+                        && !request.conditions().isEmpty()
+                        && !matchesAll(request.conditions(), row, schema)){
+                    continue;
+                }
+
+                rowsToDelete.add(row.rowId());
+            }
+        }
+
+        for (RowId rowId : rowsToDelete){
+            deleteByRowId(rowId);
+        }
+
+        return rowsToDelete.size();
     }
 
     @Override
     public Row fetchByRowId(RowId rowId){
-        return new Row(rowId, List.of());
+        HeapFile heapFile = heapFileOf(rowId.tableName());
+        return heapFile.fetch(rowId);
     }
 
     @Override
-    public void insertAt(RowId rowId, List<Object> values){}
+    public void insertAt(RowId rowId, List<Object> values){
+        TableSchema schema = catalog.getSchema(rowId.tableName());
+
+        if (schema == null){
+            throw new StorageException(
+                StorageErrorCode.TABLE_NOT_FOUND,
+                "Table not found: " + rowId.tableName()
+            );
+        }
+
+        validateRow(schema, values);
+
+        HeapFile heapFile = heapFileOf(rowId.tableName());
+        heapFile.insertAt(rowId, values);
+
+        Row newRow = new Row(rowId, new ArrayList<>(values));
+
+        try{
+            afterWrite(rowId.tableName(), null, newRow);
+        } catch (RuntimeException e){
+            heapFile.delete(rowId);
+            throw e;
+        }
+    }
 
     @Override
     public Row updateByRowId(RowId rowId, List<Object> values){
-        return new Row(rowId, List.copyOf(values));
+        TableSchema schema = catalog.getSchema(rowId.tableName());
+
+        if (schema == null){
+            throw new StorageException(
+                StorageErrorCode.TABLE_NOT_FOUND,
+                "Table not found: " + rowId.tableName()
+            );
+        }
+
+        validateRow(schema, values);
+
+        HeapFile heapFile = heapFileOf(rowId.tableName());
+
+        Row oldRow = heapFile.fetch(rowId);
+        Row newRow = heapFile.update(rowId, values);
+
+        try{
+            afterWrite(rowId.tableName(), oldRow, newRow);
+            return newRow;
+        } catch (RuntimeException e){
+            if (newRow.rowId().equals(oldRow.rowId())){
+                heapFile.update(oldRow.rowId(), oldRow.values());
+            } else{
+                heapFile.delete(newRow.rowId());
+                heapFile.insertAt(oldRow.rowId(), oldRow.values());
+            }
+
+            throw e;
+        }
     }
 
     @Override
     public Row deleteByRowId(RowId rowId){
-        return new Row(rowId, List.of());
+        HeapFile heapFile = heapFileOf(rowId.tableName());
+
+        Row oldRow = heapFile.delete(rowId);
+
+        try{
+            afterWrite(rowId.tableName(), oldRow, null);
+            return oldRow;
+        } catch (RuntimeException e){
+            heapFile.insertAt(oldRow.rowId(), oldRow.values());
+            throw e;
+        }
     }
 
     @Override
@@ -80,6 +262,9 @@ public final class StorageManager implements IDataAccess, ISchemaCatalog, IStati
     public void updateTableSchema(TableSchema schema){}
 
     @Override
+    public void dropTable(String table){}
+
+    @Override
     public List<IndexInfo> getIndexes(String table){
         return List.of();
     }
@@ -100,5 +285,163 @@ public final class StorageManager implements IDataAccess, ISchemaCatalog, IStati
     @Override
     public BufferStats getBufferStats(){
         return null;
+    }
+
+    private HeapFile heapFileOf(String table){
+        HeapFile heapFile = tables.get(table);
+
+        if (heapFile != null){
+            return heapFile;
+        }
+
+        TableSchema schema = catalog.getSchema(table);
+        if (schema == null){
+            throw new StorageException(
+                StorageErrorCode.TABLE_NOT_FOUND,
+                "Table not found: " + table
+            );
+        }
+
+        heapFile = new HeapFile(schema, bufferPool, serializer);
+        tables.put(table, heapFile);
+        return heapFile;
+    }
+
+    private Row projectRow(Row row, TableSchema schema, List<String> columns){
+        if (columns == null || columns.isEmpty()){
+            return row;
+        }
+
+        List<Object> projectedValues = new ArrayList<>();
+        List<ColumnDefinition> definitions = schema.columns();
+
+        for (String column : columns){
+            int index = -1;
+
+            for (int i = 0; i < definitions.size(); i++){
+                if (definitions.get(i).name().equals(column)){
+                    index = i;
+                    break;
+                }
+            }
+
+            if (index < 0){
+                throw new StorageException(
+                    StorageErrorCode.COLUMN_NOT_FOUND,
+                    "Column not found: " + column
+                );
+            }
+
+            projectedValues.add(row.values().get(index));
+        }
+
+        return new Row(row.rowId(), projectedValues);
+    }
+
+    private boolean matchesAll(List<Condition> conditions, Row row, TableSchema schema){
+        for (Condition condition : conditions){
+            if (!evaluator.evaluate(condition, row, schema)){
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private int columnIndex(TableSchema schema, String column){
+        List<ColumnDefinition> columns = schema.columns();
+
+        for (int i = 0; i < columns.size(); i++){
+            if (columns.get(i).name().equals(column)){
+                return i;
+            }
+        }
+
+        throw new StorageException(
+            StorageErrorCode.COLUMN_NOT_FOUND,
+            "Column not found: " + column
+        );
+    }
+
+    private List<Object> toPositional(TableSchema schema, Map<String, Object> values){
+        for (String column : values.keySet()){
+            columnIndex(schema, column);
+        }
+
+        List<Object> result = new ArrayList<>();
+
+        for (ColumnDefinition column : schema.columns()){
+            result.add(values.get(column.name()));
+        }
+
+        return result;
+    }
+
+    private void validateRow(TableSchema schema, List<Object> values){
+        List<ColumnDefinition> columns = schema.columns();
+
+        if (values.size() != columns.size()){
+            throw new StorageException(
+                StorageErrorCode.SCHEMA_VIOLATION,
+                "Value count does not match schema"
+            );
+        }
+
+        for (int i = 0; i < columns.size(); i++){
+            ColumnDefinition column = columns.get(i);
+            Object value = values.get(i);
+
+            if (value == null){
+                if (!column.nullable()){
+                    throw new StorageException(
+                        StorageErrorCode.SCHEMA_VIOLATION,
+                        "Column cannot be null: " + column.name()
+                    );
+                }
+                continue;
+            }
+
+            switch (column.type()){
+                case INTEGER -> {
+                    if (!(value instanceof Integer)){
+                        throw new StorageException(
+                            StorageErrorCode.SCHEMA_VIOLATION,
+                            "Invalid type for column: " + column.name()
+                        );
+                    }
+                }
+
+                case FLOAT -> {
+                    if (!(value instanceof Float)){
+                        throw new StorageException(
+                            StorageErrorCode.SCHEMA_VIOLATION,
+                            "Invalid type for column: " + column.name()
+                        );
+                    }
+                }
+
+                case CHAR, VARCHAR -> {
+                    if (!(value instanceof String)){
+                        throw new StorageException(
+                            StorageErrorCode.SCHEMA_VIOLATION,
+                            "Invalid type for column: " + column.name()
+                        );
+                    }
+
+                    String stringValue = (String) value;
+
+                    if (column.length() > 0 && stringValue.length() > column.length()){
+                        throw new StorageException(
+                            StorageErrorCode.SCHEMA_VIOLATION,
+                            "Value too long for column: " + column.name()
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    private void afterWrite(String table, Row oldRow, Row newRow){
+        // synchronize indexes and statistics after SM4 SM5 integration
     }
 }
