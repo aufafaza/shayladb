@@ -50,26 +50,39 @@ class KeyNormalizerTest {
         assertThrows(IllegalArgumentException.class, () -> normalizer.normalize(true, INT));
     }
 
-    // FLOAT harus ngubah angka dan string angka jadi Double
+    // FLOAT harus ngubah angka dan string angka jadi Float
     @Test
-    void floatConvertsNumbersAndStringsToDouble() {
-        assertEquals(Double.valueOf(1.0), normalizer.normalize(1, FLT));
-        assertEquals(Double.valueOf(2.5), normalizer.normalize(2.5f, FLT));
-        assertEquals(Double.valueOf(3.25), normalizer.normalize("3.25", FLT));
+    void floatConvertsNumbersAndStringsToFloat() {
+        assertEquals(Float.valueOf(1.0f), normalizer.normalize(1, FLT));
+        assertEquals(Float.valueOf(2.5f), normalizer.normalize(2.5f, FLT));
+        assertEquals(Float.valueOf(2.5f), normalizer.normalize(2.5, FLT));
+        assertEquals(Float.valueOf(3.25f), normalizer.normalize("3.25", FLT));
+    }
+
+    // 0.1 dari query bertipe Double harus jadi key yang sama dengan 0.1 yang disimpan sebagai Float
+    @Test
+    void floatQueryLiteralMatchesStoredFloat() {
+        Object stored = normalizer.normalize(0.1f, FLT);
+        assertEquals(stored, normalizer.normalize(0.1, FLT));
+        assertEquals(stored, normalizer.normalize("0.1", FLT));
     }
 
     // nol negatif harus disamain jadi nol biasa
     @Test
     void floatFoldsNegativeZero() {
-        assertEquals(Double.valueOf(0.0), normalizer.normalize(-0.0, FLT));
+        assertEquals(Float.valueOf(0.0f), normalizer.normalize(-0.0f, FLT));
+        assertEquals(Float.valueOf(0.0f), normalizer.normalize(-0.0, FLT));
     }
 
-    // FLOAT harus nolak NaN, Infinity, dan teks bukan angka
+    // FLOAT harus nolak NaN, Infinity, angka di luar jangkauan Float, dan teks bukan angka
     @Test
-    void floatRejectsNanInfinityAndGarbage() {
+    void floatRejectsNanInfinityOverflowAndGarbage() {
+        assertThrows(IllegalArgumentException.class, () -> normalizer.normalize(Float.NaN, FLT));
         assertThrows(IllegalArgumentException.class, () -> normalizer.normalize(Double.NaN, FLT));
         assertThrows(IllegalArgumentException.class,
                 () -> normalizer.normalize(Double.POSITIVE_INFINITY, FLT));
+        assertThrows(IllegalArgumentException.class, () -> normalizer.normalize(1e40, FLT));
+        assertThrows(IllegalArgumentException.class, () -> normalizer.normalize("1e40", FLT));
         assertThrows(IllegalArgumentException.class, () -> normalizer.normalize("NaN", FLT));
         assertThrows(IllegalArgumentException.class, () -> normalizer.normalize("x1", FLT));
     }
