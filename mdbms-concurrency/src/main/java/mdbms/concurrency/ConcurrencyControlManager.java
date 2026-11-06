@@ -54,6 +54,7 @@ public final class ConcurrencyControlManager implements IConcurrencyControl {
         int id = transactionCounter.getAndIncrement();
         Transaction tx = new Transaction(id, System.currentTimeMillis());
         activeTransactions.put(id, tx);
+        frm.writeTransactionLog(id, LogType.BEGIN);
         return id;
     }
 
@@ -78,6 +79,7 @@ public final class ConcurrencyControlManager implements IConcurrencyControl {
     public void abortTransaction(int txId, String reason) {
         Transaction tx = requireTransaction(txId);
         synchronized (tx) {
+            frm.writeTransactionLog(txId, LogType.ABORT);
             if (tx.getState() == TransactionState.COMMITTED || tx.getState() == TransactionState.ABORTED) {
                 return;
             }
