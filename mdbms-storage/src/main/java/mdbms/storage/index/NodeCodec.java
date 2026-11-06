@@ -87,8 +87,8 @@ public final class NodeCodec {
         return keySize;
     }
 
-    // ukuran slot per tipe, INTEGER dan FLOAT 4, CHAR sepanjang kolom, VARCHAR ditambah 2 byte panjang
-    private static int slotSize(ColumnDefinition column) {
+    // ukuran slot per tipe, INTEGER dan FLOAT 4, CHAR sepanjang kolom, VARCHAR ditambah 2 byte panjang, dipakai juga computeMaxDegree
+    static int slotSize(ColumnDefinition column) {
         DataType type = Objects.requireNonNull(column.type(), "column type");
         return switch (type) {
             case INTEGER, FLOAT -> 4;
