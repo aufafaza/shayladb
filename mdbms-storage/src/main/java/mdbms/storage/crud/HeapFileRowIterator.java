@@ -62,7 +62,7 @@ public class HeapFileRowIterator implements RowIterator {
                 }
 
             } finally{
-                pool.unpin(block, false);
+                pool.unpin(block, false, HeapFile.NO_LSN);
             }
             
             currentBlock++;

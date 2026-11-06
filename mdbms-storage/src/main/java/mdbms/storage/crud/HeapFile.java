@@ -12,6 +12,9 @@ import mdbms.storage.exception.StorageErrorCode;
 import mdbms.storage.exception.StorageException;
 
 public class HeapFile{
+    // TODO ganti pakai LSN dari FRM kalau alur WAL di StorageManager udah ada, sementara pakai 0 dulu
+    static final long NO_LSN = 0;
+
     private TableSchema schema;
     private String fileName;
     private BufferPool pool;
@@ -46,7 +49,7 @@ public class HeapFile{
             return new Row(rowId, values);
 
         } finally{
-            pool.unpin(block, false);
+            pool.unpin(block, false, NO_LSN);
         }
     }
 
@@ -62,7 +65,7 @@ public class HeapFile{
             return new RowId(schema.tableName(), block.blockNumber, slot);
 
         } finally{
-            pool.unpin(block, true);
+            pool.unpin(block, true, NO_LSN);
         }
     }
 
@@ -87,7 +90,7 @@ public class HeapFile{
             page.writeSlot(slot, record);
 
         } finally{
-            pool.unpin(block, dirty);
+            pool.unpin(block, dirty, NO_LSN);
         }
     }
 
@@ -107,7 +110,7 @@ public class HeapFile{
             }
 
         } finally{
-            pool.unpin(block, dirty);
+            pool.unpin(block, dirty, NO_LSN);
         }
 
         delete(rowId);        
@@ -136,7 +139,7 @@ public class HeapFile{
             return new Row(rowId, values);
 
         } finally{
-            pool.unpin(block, dirty);
+            pool.unpin(block, dirty, NO_LSN);
         }
     }
 
@@ -172,7 +175,7 @@ public class HeapFile{
             hasSpace = page.hasSpace(requiredBytes);
 
         } finally{
-            pool.unpin(block, false);
+            pool.unpin(block, false, NO_LSN);
         }
 
         if (hasSpace) return blockNumber;
