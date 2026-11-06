@@ -1,0 +1,14 @@
+package mdbms.storage.exception;
+
+public enum StorageErrorCode{
+    TABLE_NOT_FOUND,
+    TABLE_ALREADY_EXISTS,
+    COLUMN_NOT_FOUND,
+    ROW_NOT_FOUND,
+    INDEX_NOT_FOUND,
+    INDEX_ALREADY_EXISTS,
+    SCHEMA_VIOLATION,
+    IO_FAILURE,
+    WAL_FLUSH_FAILED,
+    SLOT_UNAVAILABLE
+}
