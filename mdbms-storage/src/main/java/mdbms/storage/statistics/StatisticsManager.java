@@ -1,9 +1,18 @@
-package mdbms.storage;
-import java.util.*;
-import mdbms.models.schema.*;
-import mdbms.storage.block.*;
-import mdbms.models.data.*;
-import java.nio.charset.*;
+package mdbms.storage.statistics;
+import java.nio.charset.StandardCharsets;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.Map;
+import java.util.Objects;
+import java.util.Set;
+
+import mdbms.models.data.Row;
+import mdbms.models.schema.ColumnDefinition;
+import mdbms.models.schema.Statistic;
+import mdbms.models.schema.TableSchema;
+import mdbms.storage.block.BlockManager;
+import mdbms.storage.catalog.CatalogManager;
+import mdbms.storage.crud.HeapFile;
 
 public final class StatisticsManager {
     private final CatalogManager catalog;

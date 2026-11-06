@@ -28,7 +28,7 @@ import mdbms.storage.crud.RowIterator;
 import mdbms.storage.block.BufferPool;
 import mdbms.storage.serializer.IRecordSerializer;
 import mdbms.storage.catalog.CatalogManager;
-import mdbms.storage.catalog.StatisticsManager;
+import mdbms.storage.statistics.StatisticsManager;
 import mdbms.storage.index.IndexManager;
 
 public final class StorageManager implements IDataAccess, ISchemaCatalog, IStatisticsProvider, IDurableStorage{
@@ -44,6 +44,8 @@ public final class StorageManager implements IDataAccess, ISchemaCatalog, IStati
 
     public StorageManager(String dataDirectory, int bufferCapacity, int indexMaxDegree){
         bufferPool = new BufferPool(new BlockManager(dataDirectory), bufferCapacity);
+        catalog = new CatalogManager(dataDirectory);
+        statistics = new StatisticsManager(catalog);
     }
     
     public void attachRecoveryManager(IFailureRecoveryManager frm){
@@ -256,23 +258,27 @@ public final class StorageManager implements IDataAccess, ISchemaCatalog, IStati
 
     @Override
     public TableSchema getTableSchema(String table){
-        return null;
+        return catalog.getSchema(table);
     }
 
     @Override
     public List<String> listTable(){
-        return List.of();
+        return catalog.listTables();
     }
 
     @Override
-    public void updateTableSchema(TableSchema schema){}
+    public void updateTableSchema(TableSchema schema){
+        catalog.saveSchema(schema);
+    }
 
     @Override
-    public void dropTable(String table){}
+    public void dropTable(String table){
+        catalog.dropTable(table);
+    }
 
     @Override
     public List<IndexInfo> getIndexes(String table){
-        return List.of();
+        return catalog.getIndexes(table);
     }
 
     @Override
@@ -282,7 +288,7 @@ public final class StorageManager implements IDataAccess, ISchemaCatalog, IStati
 
     @Override
     public Statistic getStatistics(String table){
-        return null;
+        return statistics.getStatistics(table, heapFileOf(table));
     }
 
     @Override
