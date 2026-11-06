@@ -117,10 +117,28 @@ public final class BPlusTreeIndex implements Index {
         }
     }
 
-    // TODO langkah 4, hapus pasangan key RowId lengkap dengan redistribute dan coalesce
+    // hapus RowId dari bucket key ini, kalau bucket nya habis key ikut dihapus dari leaf
+    // pasangan yang ga ada atau key null diabaikan
     @Override
     public void delete(Object key, RowId rowId) {
-        throw new UnsupportedOperationException("delete belum diimplementasi SM5");
+        checkTable(rowId);
+        Object normalized = normalizer.normalize(key, column);
+        if (normalized == null) return;
+        lock.writeLock().lock();
+        try {
+            Deque<BPlusNode> path = new ArrayDeque<>();
+            BPlusNode leaf = findLeaf(normalized, path);
+            int pos = leaf.findKey(normalized, comparator);
+            if (pos < 0) return;
+            int firstBlock = leaf.getPointer(pos);
+            if (removeFromBucketChain(firstBlock, rowId)) {
+                freeNode(firstBlock);
+                deleteEntry(leaf, normalized, firstBlock, path);
+            }
+            writeMeta();
+        } finally {
+            lock.writeLock().unlock();
+        }
     }
 
     // ambil semua RowId buat key ini, key null ga pernah diindex jadi hasilnya kosong
@@ -190,10 +208,18 @@ public final class BPlusTreeIndex implements Index {
         }
     }
 
-    // TODO langkah 4, hapus file index lewat BufferPool dan BlockManager
+    // hapus file index beserta frame nya di buffer, index ini ga bisa dipakai lagi setelahnya
     @Override
     public void destroy() {
-        throw new UnsupportedOperationException("destroy belum diimplementasi SM5");
+        lock.writeLock().lock();
+        try {
+            pool.discardFile(fileName);
+            rootBlock = NO_BLOCK;
+            height = 0;
+            freeListHead = NO_BLOCK;
+        } finally {
+            lock.writeLock().unlock();
+        }
     }
 
     // info index ini
@@ -302,6 +328,108 @@ public final class BPlusTreeIndex implements Index {
         }
     }
 
+    // hapus key dan pointer dari node, root internal yang tinggal satu anak diganti anaknya
+    // node non root yang kurang isi pinjam dari saudara kalau bisa, kalau ga bisa digabung
+    private void deleteEntry(BPlusNode node, Object key, int pointer, Deque<BPlusNode> path) {
+        node.removeAt(entryIndex(node, key, pointer));
+        if (node.getBlockNumber() == rootBlock) {
+            if (!node.isLeaf() && node.keyCount() == 0) {
+                rootBlock = node.getPointer(0);
+                height--;
+                freeNode(node.getBlockNumber());
+            } else {
+                writeNode(node);
+            }
+            return;
+        }
+        if (!node.isUnderfull(maxDegree, false)) {
+            writeNode(node);
+            return;
+        }
+        BPlusNode parent = path.pop();
+        int index = childIndex(parent, node.getBlockNumber());
+        boolean nodeIsLeft = index == 0;
+        int separatorIndex = nodeIsLeft ? index : index - 1;
+        BPlusNode sibling = readNode(parent.getPointer(nodeIsLeft ? index + 1 : index - 1));
+        Object separator = parent.getKey(separatorIndex);
+        if (sibling.canLend(maxDegree)) {
+            redistribute(node, sibling, separator, parent, nodeIsLeft);
+        } else {
+            coalesce(node, sibling, separator, parent, path);
+        }
+    }
+
+    // gabung node kanan ke node kiri, pemisah di parent ikut turun kalau internal lalu dihapus dari parent
+    private void coalesce(BPlusNode node, BPlusNode sibling, Object separator, BPlusNode parent, Deque<BPlusNode> path) {
+        boolean nodeIsLeft = childIndex(parent, node.getBlockNumber()) < childIndex(parent, sibling.getBlockNumber());
+        BPlusNode left = nodeIsLeft ? node : sibling;
+        BPlusNode right = nodeIsLeft ? sibling : node;
+        if (left.isLeaf()) {
+            for (int i = 0; i < right.keyCount(); i++) {
+                left.insertAt(left.keyCount(), right.getKey(i), right.getPointer(i));
+            }
+            left.setNextLeaf(right.getNextLeaf());
+        } else {
+            left.insertAt(left.keyCount(), separator, right.getPointer(0));
+            for (int i = 0; i < right.keyCount(); i++) {
+                left.insertAt(left.keyCount(), right.getKey(i), right.getPointer(i + 1));
+            }
+        }
+        writeNode(left);
+        freeNode(right.getBlockNumber());
+        deleteEntry(parent, separator, right.getBlockNumber(), path);
+    }
+
+    // pindahin satu entri dari saudara ke node yang kurang isi lalu benerin pemisah di parent
+    // leaf mindahin key apa adanya, internal muter lewat parent biar urutannya tetap benar
+    private void redistribute(BPlusNode node, BPlusNode sibling, Object separator, BPlusNode parent, boolean nodeIsLeft) {
+        int separatorIndex = childIndex(parent, (nodeIsLeft ? node : sibling).getBlockNumber());
+        if (nodeIsLeft) {
+            if (node.isLeaf()) {
+                node.insertAt(node.keyCount(), sibling.getKey(0), sibling.getPointer(0));
+                sibling.removeAt(0);
+                parent.setKey(separatorIndex, sibling.getKey(0));
+            } else {
+                Object raised = sibling.getKey(0);
+                node.insertAt(node.keyCount(), separator, sibling.getPointer(0));
+                sibling.setPointer(0, sibling.getPointer(1));
+                sibling.removeAt(0);
+                parent.setKey(separatorIndex, raised);
+            }
+        } else {
+            int last = sibling.keyCount() - 1;
+            if (node.isLeaf()) {
+                node.insertAt(0, sibling.getKey(last), sibling.getPointer(last));
+                sibling.removeAt(last);
+                parent.setKey(separatorIndex, node.getKey(0));
+            } else {
+                Object raised = sibling.getKey(last);
+                int moved = sibling.getPointer(last + 1);
+                sibling.removeAt(last);
+                node.insertAt(0, separator, node.getPointer(0));
+                node.setPointer(0, moved);
+                parent.setKey(separatorIndex, raised);
+            }
+        }
+        writeNode(node);
+        writeNode(sibling);
+        writeNode(parent);
+    }
+
+    // posisi entri yang mau dihapus, leaf dicari dari key dan internal dari pointer anak kanan nya
+    private int entryIndex(BPlusNode node, Object key, int pointer) {
+        if (node.isLeaf()) {
+            int pos = node.findKey(key, comparator);
+            if (pos >= 0) return pos;
+        } else {
+            for (int i = 0; i < node.keyCount(); i++) {
+                if (node.getPointer(i + 1) == pointer) return i;
+            }
+        }
+        throw new StorageException(StorageErrorCode.INVALID_BLOCK,
+                "Entry for block " + pointer + " not found in block " + node.getBlockNumber());
+    }
+
     // posisi pointer di parent yang nunjuk ke anak ini
     private static int childIndex(BPlusNode parent, int childBlock) {
         for (int i = 0; i <= parent.keyCount(); i++) {
@@ -386,6 +514,38 @@ public final class BPlusTreeIndex implements Index {
         new RidBucket(last, info.tableName()).setNext(added);
         writeBlock(last);
         writeMeta();
+    }
+
+    // hapus RowId dari sambungan bucket, bucket tengah yang kosong dilepas dari sambungan
+    // bucket pertama yang kosong diisi bucket berikutnya biar pointer di leaf ga berubah, true kalau semua bucket habis
+    private boolean removeFromBucketChain(int firstBlock, RowId rowId) {
+        Block previous = null;
+        int current = firstBlock;
+        while (current != RidBucket.NO_NEXT) {
+            Block block = loadBlock(current);
+            RidBucket bucket = new RidBucket(block, info.tableName());
+            int next = bucket.getNext().orElse(RidBucket.NO_NEXT);
+            if (!bucket.remove(rowId)) {
+                previous = block;
+                current = next;
+                continue;
+            }
+            if (!bucket.isEmpty()) {
+                writeBlock(block);
+            } else if (previous != null) {
+                new RidBucket(previous, info.tableName()).setNext(next);
+                writeBlock(previous);
+                freeNode(current);
+            } else if (next != RidBucket.NO_NEXT) {
+                System.arraycopy(pool.readBuffer(fileName, next), 0, block.data, 0, BlockManager.BLOCK_SIZE);
+                writeBlock(block);
+                freeNode(next);
+            } else {
+                return true;
+            }
+            return false;
+        }
+        return false;
     }
 
     // kumpulin semua RowId dari bucket pertama sampai ujung sambungan

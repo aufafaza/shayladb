@@ -90,6 +90,16 @@ public class BlockManager {
         }
     }
 
+    // hapus file dari disk, file yang udah ga ada dianggap beres
+    public synchronized void deleteFile(String fileName) {
+        Path path = pathFor(fileName);
+        try {
+            Files.deleteIfExists(path);
+        } catch (IOException e) {
+            throw ioFailure("Cannot delete " + fileName, e);
+        }
+    }
+
     /** validasi nama file di dalam direktori data */
     Path pathFor(String fileName) {
         // Tolak nama Windows yang bisa buat identitas cache inkonsisten.
