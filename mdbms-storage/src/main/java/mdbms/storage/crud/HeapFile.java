@@ -62,6 +62,7 @@ public class HeapFile{
             SlottedPage page = new SlottedPage(block.data);
             int slot = page.reserveSlot(bytes);
             page.writeSlot(slot, record);
+            writeBack(block, page);
             return new RowId(schema.tableName(), block.blockNumber, slot);
 
         } finally{
@@ -86,8 +87,9 @@ public class HeapFile{
                 );
             }
 
-            dirty = true;
             page.writeSlot(slot, record);
+            writeBack(block, page);
+            dirty = true;
 
         } finally{
             pool.unpin(block, dirty, NO_LSN);
@@ -105,6 +107,7 @@ public class HeapFile{
             boolean replaced = page.replaceRecord(slot, record);
 
             if (replaced) {
+                writeBack(block, page);
                 dirty = true;
                 return new Row(rowId, values);
             }
@@ -134,6 +137,7 @@ public class HeapFile{
 
             List<Object> values = serializer.deserialize(record, schema);
             page.deleteRecord(rowId.slot());
+            writeBack(block, page);
             dirty = true;
 
             return new Row(rowId, values);
@@ -165,7 +169,7 @@ public class HeapFile{
 
     private int findBlockWithSpace(int requiredBytes){
         int blockCount = blockCount();
-        if (blockCount == 0) return pool.appendBlock(fileName).blockNumber;
+        if (blockCount == 0) return appendEmptyPage();
 
         int blockNumber = blockCount - 1;
         Block block = pool.pin(fileName, blockNumber);
@@ -181,6 +185,27 @@ public class HeapFile{
 
         if (hasSpace) return blockNumber;
         
-        return pool.appendBlock(fileName).blockNumber;
+        return appendEmptyPage();
+    }
+
+    // tambah block baru lalu isi header SlottedPage kosong, pin dari appendBlock langsung dilepas
+    private int appendEmptyPage(){
+        Block block = pool.appendBlock(fileName);
+        boolean dirty = false;
+
+        try{
+            writeBack(block, new SlottedPage());
+            dirty = true;
+            return block.blockNumber;
+
+        } finally{
+            pool.unpin(block, dirty, NO_LSN);
+        }
+    }
+
+    // SlottedPage cuma salinan, jadi hasil ubahannya harus disalin balik ke data block
+    private static void writeBack(Block block, SlottedPage page){
+        byte[] bytes = page.toBytes();
+        System.arraycopy(bytes, 0, block.data, 0, bytes.length);
     }
 }
