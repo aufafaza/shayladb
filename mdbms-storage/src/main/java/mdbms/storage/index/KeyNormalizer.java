@@ -1,7 +1,10 @@
 package mdbms.storage.index;
 
+import java.nio.charset.StandardCharsets;
 import mdbms.models.schema.ColumnDefinition;
 import mdbms.models.schema.DataType;
+import mdbms.storage.exception.StorageErrorCode;
+import mdbms.storage.exception.StorageException;
 
 // ubah key mentah jadi satu bentuk baku per tipe kolom, biar angka 1 dari Integer, Long, atau String jadi key yang sama
 // INTEGER jadi Integer, FLOAT jadi Float, CHAR dan VARCHAR jadi String
@@ -109,17 +112,16 @@ public final class KeyNormalizer {
         return s.substring(0, end);
     }
 
-    // cek panjang maksimal kolom, length 0 artinya ga ada batas
+    // cek panjang maksimal kolom dalam byte UTF 8 biar sama dengan codec SM3, length 0 artinya ga ada batas
     private static void checkLength(String s, int length, DataType type, Object original) {
-        if (length > 0 && s.length() > length) {
-            throw mismatch(original, type, "longer than " + length + " characters");
+        if (length > 0 && s.getBytes(StandardCharsets.UTF_8).length > length) {
+            throw mismatch(original, type, "longer than " + length + " bytes");
         }
     }
 
-    // bikin pesan error yang seragam untuk semua penolakan key
-    // TODO ganti jadi StorageException SCHEMA_VIOLATION kalau punya SM1 udah ada, cukup ubah method ini
-    private static IllegalArgumentException mismatch(Object value, DataType type, String reason) {
-        return new IllegalArgumentException(
+    // bikin SCHEMA_VIOLATION yang seragam untuk semua penolakan key
+    private static StorageException mismatch(Object value, DataType type, String reason) {
+        return new StorageException(StorageErrorCode.SCHEMA_VIOLATION,
                 "Cannot use " + value.getClass().getSimpleName() + " '" + value
                         + "' as " + type + " index key: " + reason);
     }

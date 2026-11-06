@@ -6,10 +6,12 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 
 import mdbms.models.schema.ColumnDefinition;
 import mdbms.models.schema.DataType;
+import mdbms.storage.exception.StorageErrorCode;
+import mdbms.storage.exception.StorageException;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.function.Executable;
 
 // unit test KeyNormalizer, ngecek konversi tiap tipe dan kasus kasus pinggir
-// TODO kalau mismatch udah pakai StorageException, ganti assertThrows IllegalArgumentException
 class KeyNormalizerTest {
 
     private final KeyNormalizer normalizer = new KeyNormalizer();
@@ -20,6 +22,11 @@ class KeyNormalizerTest {
     // helper bikin definisi kolom
     private static ColumnDefinition col(DataType type, int length) {
         return new ColumnDefinition("c", type, length, true);
+    }
+
+    // key yang ditolak harus jadi StorageException SCHEMA_VIOLATION
+    private static void assertRejected(Executable action) {
+        assertEquals(StorageErrorCode.SCHEMA_VIOLATION, assertThrows(StorageException.class, action).getCode());
     }
 
     // INTEGER harus nerima bilangan bulat apa aja dan string angka
@@ -43,11 +50,11 @@ class KeyNormalizerTest {
     // INTEGER harus nolak pecahan, NaN, overflow, dan tipe lain
     @Test
     void integerRejectsInvalidValues() {
-        assertThrows(IllegalArgumentException.class, () -> normalizer.normalize(3.5, INT));
-        assertThrows(IllegalArgumentException.class, () -> normalizer.normalize(Double.NaN, INT));
-        assertThrows(IllegalArgumentException.class, () -> normalizer.normalize(Long.MAX_VALUE, INT));
-        assertThrows(IllegalArgumentException.class, () -> normalizer.normalize("abc", INT));
-        assertThrows(IllegalArgumentException.class, () -> normalizer.normalize(true, INT));
+        assertRejected(() -> normalizer.normalize(3.5, INT));
+        assertRejected(() -> normalizer.normalize(Double.NaN, INT));
+        assertRejected(() -> normalizer.normalize(Long.MAX_VALUE, INT));
+        assertRejected(() -> normalizer.normalize("abc", INT));
+        assertRejected(() -> normalizer.normalize(true, INT));
     }
 
     // FLOAT harus ngubah angka dan string angka jadi Float
@@ -77,14 +84,13 @@ class KeyNormalizerTest {
     // FLOAT harus nolak NaN, Infinity, angka di luar jangkauan Float, dan teks bukan angka
     @Test
     void floatRejectsNanInfinityOverflowAndGarbage() {
-        assertThrows(IllegalArgumentException.class, () -> normalizer.normalize(Float.NaN, FLT));
-        assertThrows(IllegalArgumentException.class, () -> normalizer.normalize(Double.NaN, FLT));
-        assertThrows(IllegalArgumentException.class,
-                () -> normalizer.normalize(Double.POSITIVE_INFINITY, FLT));
-        assertThrows(IllegalArgumentException.class, () -> normalizer.normalize(1e40, FLT));
-        assertThrows(IllegalArgumentException.class, () -> normalizer.normalize("1e40", FLT));
-        assertThrows(IllegalArgumentException.class, () -> normalizer.normalize("NaN", FLT));
-        assertThrows(IllegalArgumentException.class, () -> normalizer.normalize("x1", FLT));
+        assertRejected(() -> normalizer.normalize(Float.NaN, FLT));
+        assertRejected(() -> normalizer.normalize(Double.NaN, FLT));
+        assertRejected(() -> normalizer.normalize(Double.POSITIVE_INFINITY, FLT));
+        assertRejected(() -> normalizer.normalize(1e40, FLT));
+        assertRejected(() -> normalizer.normalize("1e40", FLT));
+        assertRejected(() -> normalizer.normalize("NaN", FLT));
+        assertRejected(() -> normalizer.normalize("x1", FLT));
     }
 
     // CHAR cuma buang spasi di belakang, spasi di depan tetap ada
@@ -102,8 +108,16 @@ class KeyNormalizerTest {
     @Test
     void charRejectsTooLongAndNonText() {
         ColumnDefinition c5 = col(DataType.CHAR, 5);
-        assertThrows(IllegalArgumentException.class, () -> normalizer.normalize("abcdef", c5));
-        assertThrows(IllegalArgumentException.class, () -> normalizer.normalize(42, c5));
+        assertRejected(() -> normalizer.normalize("abcdef", c5));
+        assertRejected(() -> normalizer.normalize(42, c5));
+    }
+
+    // panjang CHAR dan VARCHAR dihitung dalam byte UTF 8 sama kayak codec SM3
+    @Test
+    void textLengthIsCountedInUtf8Bytes() {
+        assertEquals("éé", normalizer.normalize("éé", col(DataType.CHAR, 5)));
+        assertRejected(() -> normalizer.normalize("ééé", col(DataType.CHAR, 5)));
+        assertRejected(() -> normalizer.normalize("éé", col(DataType.VARCHAR, 3)));
     }
 
     // VARCHAR ga di trim, cuma dicek panjangnya
@@ -112,7 +126,7 @@ class KeyNormalizerTest {
         ColumnDefinition v3 = col(DataType.VARCHAR, 3);
         assertEquals("abc", normalizer.normalize("abc", v3));
         assertEquals("ab ", normalizer.normalize("ab ", v3));
-        assertThrows(IllegalArgumentException.class, () -> normalizer.normalize("abcd", v3));
+        assertRejected(() -> normalizer.normalize("abcd", v3));
     }
 
     // panjang kolom 0 artinya ga ada batas
