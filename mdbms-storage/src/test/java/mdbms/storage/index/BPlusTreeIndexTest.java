@@ -5,6 +5,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.lang.reflect.Proxy;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -246,5 +247,120 @@ class BPlusTreeIndexTest {
         StorageException e = assertThrows(StorageException.class, () -> index.insert(1, new RowId("orders", 0, 0)));
         assertEquals(StorageErrorCode.SCHEMA_VIOLATION, e.getCode());
         assertEquals(2, pool.blockCount("idx_users_id.idx"));
+    }
+
+    // cek semua key di model ketemu dengan RowId yang sama dan scan penuh urut sesuai model
+    private static void assertMatchesModel(BPlusTreeIndex index, NavigableMap<Integer, List<RowId>> model, int maxKey) {
+        for (int key = 0; key <= maxKey; key++) {
+            List<RowId> expected = model.getOrDefault(key, List.of());
+            assertEquals(sorted(expected), sorted(index.search(key)), "key " + key);
+        }
+        assertEquals(sorted(expectedRange(model, null, null, true, true)),
+                sorted(index.searchRange(null, null, true, true)));
+    }
+
+    // insert dan delete acak di beberapa degree selalu sama dengan TreeMap pembanding
+    @Test
+    void randomInsertDeleteMatchesTreeMap() {
+        for (int degree : new int[] {3, 4, 5, 8}) {
+            setUp();
+            BPlusTreeIndex index = intIndex(degree);
+            NavigableMap<Integer, List<RowId>> model = new TreeMap<>();
+            List<int[]> live = new ArrayList<>();
+            Random random = new Random(degree);
+            for (int step = 0; step < 3000; step++) {
+                if (live.isEmpty() || random.nextInt(100) < 55) {
+                    int key = random.nextInt(200);
+                    int slot = step;
+                    index.insert(key, row(slot));
+                    model.computeIfAbsent(key, k -> new ArrayList<>()).add(row(slot));
+                    live.add(new int[] {key, slot});
+                } else {
+                    int[] pair = live.remove(random.nextInt(live.size()));
+                    index.delete(pair[0], row(pair[1]));
+                    List<RowId> rowIds = model.get(pair[0]);
+                    rowIds.remove(row(pair[1]));
+                    if (rowIds.isEmpty()) model.remove(pair[0]);
+                }
+            }
+            assertMatchesModel(index, model, 200);
+        }
+    }
+
+    // hapus semua key bikin pohon balik ke tinggi 1, isi ulang dengan urutan sama ga nambah block karena pakai free list
+    @Test
+    void deleteEverythingShrinksTreeAndReusesBlocks() {
+        BPlusTreeIndex index = intIndex(4);
+        List<Integer> keys = new ArrayList<>();
+        for (int i = 0; i < 300; i++) keys.add(i);
+        Collections.shuffle(keys, new Random(3));
+        for (int key : keys) index.insert(key, row(key));
+        int blocksAfterFirstFill = pool.blockCount("idx_users_id.idx");
+
+        List<Integer> deleteOrder = new ArrayList<>(keys);
+        Collections.shuffle(deleteOrder, new Random(4));
+        for (int key : deleteOrder) index.delete(key, row(key));
+
+        assertEquals(1, index.getHeight());
+        assertTrue(index.searchRange(null, null, true, true).isEmpty());
+
+        for (int key : keys) index.insert(key, row(key));
+        assertEquals(blocksAfterFirstFill, pool.blockCount("idx_users_id.idx"));
+        assertEquals(300, index.searchRange(null, null, true, true).size());
+    }
+
+    // hapus sebagian RowId di key dengan sambungan bucket panjang, sisanya tetap utuh
+    @Test
+    void deleteInsideBucketChain() {
+        BPlusTreeIndex index = intIndex(4);
+        for (int i = 0; i < 1200; i++) index.insert(7, row(i));
+        index.insert(8, row(5000));
+
+        for (int i = 0; i < 1200; i += 2) index.delete(7, row(i));
+        assertEquals(600, index.search(7).size());
+
+        for (int i = 1; i < 1200; i += 2) index.delete(7, row(i));
+        assertTrue(index.search(7).isEmpty());
+        assertEquals(List.of(row(5000)), index.search(8));
+    }
+
+    // pasangan yang ga ada, RowId lain di key yang sama, dan key null diabaikan
+    @Test
+    void deleteMissingPairIsIgnored() {
+        BPlusTreeIndex index = intIndex(4);
+        index.insert(1, row(1));
+
+        index.delete(1, row(2));
+        index.delete(99, row(1));
+        index.delete(null, row(1));
+
+        assertEquals(List.of(row(1)), index.search(1));
+    }
+
+    // index yang dibuka ulang setelah banyak delete tetap konsisten
+    @Test
+    void reopenAfterDeletes() {
+        BPlusTreeIndex index = intIndex(4);
+        for (int key = 0; key < 200; key++) index.insert(key, row(key));
+        for (int key = 0; key < 200; key += 3) index.delete(key, row(key));
+        pool.flushBuffer();
+
+        BPlusTreeIndex reopened = openIntIndex(4);
+
+        for (int key = 0; key < 200; key++) {
+            assertEquals(key % 3 == 0 ? List.of() : List.of(row(key)), reopened.search(key));
+        }
+    }
+
+    // destroy ngapus file index dari disk
+    @Test
+    void destroyDeletesIndexFile() {
+        BPlusTreeIndex index = intIndex(4);
+        for (int key = 0; key < 100; key++) index.insert(key, row(key));
+
+        index.destroy();
+
+        assertEquals(0, pool.blockCount("idx_users_id.idx"));
+        assertTrue(Files.notExists(directory.resolve("idx_users_id.idx")));
     }
 }

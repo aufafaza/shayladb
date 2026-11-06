@@ -115,4 +115,23 @@ class BlockManagerTest {
         assertEquals(StorageErrorCode.IO_FAILURE, error.getCode());
         assertInstanceOf(IOException.class, error.getCause());
     }
+
+    // deleteFile ngapus file dan aman dipanggil dua kali
+    @Test
+    void deleteFileRemovesFileAndIsIdempotent() {
+        BlockManager disk = new BlockManager(directory.toString());
+        disk.appendBlock("drop.idx");
+
+        disk.deleteFile("drop.idx");
+        disk.deleteFile("drop.idx");
+
+        assertFalse(Files.exists(directory.resolve("drop.idx")));
+        assertEquals(0, disk.blockCount("drop.idx"));
+        assertCode(() -> disk.deleteFile("../escape.idx"));
+    }
+
+    // nama file ga valid ditolak sebagai INVALID_BLOCK
+    private static void assertCode(org.junit.jupiter.api.function.Executable action) {
+        assertEquals(StorageErrorCode.INVALID_BLOCK, assertThrows(StorageException.class, action).getCode());
+    }
 }

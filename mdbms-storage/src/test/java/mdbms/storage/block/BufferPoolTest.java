@@ -33,6 +33,26 @@ class BufferPoolTest {
         disk.appendBlock("users.idx");
     }
 
+    // discardFile buang frame dirty tanpa flush, file lain ga kesentuh, frame yang dipin bikin ditolak
+    @Test
+    void discardFileDropsFramesWithoutFlushAndDeletesFile() {
+        BufferPool pool = new BufferPool(new BlockManager(directory.toString()), 4);
+        Block dirty = pool.appendBlock("drop.idx");
+        dirty.data[0] = 9;
+        pool.unpin(dirty, true, 5);
+        Block kept = pool.pin("users.tbl", 0);
+        pool.unpin(kept, false, 0);
+        Block pinned = pool.pin("users.idx", 0);
+
+        assertCode(StorageErrorCode.INVALID_PIN, () -> pool.discardFile("users.idx"));
+        pool.discardFile("drop.idx");
+
+        assertEquals(0, pool.blockCount("drop.idx"));
+        assertEquals(new BufferStats(4, 2, 0, 0, 2), pool.getBufferStats());
+        pool.unpin(pinned, false, 0);
+        assertDoesNotThrow(pool::flushBuffer);
+    }
+
     @Test
     void pinsShareFramesAndStatsAreSnapshots() {
         BufferPool pool = new BufferPool(disk, 3);

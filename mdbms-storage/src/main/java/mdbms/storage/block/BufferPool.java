@@ -120,6 +120,17 @@ public class BufferPool {
         frames.remove(id);
     }
 
+    // buang semua frame file ini tanpa flush karena isinya emang mau dibuang, lalu hapus file nya di disk
+    // ditolak kalau masih ada frame file ini yang lagi dipin
+    public synchronized void discardFile(String fileName) {
+        Path path = blockManager.pathFor(fileName);
+        for (Map.Entry<BlockId, Block> entry : frames.entrySet()) {
+            if (entry.getKey().file().equals(path)) requireUnpinned(entry.getValue());
+        }
+        frames.keySet().removeIf(id -> id.file().equals(path));
+        blockManager.deleteFile(fileName);
+    }
+
     /** Menulis semua frame dirty yang tidak sedang dipakai */
     public synchronized void flushBuffer() {
         for (Block block : frames.values()) requireUnpinned(block);
