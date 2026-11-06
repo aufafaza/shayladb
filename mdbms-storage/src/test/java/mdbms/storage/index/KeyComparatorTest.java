@@ -23,13 +23,13 @@ class KeyComparatorTest {
         assertTrue(cmp.compare(Integer.MIN_VALUE, Integer.MAX_VALUE) < 0);
     }
 
-    // urutan Double harus bener
+    // urutan Float harus bener
     @Test
-    void ordersDoubles() {
+    void ordersFloats() {
         KeyComparator cmp = new KeyComparator(DataType.FLOAT);
-        assertTrue(cmp.compare(1.5, 2.0) < 0);
-        assertTrue(cmp.compare(-0.5, -1.0) > 0);
-        assertEquals(0, cmp.compare(3.25, 3.25));
+        assertTrue(cmp.compare(1.5f, 2.0f) < 0);
+        assertTrue(cmp.compare(-0.5f, -1.0f) > 0);
+        assertEquals(0, cmp.compare(3.25f, 3.25f));
     }
 
     // CHAR dan VARCHAR diurutin per karakter, huruf besar duluan
@@ -66,7 +66,9 @@ class KeyComparatorTest {
         assertThrows(IllegalArgumentException.class,
                 () -> new KeyComparator(DataType.INTEGER).compare(1L, 2));
         assertThrows(IllegalArgumentException.class,
-                () -> new KeyComparator(DataType.FLOAT).compare(1, 2.0));
+                () -> new KeyComparator(DataType.FLOAT).compare(1, 2.0f));
+        assertThrows(IllegalArgumentException.class,
+                () -> new KeyComparator(DataType.FLOAT).compare(2.0, 2.0f));
         assertThrows(IllegalArgumentException.class,
                 () -> new KeyComparator(DataType.VARCHAR).compare(1, "a"));
     }
