@@ -32,21 +32,25 @@ import mdbms.storage.serializer.BinaryRecordSerializer;
 import mdbms.storage.serializer.IRecordSerializer;
 import mdbms.storage.catalog.CatalogManager;
 import mdbms.storage.statistics.StatisticsManager;
+import mdbms.storage.index.IndexManager;
 
 public final class StorageManager implements IDataAccess, ISchemaCatalog, IStatisticsProvider, IDurableStorage{
     private final BufferPool bufferPool;
     private final IRecordSerializer serializer;
     private final CatalogManager catalog;
     private final StatisticsManager statistics;
+    private final IndexManager indexManager;
     private final ConditionEvaluator evaluator;
     private final Map<String, HeapFile> tables;
 
-    // TODO tambah field IndexManager pakai indexMaxDegree kalau kelasnya udah diimplementasi SM5
+    // rakit semua komponen SM, index yang tercatat di katalog langsung dibuka lagi
     public StorageManager(String dataDirectory, int bufferCapacity, int indexMaxDegree){
         bufferPool = new BufferPool(new BlockManager(dataDirectory), bufferCapacity);
         serializer = new BinaryRecordSerializer();
         catalog = new CatalogManager(dataDirectory);
         statistics = new StatisticsManager(catalog);
+        indexManager = new IndexManager(catalog, bufferPool, indexMaxDegree);
+        indexManager.loadAll();
         evaluator = new ConditionEvaluator();
         tables = new HashMap<>();
     }
@@ -218,12 +222,12 @@ public final class StorageManager implements IDataAccess, ISchemaCatalog, IStati
 
     @Override
     public List<RowId> searchIndex(String indexName, Object key){
-        return List.of();
+        return indexManager.search(indexName, key);
     }
 
     @Override
     public List<RowId> searchIndexRange(String indexName, Object low, Object high, boolean lowInclusive, boolean highInclusive){
-        return List.of();
+        return indexManager.searchRange(indexName, low, high, lowInclusive, highInclusive);
     }
 
     @Override
@@ -244,6 +248,7 @@ public final class StorageManager implements IDataAccess, ISchemaCatalog, IStati
     @Override
     public void dropTable(String table){
         requireSchema(table);
+        indexManager.dropIndexesOf(table);
         catalog.dropTable(table);
     }
 
@@ -254,8 +259,13 @@ public final class StorageManager implements IDataAccess, ISchemaCatalog, IStati
     }
 
     @Override
+    // bikin index B+Tree lalu isi dari semua baris yang udah ada di tabel
     public IndexInfo createIndex(String name, String table, String column){
-        return null;
+        TableSchema schema = requireSchema(table);
+
+        try (RowIterator iterator = heapFileOf(table).scan()){
+            return indexManager.createIndex(name, schema, column, iterator);
+        }
     }
 
     @Override
@@ -434,7 +444,18 @@ public final class StorageManager implements IDataAccess, ISchemaCatalog, IStati
         }
     }
 
+    // samain semua index tabel dengan perubahan baris lalu buang cache statistik tabelnya
     private void afterWrite(String table, Row oldRow, Row newRow){
-        // synchronize indexes and statistics after SM4 SM5 integration
+        TableSchema schema = requireSchema(table);
+
+        if (oldRow == null){
+            indexManager.onInsert(newRow, schema);
+        } else if (newRow == null){
+            indexManager.onDelete(oldRow, schema);
+        } else{
+            indexManager.onUpdate(oldRow, newRow, schema);
+        }
+
+        statistics.invalidate(table);
     }
 }

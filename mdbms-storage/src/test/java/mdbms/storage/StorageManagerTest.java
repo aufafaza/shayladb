@@ -26,6 +26,8 @@ import mdbms.models.data.Row;
 import mdbms.models.data.RowId;
 import mdbms.models.schema.ColumnDefinition;
 import mdbms.models.schema.DataType;
+import mdbms.models.schema.IndexInfo;
+import mdbms.models.schema.IndexType;
 import mdbms.models.schema.TableSchema;
 import mdbms.storage.block.Block;
 import mdbms.storage.block.BlockManager;
@@ -156,6 +158,67 @@ class StorageManagerTest {
         assertCode(StorageErrorCode.SCHEMA_VIOLATION,
                 () -> storage.writeBlock(new DataWrite("users", values, List.of())));
         assertTrue(readUsers().isEmpty());
+    }
+
+    // FRM palsu yang selalu bilang log udah aman biar flush bisa jalan
+    private static IFailureRecoveryManager acceptingFrm() {
+        return (IFailureRecoveryManager) Proxy.newProxyInstance(
+                IFailureRecoveryManager.class.getClassLoader(),
+                new Class<?>[] {IFailureRecoveryManager.class},
+                (proxy, method, args) -> method.getReturnType() == boolean.class ? true : null);
+    }
+
+    // index dibuat dari baris lama lalu ikut berubah tiap insert, update, dan delete
+    @Test
+    void indexFollowsCrud() {
+        createUsers();
+        storage.writeBlock(new DataWrite("users", user(1, "alice", 3.5f), List.of()));
+        RowId bob = storage.writeBlock(new DataWrite("users", user(2, "bob", null), List.of())).get(0);
+
+        IndexInfo info = storage.createIndex("idx_users_id", "users", "id");
+        assertEquals(new IndexInfo("idx_users_id", "users", "id", IndexType.BPLUS_TREE), info);
+        assertEquals(List.of(info), storage.getIndexes("users"));
+        assertEquals(List.of(bob), storage.searchIndex("idx_users_id", 2));
+
+        RowId cici = storage.writeBlock(new DataWrite("users", user(3, "cici", 2.0f), List.of())).get(0);
+        assertEquals(List.of(cici), storage.searchIndex("idx_users_id", 3));
+
+        Row moved = storage.updateByRowId(bob, List.of(20, "bob", 1.0f));
+        assertTrue(storage.searchIndex("idx_users_id", 2).isEmpty());
+        assertEquals(List.of(moved.rowId()), storage.searchIndex("idx_users_id", 20));
+
+        storage.deleteBlock(new DataDeletion("users", List.of(ID_IS_1)));
+        assertTrue(storage.searchIndex("idx_users_id", 1).isEmpty());
+        assertEquals(List.of(cici, moved.rowId()), storage.searchIndexRange("idx_users_id", null, null, true, true));
+    }
+
+    // index ke tabel atau nama yang ga ada kasih kode error yang jelas, drop tabel ikut ngapus index nya
+    @Test
+    void indexErrorsAndDropTable() {
+        assertCode(StorageErrorCode.TABLE_NOT_FOUND, () -> storage.createIndex("idx_ghost_id", "ghost", "id"));
+        assertCode(StorageErrorCode.INDEX_NOT_FOUND, () -> storage.searchIndex("idx_users_id", 1));
+
+        createUsers();
+        storage.createIndex("idx_users_id", "users", "id");
+        assertCode(StorageErrorCode.INDEX_ALREADY_EXISTS, () -> storage.createIndex("idx_users_id", "users", "name"));
+        assertCode(StorageErrorCode.COLUMN_NOT_FOUND, () -> storage.createIndex("idx_users_age", "users", "age"));
+
+        storage.dropTable("users");
+        assertCode(StorageErrorCode.INDEX_NOT_FOUND, () -> storage.searchIndex("idx_users_id", 1));
+    }
+
+    // setelah flush dan StorageManager dibikin ulang, index dibuka lagi dari katalog
+    @Test
+    void indexSurvivesRestart() {
+        storage.attachRecoveryManager(acceptingFrm());
+        createUsers();
+        RowId alice = storage.writeBlock(new DataWrite("users", user(1, "alice", 3.5f), List.of())).get(0);
+        storage.createIndex("idx_users_gpa", "users", "gpa");
+        storage.flushBuffer();
+
+        StorageManager restarted = new StorageManager(directory.toString(), 16, 4);
+
+        assertEquals(List.of(alice), restarted.searchIndex("idx_users_gpa", 3.5));
     }
 
     // flush tanpa halaman dirty aman dan statistik buffer masih kosong
