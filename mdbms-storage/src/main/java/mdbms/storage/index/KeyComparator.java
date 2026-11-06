@@ -21,7 +21,7 @@ public final class KeyComparator implements Comparator<Object> {
         Objects.requireNonNull(b, "index key must not be null");
         return switch (type) {
             case INTEGER -> Integer.compare(cast(a, Integer.class), cast(b, Integer.class));
-            case FLOAT -> Double.compare(cast(a, Double.class), cast(b, Double.class));
+            case FLOAT -> Float.compare(cast(a, Float.class), cast(b, Float.class));
             case CHAR, VARCHAR -> cast(a, String.class).compareTo(cast(b, String.class));
         };
     }

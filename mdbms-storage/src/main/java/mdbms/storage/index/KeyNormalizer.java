@@ -4,7 +4,7 @@ import mdbms.models.schema.ColumnDefinition;
 import mdbms.models.schema.DataType;
 
 // ubah key mentah jadi satu bentuk baku per tipe kolom, biar angka 1 dari Integer, Long, atau String jadi key yang sama
-// INTEGER jadi Integer, FLOAT jadi Double, CHAR dan VARCHAR jadi String
+// INTEGER jadi Integer, FLOAT jadi Float, CHAR dan VARCHAR jadi String
 public final class KeyNormalizer {
 
     // pilih konverter sesuai tipe kolom, key null dibalikin null karena NULL ga diindeks
@@ -17,7 +17,7 @@ public final class KeyNormalizer {
         }
         return switch (column.type()) {
             case INTEGER -> toInteger(key);
-            case FLOAT -> toDouble(key);
+            case FLOAT -> toFloat(key);
             case CHAR -> toCharKey(key, column.length());
             case VARCHAR -> toVarcharKey(key, column.length());
         };
@@ -54,25 +54,25 @@ public final class KeyNormalizer {
         throw mismatch(value, DataType.INTEGER, "unsupported value type");
     }
 
-    // ubah ke Double, NaN dan Infinity ditolak karena ga punya urutan yang jelas di B+Tree
-    // nol negatif disamain jadi nol biasa karena Double compare nganggep keduanya beda
-    private Double toDouble(Object value) {
-        double d;
+    // ubah ke Float biar sama persis dengan FloatCodec SM3, jadi 0.1 dari query cocok dengan 0.1 yang disimpan
+    // NaN, Infinity, dan angka di luar jangkauan Float ditolak, nol negatif disamain jadi nol biasa
+    private Float toFloat(Object value) {
+        float f;
         if (value instanceof Number n) {
-            d = n.doubleValue();
+            f = n.floatValue();
         } else if (value instanceof String s) {
             try {
-                d = Double.parseDouble(s.trim());
+                f = Float.parseFloat(s.trim());
             } catch (NumberFormatException e) {
                 throw mismatch(value, DataType.FLOAT, "not a valid number");
             }
         } else {
             throw mismatch(value, DataType.FLOAT, "unsupported value type");
         }
-        if (Double.isNaN(d) || Double.isInfinite(d)) {
-            throw mismatch(value, DataType.FLOAT, "NaN/Infinity cannot be indexed");
+        if (Float.isNaN(f) || Float.isInfinite(f)) {
+            throw mismatch(value, DataType.FLOAT, "NaN, Infinity, or out of float range");
         }
-        return d == 0.0 ? 0.0 : d;
+        return f == 0.0f ? 0.0f : f;
     }
 
     // CHAR dipadding spasi di SQL, jadi spasi di belakang dibuang dulu baru dicek panjangnya
