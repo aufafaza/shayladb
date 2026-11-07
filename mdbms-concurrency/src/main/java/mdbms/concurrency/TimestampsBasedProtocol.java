@@ -5,13 +5,13 @@ import mdbms.models.transaction.AccessStatus;
 import mdbms.models.transaction.Transaction;
 
 public class TimestampsBasedProtocol implements ConcurrencyProtocol {
-    private final TimestampManaager timestampManager;
+    private final TimestampManager timestampManager;
 
     public TimestampsBasedProtocol() {
-        this(new TimestampManaager());
+        this(new TimestampManager());
     }
 
-    public TimestampsBasedProtocol(TimestampManaager timestampManager) {
+    public TimestampsBasedProtocol(TimestampManager timestampManager) {
         this.timestampManager = java.util.Objects.requireNonNull(timestampManager, "timestampManager");
     }
 

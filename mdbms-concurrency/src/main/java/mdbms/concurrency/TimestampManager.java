@@ -6,7 +6,7 @@ import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
 
-public class TimestampManaager {
+public class TimestampManager {
     private final Map<DataItem, DataTimestamp> dataTimestamps = new ConcurrentHashMap<>();
 
     public long getReadTS(DataItem data) {
