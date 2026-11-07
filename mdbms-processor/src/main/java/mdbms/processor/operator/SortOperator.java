@@ -3,18 +3,30 @@ package mdbms.processor.operator;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
+import java.util.Objects;
 import mdbms.processor.IResultRow;
 
 public class SortOperator extends QueryUnaryOperator {
-    private final String column;
-    private final boolean ascending;
+    public record SortKey(String tableName, String columnName, boolean ascending) {
+        public SortKey {
+            Objects.requireNonNull(columnName, "Nama kolom wajib diisi");
+            if (columnName.isBlank()) throw new IllegalArgumentException("Nama kolom kosong");
+        }
+    }
+
+    private final List<SortKey> sortKeys;
     private final List<IResultRow> rows = new ArrayList<>();
     private int position;
 
     public SortOperator(IQueryOperator child, String column, boolean ascending) {
+        this(child, List.of(new SortKey(null, column, ascending)));
+    }
+
+    public SortOperator(IQueryOperator child, List<SortKey> sortKeys) {
         super(child);
-        this.column = column;
-        this.ascending = ascending;
+        Objects.requireNonNull(sortKeys, "Kolom pengurutan wajib diisi");
+        if (sortKeys.isEmpty()) throw new IllegalArgumentException("Kolom pengurutan kosong");
+        this.sortKeys = List.copyOf(sortKeys);
     }
 
     @Override
@@ -24,8 +36,19 @@ public class SortOperator extends QueryUnaryOperator {
         childOperator.open();
         IResultRow row;
         while ((row = childOperator.next()) != null) rows.add(row);
-        Comparator<IResultRow> comparator = (a, b) -> compare(a.get(column), b.get(column));
-        rows.sort(ascending ? comparator : comparator.reversed());
+        rows.sort(this::compareRows);
+    }
+
+    private int compareRows(IResultRow left, IResultRow right) {
+        for (SortKey key : sortKeys) {
+            Object a = key.tableName() == null ? left.get(key.columnName())
+                    : left.get(key.tableName(), key.columnName());
+            Object b = key.tableName() == null ? right.get(key.columnName())
+                    : right.get(key.tableName(), key.columnName());
+            int result = compare(a, b);
+            if (result != 0) return key.ascending() ? result : -result;
+        }
+        return 0;
     }
 
     @Override
