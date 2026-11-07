@@ -133,6 +133,7 @@ public final class ConcurrencyControlManager implements IConcurrencyControl {
             int id = transactionCounter.getAndIncrement();
             Transaction tx = new Transaction(id, System.currentTimeMillis());
             activeTransactions.put(id, tx);
+            frm.writeTransactionLog(id, LogType.BEGIN);
             return id;
         }
     }
