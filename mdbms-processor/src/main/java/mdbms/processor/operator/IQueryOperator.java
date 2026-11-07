@@ -8,4 +8,6 @@ public interface IQueryOperator {
     public IResultRow next();
 
     public void close();
+
+    public int getAffectedRows();
 }
