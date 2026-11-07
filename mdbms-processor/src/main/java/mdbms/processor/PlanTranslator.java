@@ -73,11 +73,7 @@ public class PlanTranslator {
             case CARTESIAN:
                 return new CartesianJoinOperator(childOperators.get(0), childOperators.get(1));
             case JOIN:
-                return new JoinOperator(childOperators.get(0), childOperators.get(1), (row1, row2) -> {
-                    return queryTree.getConditions().stream()
-                            .map(condition -> (Boolean) ExpressionEvaluator.evaluate(condition, row1, row2))
-                            .reduce(true, (a, b) -> a && b);
-                }, queryTree.isNaturalJoin(), JOIN_BLOCK_SIZE);
+                return new JoinOperator(childOperators.get(0), childOperators.get(1), queryTree.getConditions(), queryTree.isNaturalJoin(), JOIN_BLOCK_SIZE);
             case SORT:
                 return new SortOperator(childOperators.get(0), queryTree.getOrderByClauses());
             case GROUP_BY:
