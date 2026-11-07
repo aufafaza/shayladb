@@ -8,7 +8,6 @@ import mdbms.storage.block.BufferPool;
 import mdbms.storage.block.Block;
 import mdbms.storage.serializer.IRecordSerializer;
 import mdbms.storage.serializer.SlottedPage;
-import mdbms.storage.serializer.SlotEntry;
 import mdbms.storage.exception.StorageErrorCode;
 import mdbms.storage.exception.StorageException;
 
@@ -115,23 +114,12 @@ public class HeapFile{
         try{
             SlottedPage page = new SlottedPage(block.data);
             int slot = rowId.slot();
-            SlotEntry entry = page.slotEntry(slot);
 
-            if (!entry.occupied() && entry.length() > 0){
-                if (bytes > entry.length()){
-                    throw new StorageException(
-                        StorageErrorCode.SLOT_UNAVAILABLE,
-                        "Reserved slot is too small for row: " + rowId
-                    );
-                }
-            }
-            else{
-                if (!page.reserveSlotAt(slot, bytes)){
-                    throw new StorageException(
-                        StorageErrorCode.SLOT_UNAVAILABLE,
-                        "Slot unavailable for row: " + rowId
-                    );
-                }
+            if (!page.reserveSlotAt(slot, bytes) && page.isOccupied(slot)){
+                throw new StorageException(
+                    StorageErrorCode.SLOT_UNAVAILABLE,
+                    "Slot unavailable for row: " + rowId
+                );
             }
 
             page.writeSlot(slot, record);
@@ -194,21 +182,20 @@ public class HeapFile{
         }
     }
 
-    // TODO nyalain lagi kalau BufferPool dan BlockManager SM2 udah punya truncate(fileName)
-    // public int truncate(){
-    //     int rowCount = 0;
-    //
-    //     try (RowIterator iterator = scan()){
-    //         while (iterator.hasNext()){
-    //             iterator.next();
-    //             rowCount++;
-    //         }
-    //     }
-    //
-    //     pool.truncate(fileName);
-    //
-    //     return rowCount;
-    // }
+    public int truncate(){
+        int rowCount = 0;
+    
+        try (RowIterator iterator = scan()){
+            while (iterator.hasNext()){
+                iterator.next();
+                rowCount++;
+            }
+        }
+    
+        pool.truncateFile(fileName);
+    
+        return rowCount;
+    }
 
     public int blockCount(){
         return pool.blockCount(fileName);
