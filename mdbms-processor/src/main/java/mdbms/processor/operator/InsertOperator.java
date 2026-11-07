@@ -1,67 +1,73 @@
 package mdbms.processor.operator;
 
+import java.util.ArrayList;
 import java.util.List;
 import mdbms.api.IConcurrencyControl;
 import mdbms.api.IDataAccess;
-import mdbms.models.access.DataWrite;
+import mdbms.api.ISchemaCatalog;
 import mdbms.models.data.DataItem;
 import mdbms.models.data.RowId;
+import mdbms.models.query.ExpressionTree;
 import mdbms.models.schema.ColumnDefinition;
 import mdbms.models.schema.DataType;
-import mdbms.models.transaction.AccessStatus;
+import mdbms.processor.ExpressionEvaluator;
 import mdbms.processor.IResultRow;
-import mdbms.processor.ResultRow;
-import mdbms.processor.ResultTableSchema;
 
-public class InsertOperator implements IQueryOperator {
+public class InsertOperator implements IQueryOperator, IWriteOperator {
     private final IDataAccess dataAccess;
+    private final ISchemaCatalog schemaCatalog;
     private final IConcurrencyControl concurrencyControlManager;
     private final int transactionId;
-    private final DataWrite data;
-    private boolean isDone;
+    private final String tableName;
+    private final List<ExpressionTree> values;
+    private List<Object> rowValues;
+    private int affectedRows;
 
-    public InsertOperator(IDataAccess dataAccess, IConcurrencyControl concurrencyControlManager,
-            int transactionId, DataWrite data) {
+    public InsertOperator(IDataAccess dataAccess, ISchemaCatalog schemaCatalog,
+            IConcurrencyControl concurrencyControlManager, int transactionId, String tableName,
+            List<ExpressionTree> values) {
         this.dataAccess = dataAccess;
+        this.schemaCatalog = schemaCatalog;
         this.concurrencyControlManager = concurrencyControlManager;
         this.transactionId = transactionId;
-        this.data = data;
+        this.tableName = tableName;
+        this.values = values;
     }
 
     public void open() {
-        isDone = false;
+        List<ColumnDefinition> columns = schemaCatalog.getTableSchema(tableName).columns();
+        rowValues = new ArrayList<>();
+        for (int i = 0; i < values.size(); i++) {
+            Object value = ExpressionEvaluator.evaluate(values.get(i), null);
+            rowValues.add(toColumnType(value, columns.get(i).type()));
+        }
     }
 
     public IResultRow next() {
-        if (isDone) return null;
-        isDone = true;
-
-        requestWrite(new DataItem(data.table(), null));
-        List<RowId> rowIds = dataAccess.writeBlock(data);
-        // TODO BUTUH method dari CCM untuk catatan perubahan ke FRM
-
-        ResultTableSchema schema = new ResultTableSchema();
-        schema.addColumn(new ColumnDefinition("affected_rows", DataType.INTEGER, 0, false));
-        ResultRow result = new ResultRow(schema);
-        result.set(schema.getTableName(), "affected_rows", rowIds.size());
-        return result;
+        RowId rowId = dataAccess.reserveRowId(tableName, rowValues);
+        try {
+            AccessPermission.write(concurrencyControlManager, transactionId, new DataItem(tableName, rowId), null, rowValues);
+        } catch (RuntimeException e) {
+            dataAccess.releaseRowId(rowId);
+            throw e;
+        }
+        dataAccess.insertAt(rowId, rowValues);
+        affectedRows = 1;
+        return null;
     }
 
     public void close() {
     }
 
-    private void requestWrite(DataItem item) {
-        AccessStatus status = concurrencyControlManager.requestWrite(transactionId, item);
-        while (status == AccessStatus.WAITING) {
-            try {
-                Thread.sleep(10);
-            } catch (InterruptedException e) {
-                throw new IllegalStateException("Interrupted while waiting for CCM", e);
-            }
-            status = concurrencyControlManager.requestWrite(transactionId, item);
+    public int getAffectedRows() {
+        return affectedRows;
+    }
+
+    private static Object toColumnType(Object value, DataType type) {
+        if (value instanceof Number number) {
+            if (type == DataType.INTEGER) return number.intValue();
+            if (type == DataType.FLOAT) return number.floatValue();
         }
-        if (status == AccessStatus.ABORTED) {
-            throw new IllegalStateException("Transaction " + transactionId + " was aborted by CCM");
-        }
+        return value;
     }
 }
