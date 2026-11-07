@@ -4,6 +4,8 @@ import static org.junit.jupiter.api.Assertions.*;
 
 import mdbms.models.schema.ColumnDefinition;
 import mdbms.models.schema.DataType;
+import mdbms.storage.exception.StorageErrorCode;
+import mdbms.storage.exception.StorageException;
 import org.junit.jupiter.api.Test;
 
 class FloatCodecTest {
@@ -23,7 +25,9 @@ class FloatCodecTest {
     // memastikan double dan data kepotong ditolak
     @Test
     void rejectsDoubleAndTruncation() {
-        assertThrows(IllegalArgumentException.class, () -> codec.encode(1.0d, column));
-        assertThrows(IllegalArgumentException.class, () -> codec.decode(new byte[5], column));
+        assertEquals(StorageErrorCode.SCHEMA_VIOLATION,
+                assertThrows(StorageException.class, () -> codec.encode(1.0d, column)).getCode());
+        assertEquals(StorageErrorCode.INVALID_BLOCK,
+                assertThrows(StorageException.class, () -> codec.decode(new byte[5], column)).getCode());
     }
 }
