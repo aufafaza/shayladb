@@ -63,6 +63,16 @@ public final class QueryPlanPrinter {
         return expression(expression.getRoot());
     }
 
+    /** Prints the visual QueryTree hierarchy (including nested ExpressionTrees) to stdout. */
+    public void printQueryTree(QueryTree tree) {
+        Objects.requireNonNull(tree, "tree").printQueryTree();
+    }
+
+    /** Prints the visual ExpressionTree AST hierarchy to stdout. */
+    public void printExpressionTree(ExpressionTree expression) {
+        Objects.requireNonNull(expression, "expression").printExpressionTree();
+    }
+
     private List<String> parameters(QueryTree node) {
         List<String> result = new ArrayList<>();
         if (node.getTableName() != null) {

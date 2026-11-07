@@ -176,4 +176,106 @@ public class QueryTree {
     public void setEstimatedCost(int estimatedCost) {
         this.estimatedCost = estimatedCost;
     }
+
+    public String formatTree() {
+        StringBuilder sb = new StringBuilder();
+        formatNode(this, "", true, true, sb);
+        return sb.toString();
+    }
+
+    public void printQueryTree() {
+        System.out.print(formatTree());
+    }
+
+    private static void formatNode(
+        QueryTree node,
+        String prefix,
+        boolean isRoot,
+        boolean isLast,
+        StringBuilder sb
+    ) {
+        if (!isRoot) {
+            sb.append(prefix).append(isLast ? "└── " : "├── ");
+        }
+        sb.append(node.nodeType);
+
+        java.util.List<String> details = new java.util.ArrayList<>();
+        if (node.tableName != null) {
+            details.add("table=" + node.tableName);
+        }
+        if (!node.projectionColumns.isEmpty()) {
+            details.add("columns=" + node.projectionColumns);
+        }
+        if (node.naturalJoin) {
+            details.add("natural=true");
+        }
+        if (!node.orderByClauses.isEmpty()) {
+            details.add("orderBy=" + node.orderByClauses.stream()
+                .map(c -> c.getField() + " " + c.getDirection())
+                .toList());
+        }
+        if (node.updateColumn != null) {
+            details.add("updateColumn=" + node.updateColumn);
+        }
+        if (node.indexName != null) {
+            details.add("index=" + node.indexName);
+        }
+        if (node.indexColumn != null) {
+            details.add("indexColumn=" + node.indexColumn);
+        }
+        if (node.algorithm != null && node.algorithm != PhysicalAlgorithm.DEFAULT) {
+            details.add("algorithm=" + node.algorithm);
+        }
+        if (!details.isEmpty()) {
+            sb.append(" [").append(String.join(", ", details)).append(']');
+        }
+        sb.append('\n');
+
+        String childPrefix = isRoot ? prefix : prefix + (isLast ? "    " : "│   ");
+        int totalBranches = node.conditions.size()
+            + (node.updateExpression != null ? 1 : 0)
+            + node.insertValues.size()
+            + node.children.size();
+        int currentBranch = 0;
+
+        for (int i = 0; i < node.conditions.size(); i++) {
+            currentBranch++;
+            boolean branchLast = currentBranch == totalBranches;
+            sb.append(childPrefix).append(branchLast ? "└── " : "├── ")
+                .append("condition[").append(i).append("]:\n");
+            String exprPrefix = childPrefix + (branchLast ? "    " : "│   ");
+            ExpressionTree cond = node.conditions.get(i);
+            if (cond != null && cond.getRoot() != null) {
+                ExpressionTree.formatNode(cond.getRoot(), exprPrefix, false, true, sb);
+            }
+        }
+
+        if (node.updateExpression != null && node.updateExpression.getRoot() != null) {
+            currentBranch++;
+            boolean branchLast = currentBranch == totalBranches;
+            sb.append(childPrefix).append(branchLast ? "└── " : "├── ")
+                .append("setExpression:\n");
+            String exprPrefix = childPrefix + (branchLast ? "    " : "│   ");
+            ExpressionTree.formatNode(node.updateExpression.getRoot(), exprPrefix, false, true, sb);
+        }
+
+        for (int i = 0; i < node.insertValues.size(); i++) {
+            currentBranch++;
+            boolean branchLast = currentBranch == totalBranches;
+            sb.append(childPrefix).append(branchLast ? "└── " : "├── ")
+                .append("value[").append(i).append("]: ");
+            ExpressionTree val = node.insertValues.get(i);
+            if (val != null && val.getRoot() != null) {
+                ExpressionTree.formatNode(val.getRoot(), "", true, true, sb);
+            } else {
+                sb.append("null\n");
+            }
+        }
+
+        for (int i = 0; i < node.children.size(); i++) {
+            currentBranch++;
+            boolean branchLast = currentBranch == totalBranches;
+            formatNode(node.children.get(i), childPrefix, false, branchLast, sb);
+        }
+    }
 }
