@@ -6,6 +6,7 @@ import java.util.function.Supplier;
 import mdbms.api.IConcurrencyControl;
 import mdbms.models.data.DataItem;
 import mdbms.models.transaction.AccessStatus;
+import mdbms.processor.exception.TransactionAbortedException;
 
 final class AccessPermission {
     private AccessPermission() {
@@ -27,7 +28,7 @@ final class AccessPermission {
             status = request.get();
         }
         if (status == AccessStatus.ABORTED) {
-            throw new IllegalStateException("Transaction " + transactionId + " was aborted by CCM");
+            throw new TransactionAbortedException(transactionId);
         }
     }
 }
