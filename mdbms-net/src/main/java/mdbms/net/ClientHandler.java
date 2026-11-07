@@ -31,11 +31,24 @@ public class ClientHandler implements Runnable {
             CommandLineInterface cli = new CommandLineInterface(clientSocket);
             String query;
             while ((query = cli.readQuery()) != null) {
-                int txId = concurrencyControl.beginTransaction();
+                String command = query.trim().split("[\\s;]+")[0].toUpperCase();
+                boolean autoCommit = !session.isTransacting();
+                int txId;
                 try {
-                    session.beginTransaction(txId);
+                    txId = autoCommit ? concurrencyControl.beginTransaction() : session.getCurrentTxId();
+                } catch (IllegalStateException e) {
+                    System.err.println("[ERROR] Could not begin transaction: " + e.getMessage());
+                    continue;
+                }
+                try {
                     ExecutionResult result = processor.executeQuery(query, txId);
-                    session.clearTransaction();
+                    if (command.equals("BEGIN")) {
+                        session.beginTransaction(txId);
+                    } else if (command.equals("COMMIT") || command.equals("ABORT")) {
+                        session.clearTransaction();
+                    } else if (autoCommit) {
+                        concurrencyControl.commitTransaction(txId);
+                    }
                     cli.printResult(result);
                 } catch (Exception e) {
                     try {
