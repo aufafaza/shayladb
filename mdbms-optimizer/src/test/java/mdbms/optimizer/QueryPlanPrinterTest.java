@@ -10,6 +10,11 @@ import mdbms.models.query.ParsedQuery;
 import mdbms.models.query.PhysicalAlgorithm;
 import mdbms.models.query.QueryNodeType;
 import mdbms.models.query.QueryTree;
+import mdbms.optimizer.lexer.ShaylaLexer;
+import mdbms.optimizer.lexer.TokenStream;
+import mdbms.optimizer.parser.ExpressionParser;
+import mdbms.optimizer.parser.SelectParser;
+import mdbms.optimizer.parser.StatementParser;
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.*;
