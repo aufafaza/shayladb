@@ -197,8 +197,7 @@ public final class ConcurrencyControlManager implements IConcurrencyControl {
     }
 
     public boolean verifySchedule(List<Operation> manualSchedule) {
-        // TODO
-        return true;
+        return new ScheduleVerifier(manualSchedule).isSerializable();
     }
     
     private AccessStatus request(int txId, DataItem data, boolean write) {
