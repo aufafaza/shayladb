@@ -12,7 +12,9 @@ import mdbms.api.ISchemaCatalog;
 import mdbms.models.query.ExecutionResult;
 import mdbms.models.query.ParsedQuery;
 import mdbms.models.schema.ColumnDefinition;
+import mdbms.processor.exception.QueryExecutionException;
 import mdbms.processor.operator.IQueryOperator;
+import mdbms.processor.operator.IWriteOperator;
 
 public class QueryProcessor implements IQueryProcessor {
     private IQueryOptimizer queryOptimizer;
@@ -60,13 +62,21 @@ public class QueryProcessor implements IQueryProcessor {
                 }
             }
             translatedQuery.close();
+        } catch (QueryExecutionException e) {
+            concurrencyControl.abortTransaction(txId, "Query execution failed");
+            ExecutionResult executionResult = new ExecutionResult(false, null, null, 0, e.getMessage());
+            return executionResult;
         } catch (Exception e) {
             concurrencyControl.abortTransaction(txId, "Query execution failed");
         } finally {
             translatedQuery.close();
         }
-        
-        ExecutionResult executionResult = new ExecutionResult(true, columns, rows, 0, "Query executed");
+
+        int affectedRows = 0;
+        if (translatedQuery instanceof IWriteOperator) {
+            affectedRows = ((IWriteOperator) translatedQuery).getAffectedRows();
+        }
+        ExecutionResult executionResult = new ExecutionResult(true, columns, rows, affectedRows, "Query executed");
         return executionResult;
     }
 
