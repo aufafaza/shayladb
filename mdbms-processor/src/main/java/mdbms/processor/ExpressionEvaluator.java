@@ -1,5 +1,6 @@
 package mdbms.processor;
 
+import java.util.List;
 import mdbms.models.query.ExpressionNode;
 import mdbms.models.query.ExpressionTree;
 
@@ -36,14 +37,6 @@ public class ExpressionEvaluator {
             default:
                 return null;
         }
-    }
-
-    public static boolean matches(List<Condition> conditions, IResultRow row) {
-        if (conditions == null || conditions.isEmpty()) return true;
-        for (Condition condition : conditions) {
-            if (!matches(condition, row)) return false;
-        }
-        return true;
     }
 
     public static boolean matches(
