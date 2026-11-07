@@ -2,6 +2,7 @@ package mdbms.processor;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.function.BiPredicate;
 
 import mdbms.api.IConcurrencyControl;
 import mdbms.api.IDataAccess;
@@ -25,6 +26,8 @@ import mdbms.processor.operator.SortOperator;
 import mdbms.processor.operator.UpdateOperator;
 
 public class PlanTranslator {
+    private final int JOIN_BLOCK_SIZE = 10;
+
     private IDataAccess dataAccess;
     private ISchemaCatalog schemaCatalog;
     private IConcurrencyControl concurrencyControl;
@@ -38,56 +41,56 @@ public class PlanTranslator {
         this.concurrencyControl = concurrencyControl;
     }
 
-    public IQueryOperator translate(ParsedQuery parsedQuery) {
-        return translateRecursive(parsedQuery.getQueryTree());
+    public IQueryOperator translate(ParsedQuery parsedQuery, int txId) {
+        return translateRecursive(parsedQuery.getQueryTree(), txId);
     }
 
-    private IQueryOperator translateRecursive(QueryTree queryTree) {
+    private IQueryOperator translateRecursive(QueryTree queryTree, int txId) {
         List<IQueryOperator> childOperators = new ArrayList<>();
         for (QueryTree childQuery : queryTree.getChildren()) {
-            childOperators.add(translateRecursive(childQuery));
+            childOperators.add(translateRecursive(childQuery, txId));
         }
 
-        
         switch (queryTree.getNodeType()) {
             case TABLE_SCAN:
                 switch (queryTree.getAlgorithm()) {
                     case LINEAR_SCAN:
-                        return new SequentialScanOperator(dataAccess, schemaCatalog, queryTree.getValue());
+                        return new SequentialScanOperator(dataAccess, schemaCatalog, queryTree.getTableName());
                     case INDEX_SCAN:
-                        // return new IndexScanOperator(dataAccess, schemaCatalog, queryTree.getValue(),
+                        // return new IndexScanOperator(dataAccess, schemaCatalog,
+                        // queryTree.getTableName(),
                         // indexName);
                         return null;
                     default:
                         throw new RuntimeException("Invalid algorithm for table scan: " + queryTree.getAlgorithm());
                 }
             case PROJECT:
-                List<String> projectedColumns = new ArrayList<>(List.of(queryTree.getValue().split(" ")));
-                return new ProjectOperator(childOperators.get(0), projectedColumns);
+                return new ProjectOperator(childOperators.get(0), queryTree.getProjectionColumns());
             case SELECT:
                 return new SelectOperator(childOperators.get(0), queryTree.getConditions());
             case LIMIT:
-                return new LimitOperator(childOperators.get(0), Long.parseLong(queryTree.getValue()));
+                return new LimitOperator(childOperators.get(0), queryTree.getLimit());
             case CARTESIAN:
                 return new CartesianJoinOperator(childOperators.get(0), childOperators.get(1));
             case JOIN:
-                // return new JoinOperator(childOperators.get(0), childOperators.get(1));
-                return null;
+                return new JoinOperator(childOperators.get(0), childOperators.get(1), (row1, row2) -> {
+                    return queryTree.getConditions().stream()
+                            .map(condition -> (Boolean) ExpressionEvaluator.evaluate(condition, row1, row2))
+                            .reduce(true, (a, b) -> a && b);
+                }, queryTree.isNaturalJoin(), JOIN_BLOCK_SIZE);
             case SORT:
-                return new SortOperator(childOperators.get(0), queryTree.getValue(), false);
+                return new SortOperator(childOperators.get(0), queryTree.getOrderByClauses());
             case GROUP_BY:
                 // return new GroupByOperator(childOperators.get(0), queryTree.getValue(),
                 // false);
                 return null;
             case INSERT:
-                return new InsertOperator(dataAccess, concurrencyControl, 0, null);
+                return new InsertOperator(dataAccess, concurrencyControl, txId, queryTree.getInsertValues());
             case UPDATE:
                 return new UpdateOperator(childOperators.get(0), dataAccess, schemaCatalog, concurrencyControl,
-                        0, null, null, null);
+                        txId, queryTree.getTableName(), queryTree.getUpdateColumn(), queryTree.getUpdateExpression());
             case DELETE:
-                // return new DeleteOperator(dataAccess, schemaCatalog, queryTree.getValue(),
-                // queryTree.getConditions());
-                return null;
+                return new DeleteOperator(dataAccess, schemaCatalog, queryTree.tableName(), queryTree.getConditions());
             default:
                 return emptyOperator();
         }
@@ -95,9 +98,15 @@ public class PlanTranslator {
 
     private static IQueryOperator emptyOperator() {
         return new IQueryOperator() {
-            public void open() {}
-            public IResultRow next() { return null; }
-            public void close() {}
-        }
+            public void open() {
+            }
+
+            public IResultRow next() {
+                return null;
+            }
+
+            public void close() {
+            }
+        };
     }
 }

@@ -12,4 +12,8 @@ public class ExpressionEvaluator {
     public static Object evaluate(ExpressionTree expressionTree, IResultRow row) {
         return null;
     }
+
+    public static Object evaluate(ExpressionTree expressionTree, IResultRow row1, IResultRow row2) {
+        return null;
+    }
 }
