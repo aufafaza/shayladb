@@ -43,5 +43,4 @@ public class LockBasedProtocol implements ConcurrencyProtocol {
         if (victim == tx) return AccessStatus.ABORTED;
         return result;
     }
-    
 }
