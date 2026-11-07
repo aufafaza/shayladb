@@ -16,6 +16,8 @@ public interface IConcurrencyControl {
 
     AccessStatus requestRead(int txId, DataItem data);
 
+    AccessStatus requestWrite(int txId, DataItem data, Object oldVal, Object newVal);
+
     AccessStatus requestWrite(int txId, DataItem data);
 
     Transaction getTransaction(int txId);

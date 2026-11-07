@@ -1,23 +1,76 @@
 package mdbms.concurrency;
 
-import mdbms.models.transaction.AccessStatus;
+import java.util.Objects;
+import java.util.function.Consumer;
 
-public class LockBasedProtocol {
-    private LockManager lockManager;
-    private DeadlockHandler deadlockHandler;
+import mdbms.models.data.DataItem;
+import mdbms.models.transaction.AccessStatus;
+import mdbms.models.transaction.Transaction;
+import mdbms.models.transaction.TransactionState;
+
+public class LockBasedProtocol implements ConcurrencyProtocol {
+    private final LockManager lockManager;
+    private final DeadlockHandler deadlockHandler;
+    private Consumer<Transaction> abortHandler;
+
+    public LockBasedProtocol() {
+        this(new LockManager());
+    }
+
+    public LockBasedProtocol(LockManager lockManager) {
+        if (lockManager == null) throw new IllegalArgumentException("Lock manager is required");
+        this.lockManager = lockManager;
+        this.deadlockHandler = new DeadlockHandler(lockManager);
+    }
+
+    void setAbortHandler(Consumer<Transaction> abortHandler) {
+        this.abortHandler = Objects.requireNonNull(abortHandler, "Abort handler is required");
+    }
     
-    AccessStatus requestRead() {
-        // TODO
-        return AccessStatus.GRANTED;
+    @Override 
+    public AccessStatus requestRead(Transaction tx, DataItem data) {
+        return handleResult(tx, lockManager.acquireLock(tx, data, Locktype.SHARED));
     } 
     
-    AccessStatus requestWrite() {
-        // TODO
-        return AccessStatus.GRANTED;
+    @Override 
+    public AccessStatus requestWrite(Transaction tx, DataItem data) {
+        return handleResult(tx, lockManager.acquireLock(tx, data, Locktype.EXCLUSIVE));
     }
 
-    void releaseResources() {
-        // TODO
+    @Override
+    public AccessStatus requestWrite(int txId, DataItem data, Object oldVal, Object newVal) {
+        // TODO [DELETE COMMMENT KALO UDH]
+        return AccessStatus.WAITING;
     }
-    
+
+    @Override 
+    public void releaseResources(Transaction tx) {
+        lockManager.releaseAllLocks(tx);
+    }
+
+    private AccessStatus handleResult(Transaction tx, AccessStatus result) {
+        if (result != AccessStatus.WAITING || !deadlockHandler.detectDeadlock()) {
+            return result;
+        }
+        Transaction victim = deadlockHandler.chooseVictim();
+        if (victim == null) return result;
+        abortVictim(victim);
+        if (victim == tx || tx.getState() != TransactionState.ACTIVE) return AccessStatus.ABORTED;
+        return result;
+    }
+
+    private void abortVictim(Transaction victim) {
+        if (abortHandler != null) {
+            abortHandler.accept(victim);
+            return;
+        }
+
+        if (victim.getState() == TransactionState.ACTIVE) {
+            victim.setState(TransactionState.FAILED);
+            lockManager.releaseAllLocks(victim);
+            victim.setState(TransactionState.ABORTED);
+        } else {
+            lockManager.releaseAllLocks(victim);
+        }
+    }
 }

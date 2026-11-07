@@ -11,6 +11,7 @@ import mdbms.api.IConcurrencyControl;
 import mdbms.api.IFailureRecoveryManager;
 import mdbms.models.data.DataItem;
 import mdbms.models.log.LogType;
+import mdbms.models.log.RecoveryResult;
 import mdbms.models.transaction.AccessStatus;
 import mdbms.models.transaction.Operation;
 import mdbms.models.transaction.Transaction;
@@ -24,11 +25,14 @@ public final class ConcurrencyControlManager implements IConcurrencyControl {
     private final AtomicInteger transactionCounter = new AtomicInteger();
     private final Map<Integer, Transaction> activeTransactions = new ConcurrentHashMap<>();
     private final IFailureRecoveryManager frm;
+    private final Object lifecycleMonitor = new Object();
     private volatile ConcurrencyProtocol protocol;
     private volatile boolean isRecovered = true;
+    private boolean acceptingTransactions = true;
 
+    /** Uses timestamp ordering when no startup configuration is supplied. */
     public ConcurrencyControlManager() {
-        this(GrantAllProtocol.INSTANCE, null);
+        this(new TimestampsBasedProtocol(), null);
     }
 
     public ConcurrencyControlManager(ConcurrencyProtocol protocol) {
@@ -42,19 +46,95 @@ public final class ConcurrencyControlManager implements IConcurrencyControl {
     public ConcurrencyControlManager(ConcurrencyProtocol protocol, IFailureRecoveryManager frm) {
         this.protocol = Objects.requireNonNull(protocol, "protocol");
         this.frm = frm;
+        configureProtocol(protocol);
     }
 
     public void setProtocol(ConcurrencyProtocol protocol) {
-        this.protocol = Objects.requireNonNull(protocol, "protocol");
+        Objects.requireNonNull(protocol, "protocol");
+        synchronized (lifecycleMonitor) {
+            if (!activeTransactions.isEmpty()) {
+                throw new IllegalStateException("Cannot change protocol while transactions are active");
+            }
+            this.protocol = protocol;
+            configureProtocol(protocol);
+        }
+    }
+
+    /** Returns the strategy currently used by the CCM facade. */
+    public ConcurrencyProtocol getProtocol() { return protocol; }
+
+    /** Returns a stable display name for startup diagnostics and monitoring. */
+    public String getActiveProtocolName() { return protocol.getClass().getSimpleName(); }
+
+    /** Prevents new transactions from starting; existing transactions may finish. */
+    public void pauseTransactions() {
+        synchronized (lifecycleMonitor) {
+            acceptingTransactions = false;
+        }
+    }
+
+    /** Allows new transactions after a checkpoint or maintenance operation. */
+    public void resumeTransactions() {
+        synchronized (lifecycleMonitor) {
+            acceptingTransactions = true;
+            lifecycleMonitor.notifyAll();
+        }
+    }
+
+    /** Blocks until all transactions have completed while the barrier is active. */
+    public void awaitNoActiveTransactions() throws InterruptedException {
+        synchronized (lifecycleMonitor) {
+            while (!activeTransactions.isEmpty()) lifecycleMonitor.wait();
+        }
+    }
+
+    public int getActiveTransactionCount() { return activeTransactions.size(); }
+
+    public boolean isAcceptingTransactions() {
+        synchronized (lifecycleMonitor) {
+            return acceptingTransactions;
+        }
+    }
+
+    /**
+     * Completes crash recovery before accepting new transactions. Recovery is
+     * deliberately explicit so the composition root can initialize FRM once.
+     */
+    public void initAfterRecovery() {
+        synchronized (lifecycleMonitor) {
+            isRecovered = false;
+        }
+        if (frm == null) {
+            synchronized (lifecycleMonitor) {
+                isRecovered = true;
+            }
+            return;
+        }
+        RecoveryResult result = frm.recoverOnStartup();
+        if (result == null || !result.isSuccess()) {
+            throw new IllegalStateException("Failure recovery did not complete");
+        }
+        transactionCounter.updateAndGet(current -> Math.max(current, result.getMaxTxId() + 1));
+        synchronized (lifecycleMonitor) {
+            isRecovered = true;
+            lifecycleMonitor.notifyAll();
+        }
+    }
+
+    public boolean isRecovered() {
+        return isRecovered;
     }
 
     @Override
     public int beginTransaction() {
-        if (!isRecovered) throw new IllegalStateException("Recovery has not completed");
-        int id = transactionCounter.getAndIncrement();
-        Transaction tx = new Transaction(id, System.currentTimeMillis());
-        activeTransactions.put(id, tx);
-        return id;
+        synchronized (lifecycleMonitor) {
+            if (!isRecovered) throw new IllegalStateException("Recovery has not completed");
+            if (!acceptingTransactions) throw new IllegalStateException("Transaction admission is paused");
+            int id = transactionCounter.getAndIncrement();
+            Transaction tx = new Transaction(id, System.currentTimeMillis());
+            activeTransactions.put(id, tx);
+            return id;
+        }
     }
 
     @Override
@@ -63,14 +143,23 @@ public final class ConcurrencyControlManager implements IConcurrencyControl {
         synchronized (tx) {
             requireState(tx, TransactionState.ACTIVE);
             tx.setState(TransactionState.PARTIALLY_COMMITTED);
-            boolean logged = frm == null || frm.writeTransactionLog(txId, LogType.COMMIT).isSuccess();
+            boolean logged;
+            try {
+                logged = persistCommitLog(txId);
+            } catch (RuntimeException failure) {
+                failAndAbort(tx, "Unable to persist commit log");
+                throw failure;
+            }
             if (!logged) {
                 failAndAbort(tx, "Unable to persist commit log");
                 return;
             }
-            tx.setState(TransactionState.COMMITTED);
             protocol.releaseResources(tx);
-            activeTransactions.remove(txId, tx);
+            tx.setState(TransactionState.COMMITTED);
+            synchronized (lifecycleMonitor) {
+                activeTransactions.remove(txId, tx);
+                lifecycleMonitor.notifyAll();
+            }
         }
     }
 
@@ -78,6 +167,7 @@ public final class ConcurrencyControlManager implements IConcurrencyControl {
     public void abortTransaction(int txId, String reason) {
         Transaction tx = requireTransaction(txId);
         synchronized (tx) {
+            if (frm != null) frm.writeTransactionLog(txId, LogType.ABORT);
             if (tx.getState() == TransactionState.COMMITTED || tx.getState() == TransactionState.ABORTED) {
                 return;
             }
@@ -91,6 +181,7 @@ public final class ConcurrencyControlManager implements IConcurrencyControl {
         return request(txId, data, false);
     }
 
+    @Override
     public AccessStatus requestWrite(int txId, DataItem data, Object oldVal, Object newVal) {
         return request(txId, data, true);
     }
@@ -108,29 +199,67 @@ public final class ConcurrencyControlManager implements IConcurrencyControl {
     }
 
     public boolean verifySchedule(List<Operation> manualSchedule) {
-        // TODO
-        return true;
+        return new ScheduleVerifier(manualSchedule).isSerializable();
     }
     
     private AccessStatus request(int txId, DataItem data, boolean write) {
         Objects.requireNonNull(data, "data");
         Transaction tx = activeTransactions.get(txId);
         if (tx == null || tx.getState() != TransactionState.ACTIVE) return AccessStatus.ABORTED;
-        AccessStatus result = write ? protocol.requestWrite(tx, data) : protocol.requestRead(tx, data);
-        if (result == AccessStatus.ABORTED) {
-            synchronized (tx) {
+        AccessStatus result;
+        synchronized (tx) {
+            if (tx.getState() != TransactionState.ACTIVE) return AccessStatus.ABORTED;
+            try {
+                result = write ? protocol.requestWrite(tx, data) : protocol.requestRead(tx, data);
+            } catch (RuntimeException failure) {
+                failAndAbort(tx, "Protocol access failed");
+                throw failure;
+            }
+            if (result == null) {
+                failAndAbort(tx, "Protocol returned no access decision");
+                return AccessStatus.ABORTED;
+            }
+            if (result == AccessStatus.ABORTED) {
                 if (tx.getState() == TransactionState.ACTIVE) failAndAbort(tx, "Protocol aborted access");
             }
         }
         return result;
     }
 
+    private boolean persistCommitLog(int txId) {
+        if (frm == null) return true;
+        RecoveryResult result = frm.writeTransactionLog(txId, LogType.COMMIT);
+        return result != null && result.isSuccess() && frm.flushLogUpTo(result.getLsn());
+    }
+
     private void failAndAbort(Transaction tx, String reason) {
-        if (tx.getState() != TransactionState.FAILED) tx.setState(TransactionState.FAILED);
-        if (frm != null) frm.rollbackTransaction(tx.getId());
-        protocol.releaseResources(tx);
-        tx.setState(TransactionState.ABORTED);
-        activeTransactions.remove(tx.getId(), tx);
+        synchronized (tx) {
+            if (tx.getState() != TransactionState.FAILED) tx.setState(TransactionState.FAILED);
+            if (frm != null) {
+                RecoveryResult rollback = frm.rollbackTransaction(tx.getId());
+                if (rollback == null || !rollback.isSuccess()) {
+                    throw new IllegalStateException("Rollback failed for transaction " + tx.getId());
+                }
+            }
+            protocol.releaseResources(tx);
+            tx.setState(TransactionState.ABORTED);
+            activeTransactions.remove(tx.getId(), tx);
+            synchronized (lifecycleMonitor) {
+                lifecycleMonitor.notifyAll();
+            }
+        }
+    }
+
+    private void abortFromProtocol(Transaction tx) {
+        if (activeTransactions.containsKey(tx.getId())) {
+            failAndAbort(tx, "Deadlock victim");
+        }
+    }
+
+    private void configureProtocol(ConcurrencyProtocol protocol) {
+        if (protocol instanceof LockBasedProtocol lockBasedProtocol) {
+            lockBasedProtocol.setAbortHandler(this::abortFromProtocol);
+        }
     }
 
     private Transaction requireTransaction(int txId) {
@@ -146,10 +275,4 @@ public final class ConcurrencyControlManager implements IConcurrencyControl {
         }
     }
 
-    private enum GrantAllProtocol implements ConcurrencyProtocol {
-        INSTANCE;
-        public AccessStatus requestRead(Transaction tx, DataItem data) { return AccessStatus.GRANTED; }
-        public AccessStatus requestWrite(Transaction tx, DataItem data) { return AccessStatus.GRANTED; }
-        public void releaseResources(Transaction tx) { }
-    }
 }
