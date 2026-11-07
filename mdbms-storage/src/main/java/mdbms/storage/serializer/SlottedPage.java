@@ -115,11 +115,9 @@ public final class SlottedPage {
 
     public void releaseReservation(int slot){
         checkSlot(slot);
-
         if (records.get(slot) != null || reservations.get(slot) == 0){
-            throw new IllegalStateException("Slot is not reserved");
+            throw new StorageException(StorageErrorCode.SLOT_UNAVAILABLE, "Slot is not reserved");
         }
-
         reservations.set(slot, 0);
     }
 
