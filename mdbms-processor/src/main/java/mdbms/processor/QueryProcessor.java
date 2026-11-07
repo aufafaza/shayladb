@@ -60,14 +60,15 @@ public class QueryProcessor implements IQueryProcessor {
                     String tableName = tableSchema.getColumnTableOrigin(definition);
                     row.add(resultRow.get(tableName, definition.name()));
                 }
+                rows.add(row);
             }
-            translatedQuery.close();
         } catch (QueryExecutionException e) {
             concurrencyControl.abortTransaction(txId, "Query execution failed");
             ExecutionResult executionResult = new ExecutionResult(false, null, null, 0, e.getMessage());
             return executionResult;
         } catch (Exception e) {
             concurrencyControl.abortTransaction(txId, "Query execution failed");
+            return new ExecutionResult(false, columns, rows, 0, e.getMessage());
         } finally {
             translatedQuery.close();
         }
