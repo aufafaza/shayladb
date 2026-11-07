@@ -8,6 +8,8 @@ import java.util.List;
 import mdbms.models.schema.ColumnDefinition;
 import mdbms.models.schema.DataType;
 import mdbms.models.schema.TableSchema;
+import mdbms.storage.exception.StorageErrorCode;
+import mdbms.storage.exception.StorageException;
 import org.junit.jupiter.api.Test;
 
 class BinaryRecordSerializerTest {
@@ -33,15 +35,19 @@ class BinaryRecordSerializerTest {
     // memastikan bentuk data salah dan record rusak ditolak
     @Test
     void rejectsWrongShapeAndCorruptRecord() {
-        assertThrows(IllegalArgumentException.class, () -> serializer.serialize(List.of(1), schema));
+        assertEquals(StorageErrorCode.SCHEMA_VIOLATION,
+                assertThrows(StorageException.class,
+                        () -> serializer.serialize(List.of(1), schema)).getCode());
         List<Object> bad = new ArrayList<>(Arrays.asList(null, null, "x", "a"));
-        assertThrows(IllegalArgumentException.class, () -> serializer.serialize(bad, schema));
+        assertThrows(StorageException.class, () -> serializer.serialize(bad, schema));
         byte[] valid = serializer.serialize(Arrays.asList(1, null, "x", "a"), schema);
         byte[] truncated = Arrays.copyOf(valid, valid.length - 1);
-        assertThrows(IllegalArgumentException.class, () -> serializer.deserialize(truncated, schema));
+        assertEquals(StorageErrorCode.INVALID_BLOCK,
+                assertThrows(StorageException.class,
+                        () -> serializer.deserialize(truncated, schema)).getCode());
         byte[] trailing = Arrays.copyOf(valid, valid.length + 1);
-        assertThrows(IllegalArgumentException.class, () -> serializer.deserialize(trailing, schema));
+        assertThrows(StorageException.class, () -> serializer.deserialize(trailing, schema));
         valid[0] = 2;
-        assertThrows(IllegalArgumentException.class, () -> serializer.deserialize(valid, schema));
+        assertThrows(StorageException.class, () -> serializer.deserialize(valid, schema));
     }
 }
