@@ -7,6 +7,8 @@ import java.nio.file.StandardCopyOption;
 import java.util.*;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 import mdbms.models.schema.*;
+import mdbms.storage.exception.StorageErrorCode;
+import mdbms.storage.exception.StorageException;
 
 public final class CatalogManager {
     private static final int MAGIC = 0x534D4334; //SMC4
@@ -20,7 +22,7 @@ public final class CatalogManager {
         return n;
     }
     public CatalogManager(String dataDirectory){
-        Objects.requireNonNull(dataDirectory, "dataDirectory");
+        if(dataDirectory == null || dataDirectory.isBlank()) throw new StorageException(StorageErrorCode.IO_FAILURE, "Catalog data directory must not be blank or null");
         catalogFile = Path.of(dataDirectory).resolve("catalog.bin");
         load();
     }
@@ -65,7 +67,7 @@ public final class CatalogManager {
             }
             schemas.clear(); schemas.putAll(newSchemas);
             indexes.clear(); indexes.putAll(newIndexes);
-        }catch(IOException | IllegalArgumentException e) {throw new IllegalStateException("Cannot load catalog "+catalogFile,e);}
+        }catch(IOException | StorageException e) {throw new StorageException(StorageErrorCode.IO_FAILURE, "Cannot load catalog "+catalogFile,e);} //check again
         finally {lock.writeLock().unlock();}
     }
     public void persist(){
@@ -116,7 +118,7 @@ public final class CatalogManager {
                 Files.move(temp,catalogFile,StandardCopyOption.REPLACE_EXISTING);
             }
         }catch(IOException e){
-            throw new IllegalStateException("Cannot persist catalog " + catalogFile, e);
+            throw new StorageException(StorageErrorCode.IO_FAILURE, "Cannot persist catalog " + catalogFile, e);
         }
         finally{
             if(temp != null){
@@ -146,7 +148,7 @@ public final class CatalogManager {
         lock.readLock().lock();
         try{
             TableSchema schema = schemas.get(table);
-            if(schema == null) throw new IllegalArgumentException("Unknown table:" + table);
+            if(schema == null) throw new StorageException(StorageErrorCode.TABLE_NOT_FOUND, "Unknown table or table does not exist:" + table);
             return schema;
         }finally{
             lock.readLock().unlock();
@@ -171,7 +173,7 @@ public final class CatalogManager {
         lock.writeLock().lock();
         try{
             TableSchema old = schemas.remove(table);
-            if(old == null) throw new IllegalArgumentException("Unknown table: " + table);
+            if(old == null) throw new StorageException(StorageErrorCode.TABLE_NOT_FOUND, "Unknown table or table does not exist: " + table);
             Map<String, IndexInfo> backup = new LinkedHashMap<>(indexes);
             indexes.values().removeIf(i -> i.tableName().equals(table));
             try{
@@ -187,15 +189,15 @@ public final class CatalogManager {
         }
     }
     public void registerIndex(IndexInfo info){
-        Objects.requireNonNull(info);
+        if(info == null) throw new StorageException(StorageErrorCode.SCHEMA_VIOLATION, "Index metadata must not be null");
         lock.writeLock().lock();
         try{
             TableSchema schema = getSchema(info.tableName());
             if(schema.columns().stream().noneMatch(c -> c.name().equals(info.columnName()))){
-                throw new IllegalArgumentException("Unknown index column: " + info.columnName());
+                throw new StorageException(StorageErrorCode.COLUMN_NOT_FOUND, "Unknown index column or index column does not exist: " + info.columnName());
             }
             if(indexes.containsKey(info.indexName())){
-                throw new IllegalArgumentException("Duplicate index: " + info.indexName());
+                throw new StorageException(StorageErrorCode.INDEX_ALREADY_EXISTS, "Index already exists: " + info.indexName());
             }
             indexes.put(info.indexName(), info);
             try{
@@ -212,7 +214,7 @@ public final class CatalogManager {
         lock.writeLock().lock();
         try{
             IndexInfo old = indexes.remove(name);
-            if(old == null) throw new IllegalArgumentException("Unknown index: " + name);
+            if(old == null) throw new StorageException(StorageErrorCode.INDEX_NOT_FOUND, "Unknown index or index does not exist: " + name);
             try{
                 persist();
             }catch(RuntimeException e){
@@ -241,25 +243,25 @@ public final class CatalogManager {
         }
     }
     private void validate(TableSchema schema){
-        Objects.requireNonNull(schema, "schema");
+        if(schema == null) throw new StorageException(StorageErrorCode.SCHEMA_VIOLATION, "Table schema must not be null");
         if(schema.tableName() == null || schema.tableName().isBlank() || schema.columns() == null || schema.columns().isEmpty() || schema.primaryKey() == null || schema.foreignKeys() == null){
-            throw new IllegalArgumentException("Incompatible table schema");
+            throw new StorageException(StorageErrorCode.SCHEMA_VIOLATION, "Table schema is incomplete or invalid");
         }
         Set<String> names = new HashSet<>();
         for(ColumnDefinition c: schema.columns()){
             if( c == null ||c.name() == null || c.name().isBlank() || !names.add(c.name()) || c.type() == null){
-                throw new IllegalArgumentException("Duplicate or invalid column name");
+                throw new StorageException(StorageErrorCode.SCHEMA_VIOLATION, "Table schema contains a duplicate or invalid column name");
             }
             if((c.type() == DataType.VARCHAR || c.type() == DataType.CHAR) && c.length() <= 0){
-                throw new IllegalArgumentException("Text column needs to have positive length: " + c.name());
+                throw new StorageException(StorageErrorCode.SCHEMA_VIOLATION, "Text column needs to have positive length: " + c.name());
             } 
         }
         if(new HashSet<>(schema.primaryKey()).size() != schema.primaryKey().size() || !names.containsAll(schema.primaryKey())){
-            throw new IllegalArgumentException("Invalid primary key");
+            throw new StorageException(StorageErrorCode.SCHEMA_VIOLATION, "Primary key references are missing or have duplicate columns");
         }
         for(ForeignKeyConstraint fk: schema.foreignKeys()){
             if(fk == null || !names.contains(fk.column()) || fk.referencedTable() == null || fk.referencedColumn() == null || fk.onDelete() == null || fk.onUpdate() == null){
-                throw new IllegalArgumentException("Invalid foreign key");
+                throw new StorageException(StorageErrorCode.SCHEMA_VIOLATION, "Foreign key definition is incomplete or invalid");
             }
         }
     }
