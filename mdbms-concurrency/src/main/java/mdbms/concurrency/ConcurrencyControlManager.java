@@ -22,7 +22,7 @@ import mdbms.models.TransactionState;
  * delegates access decisions to the selected protocol strategy.
  */
 public final class ConcurrencyControlManager implements IConcurrencyControl {
-    private final AtomicInteger transactionCounter = new AtomicInteger();
+    private final AtomicInteger transactionCounter = new AtomicInteger(1);
     private final Map<Integer, Transaction> activeTransactions = new ConcurrentHashMap<>();
     private final IFailureRecoveryManager frm;
     private final Object lifecycleMonitor = new Object();
@@ -132,8 +132,13 @@ public final class ConcurrencyControlManager implements IConcurrencyControl {
             if (!acceptingTransactions) throw new IllegalStateException("Transaction admission is paused");
             int id = transactionCounter.getAndIncrement();
             Transaction tx = new Transaction(id, System.currentTimeMillis());
+            if (frm != null) {
+                RecoveryResult result = frm.writeTransactionLog(id, LogType.BEGIN);
+                if (result == null || !result.isSuccess()) {
+                    throw new IllegalStateException("Unable to persist begin log for transaction " + id);
+                }
+            }
             activeTransactions.put(id, tx);
-            frm.writeTransactionLog(id, LogType.BEGIN);
             return id;
         }
     }
@@ -153,7 +158,7 @@ public final class ConcurrencyControlManager implements IConcurrencyControl {
             }
             if (!logged) {
                 failAndAbort(tx, "Unable to persist commit log");
-                return;
+                throw new IllegalStateException("Unable to persist commit log for transaction " + txId);
             }
             protocol.releaseResources(tx);
             tx.setState(TransactionState.COMMITTED);
