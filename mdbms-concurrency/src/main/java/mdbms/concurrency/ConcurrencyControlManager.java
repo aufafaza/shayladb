@@ -178,6 +178,7 @@ public final class ConcurrencyControlManager implements IConcurrencyControl {
         return request(txId, data, false);
     }
 
+    @Override
     public AccessStatus requestWrite(int txId, DataItem data, Object oldVal, Object newVal) {
         return request(txId, data, true);
     }

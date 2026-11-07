@@ -16,6 +16,13 @@ public interface IConcurrencyControl {
 
     AccessStatus requestRead(int txId, DataItem data);
 
+    /**
+     * Requests write access while carrying the values associated with the
+     * change. The CCM owns the access decision; consumers such as recovery
+     * can use the value parameters for write-ahead logging.
+     */
+    AccessStatus requestWrite(int txId, DataItem data, Object oldVal, Object newVal);
+
     AccessStatus requestWrite(int txId, DataItem data);
 
     Transaction getTransaction(int txId);
