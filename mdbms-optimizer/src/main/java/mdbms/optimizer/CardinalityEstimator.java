@@ -1,6 +1,6 @@
 package mdbms.optimizer;
 
-import mdbms.models.ExpressionTree;
+import mdbms.models.query.ExpressionTree;
 
 public class CardinalityEstimator {
     public PlanEstimate estimateSelection(PlanEstimate input, ExpressionTree predicate) {

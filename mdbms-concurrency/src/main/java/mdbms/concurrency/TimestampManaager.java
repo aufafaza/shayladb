@@ -1,6 +1,6 @@
 package mdbms.concurrency;
 
-import mdbms.models.DataItem;
+import mdbms.models.data.DataItem;
 
 import java.util.Map;
 

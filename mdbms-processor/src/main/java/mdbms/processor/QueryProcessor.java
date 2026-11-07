@@ -9,9 +9,9 @@ import mdbms.api.IFailureRecoveryManager;
 import mdbms.api.IQueryOptimizer;
 import mdbms.api.IQueryProcessor;
 import mdbms.api.ISchemaCatalog;
-import mdbms.models.ColumnDefinition;
-import mdbms.models.ExecutionResult;
-import mdbms.models.ParsedQuery;
+import mdbms.models.query.ExecutionResult;
+import mdbms.models.query.ParsedQuery;
+import mdbms.models.schema.ColumnDefinition;
 import mdbms.processor.operator.IQueryOperator;
 
 public class QueryProcessor implements IQueryProcessor {

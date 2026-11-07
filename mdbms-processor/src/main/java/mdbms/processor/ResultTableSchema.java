@@ -6,7 +6,8 @@ import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
-import mdbms.models.ColumnDefinition;
+import mdbms.models.schema.ColumnDefinition;
+import mdbms.models.schema.TableSchema;
 
 public class ResultTableSchema {
     private final String tableName;
@@ -19,6 +20,13 @@ public class ResultTableSchema {
 
     public ResultTableSchema(String tableName) {
         this.tableName = Objects.requireNonNull(tableName, "tableName");
+    }
+
+    public ResultTableSchema(TableSchema tableSchema) {
+        this.tableName = tableSchema.tableName();
+        for (ColumnDefinition columnDefinition : tableSchema.columns()) {
+            addColumn(columnDefinition);
+        }
     }
 
     public List<ColumnDefinition> getColumns() {
@@ -58,6 +66,18 @@ public class ResultTableSchema {
                 if (name.equals(columns.get(j).name())) {
                     return true;
                 }
+            }
+        }
+        return false;
+    }
+
+    public boolean isColumnAmbiguous(String columnName) {
+        boolean hasColumn = false;
+        for (int i = 0; i < columns.size(); i++) {
+            String name = columns.get(i).name();
+            if (name.equals(columnName)) {
+                if (!hasColumn) hasColumn = true;
+                else return true;
             }
         }
         return false;

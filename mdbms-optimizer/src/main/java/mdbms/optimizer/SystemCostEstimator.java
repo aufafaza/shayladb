@@ -1,8 +1,8 @@
 package mdbms.optimizer;
 
 import mdbms.api.IStatisticsProvider;
-import mdbms.models.PhysicalAlgorithm;
-import mdbms.models.QueryTree;
+import mdbms.models.query.PhysicalAlgorithm;
+import mdbms.models.query.QueryTree;
 
 public class SystemCostEstimator implements ICostEstimator {
     private final IStatisticsProvider statisticsProvider;
