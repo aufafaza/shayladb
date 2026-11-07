@@ -17,6 +17,10 @@ public interface IDataAccess{
 
     Row fetchByRowId(RowId rowId);
 
+    RowId reserveRowId(String table, List<Object> values);
+
+    void releaseRowId(RowId rowId);
+
     void insertAt(RowId rowId, List<Object> values);
 
     Row updateByRowId(RowId rowId, List<Object> values);
