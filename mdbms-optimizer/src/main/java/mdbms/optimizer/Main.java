@@ -8,18 +8,23 @@ import java.util.Map;
 import java.util.Scanner;
 
 import mdbms.api.ISchemaCatalog;
+import mdbms.api.IStatisticsProvider;
 import mdbms.models.query.ColumnReference;
 import mdbms.models.query.ExpressionTree;
 import mdbms.models.query.QueryTree;
 import mdbms.models.schema.ColumnDefinition;
 import mdbms.models.schema.DataType;
 import mdbms.models.schema.IndexInfo;
+import mdbms.models.schema.Statistic;
 import mdbms.models.schema.TableSchema;
 import mdbms.optimizer.binder.BindingContext;
 import mdbms.optimizer.binder.ColumnBinding;
 import mdbms.optimizer.binder.QueryBinder;
 import mdbms.optimizer.binder.QueryValidator;
 import mdbms.optimizer.binder.TableBinding;
+import mdbms.optimizer.cost.CardinalityEstimator;
+import mdbms.optimizer.cost.PlanEstimate;
+import mdbms.optimizer.cost.SystemCostEstimator;
 import mdbms.optimizer.exception.QueryErrorCollector;
 import mdbms.optimizer.exception.QueryProcessingException;
 import mdbms.optimizer.lexer.ShaylaLexer;
@@ -39,7 +44,7 @@ public class Main {
 
         try (Scanner scanner = new Scanner(System.in)) {
             System.out.println("====================================================");
-            System.out.println("   ShaylaDB Lexer, Parser & Binder CLI Stub");
+            System.out.println("   ShaylaDB Lexer, Parser, Binder & Cost CLI Stub");
             System.out.println("====================================================");
             printCatalogSummary();
 
@@ -48,8 +53,9 @@ public class Main {
                 System.out.println("  [1] Lexer   (Output Tokens)");
                 System.out.println("  [2] Parser  (Output Unbound QueryTree & ExpressionTree)");
                 System.out.println("  [3] Binder  (Parse + Bind + Validate: Output Bound QueryTree & Binding Tables)");
-                System.out.println("  [4] All     (Lexer + Parser + Binder & Validator)");
-                System.out.println("  [5] Tables  (View or Add Table Schema Stubs)");
+                System.out.println("  [4] Cost    (Parse + Bind + Estimate Cardinality & I/O Cost)");
+                System.out.println("  [5] All     (Lexer + Parser + Binder & Validator + Cost Estimator)");
+                System.out.println("  [6] Tables  (View or Add Table Schema & Statistics Stubs)");
                 System.out.println("  [0] Exit");
                 System.out.print("Choice: ");
 
@@ -61,17 +67,19 @@ public class Main {
                     System.out.println("Exiting.");
                     break;
                 }
-                if (choice.equals("5") || choice.equalsIgnoreCase("tables")) {
+                if (choice.equals("6") || choice.equalsIgnoreCase("tables")) {
                     handleTableMenu(scanner);
                     continue;
                 }
-                if (!choice.equals("1") && !choice.equals("2") && !choice.equals("3") && !choice.equals("4")
+                if (!choice.equals("1") && !choice.equals("2") && !choice.equals("3")
+                    && !choice.equals("4") && !choice.equals("5")
                     && !choice.equalsIgnoreCase("lexer")
                     && !choice.equalsIgnoreCase("parser")
                     && !choice.equalsIgnoreCase("binder")
+                    && !choice.equalsIgnoreCase("cost")
                     && !choice.equalsIgnoreCase("all")
                     && !choice.equalsIgnoreCase("both")) {
-                    System.out.println("Invalid choice. Please enter 1, 2, 3, 4, 5, or 0.");
+                    System.out.println("Invalid choice. Please enter 1, 2, 3, 4, 5, 6, or 0.");
                     continue;
                 }
 
@@ -87,11 +95,13 @@ public class Main {
 
     public static void execute(String mode, String sql) {
         boolean runLexer = mode.equals("1") || mode.equalsIgnoreCase("lexer")
-            || mode.equals("4") || mode.equalsIgnoreCase("all") || mode.equalsIgnoreCase("both");
+            || mode.equals("5") || mode.equalsIgnoreCase("all") || mode.equalsIgnoreCase("both");
         boolean runParser = mode.equals("2") || mode.equalsIgnoreCase("parser")
-            || mode.equals("4") || mode.equalsIgnoreCase("all") || mode.equalsIgnoreCase("both");
+            || mode.equals("5") || mode.equalsIgnoreCase("all") || mode.equalsIgnoreCase("both");
         boolean runBinder = mode.equals("3") || mode.equalsIgnoreCase("binder")
-            || mode.equals("4") || mode.equalsIgnoreCase("all");
+            || mode.equals("5") || mode.equalsIgnoreCase("all");
+        boolean runCost = mode.equals("4") || mode.equalsIgnoreCase("cost")
+            || mode.equals("5") || mode.equalsIgnoreCase("all");
 
         if (runLexer) {
             runLexerMode(sql);
@@ -101,6 +111,9 @@ public class Main {
         }
         if (runBinder) {
             runBinderMode(sql);
+        }
+        if (runCost) {
+            runCostMode(sql);
         }
     }
 
@@ -174,6 +187,54 @@ public class Main {
             } else {
                 System.err.println(e.getFormattedError());
             }
+        }
+    }
+
+    public static void runCostMode(String sql) {
+        System.out.println("\n--- [COST & CARDINALITY ESTIMATOR OUTPUT] ---");
+        QueryErrorCollector collector = new QueryErrorCollector();
+        ShaylaLexer lexer = new ShaylaLexer(sql, collector);
+        ShaylaParser parser = new ShaylaParser(lexer);
+        try {
+            QueryTree queryTree = parser.parseToTree(sql);
+            QueryBinder binder = new QueryBinder(CATALOG, collector);
+            BindingContext bindingContext = binder.bind(queryTree);
+            QueryValidator validator = new QueryValidator(binder, collector);
+            validator.validate(queryTree, bindingContext);
+
+            CardinalityEstimator cardinalityEstimator = new CardinalityEstimator();
+            SystemCostEstimator costEstimator = new SystemCostEstimator(CATALOG, cardinalityEstimator);
+
+            int totalCost = costEstimator.calculateTotalCost(queryTree);
+            QueryPlanPrinter planPrinter = new QueryPlanPrinter();
+
+            System.out.println("=== Formatted Query Plan with Total Estimated Cost ===");
+            System.out.print(planPrinter.printPlan(queryTree, totalCost));
+
+            System.out.println("\n=== Per-Node Cost & Cardinality Breakdown ===");
+            printCostBreakdown(queryTree, costEstimator, "");
+        } catch (QueryProcessingException e) {
+            if (collector.hasError()) {
+                collector.printAllExpections();
+            } else {
+                System.err.println(e.getFormattedError());
+            }
+        }
+    }
+
+    private static void printCostBreakdown(QueryTree node, SystemCostEstimator costEstimator, String indent) {
+        if (node == null) {
+            return;
+        }
+        PlanEstimate estimate = costEstimator.estimateOutput(node);
+        System.out.println(indent + "* " + node.getNodeType()
+            + (node.getTableName() != null ? " (" + node.getTableName() + ")" : "")
+            + " -> nodeCost=" + node.getEstimatedCost()
+            + ", estimatedRows=" + estimate.getEstimatedRows()
+            + ", estimatedBlocks=" + estimate.getEstimatedBlocks()
+            + ", distinctValues=" + estimate.getAllDistinctValues());
+        for (QueryTree child : node.getChildren()) {
+            printCostBreakdown(child, costEstimator, indent + "  ");
         }
     }
 
@@ -270,7 +331,11 @@ public class Main {
             List<String> cols = schema.columns().stream()
                 .map(c -> c.name() + ":" + c.type())
                 .toList();
-            System.out.println("  * " + schema.tableName() + " " + cols);
+            Statistic stat = CATALOG.getStatistics(schema.tableName());
+            String statStr = stat != null
+                ? " (nr=" + stat.nr() + ", br=" + stat.br() + ", V=" + stat.distinctValues() + ")"
+                : "";
+            System.out.println("  * " + schema.tableName() + " " + cols + statStr);
         }
     }
 
@@ -287,7 +352,7 @@ public class Main {
             ),
             List.of("id"),
             List.of()
-        ));
+        ), new Statistic("siswa", 500, 25, 62, 20, Map.of("id", 500, "nama", 450, "umur", 15, "aktif", 2)));
 
         catalog.addTable(new TableSchema(
             "pegawai",
@@ -300,7 +365,7 @@ public class Main {
             ),
             List.of("id"),
             List.of()
-        ));
+        ), new Statistic("pegawai", 800, 40, 74, 20, Map.of("id", 800, "nama", 750, "umur", 40, "salary", 200, "bonus", 50)));
 
         catalog.addTable(new TableSchema(
             "students",
@@ -311,7 +376,7 @@ public class Main {
             ),
             List.of("id"),
             List.of()
-        ));
+        ), new Statistic("students", 1000, 50, 58, 20, Map.of("id", 1000, "name", 950, "gpa", 100)));
 
         catalog.addTable(new TableSchema(
             "courses",
@@ -322,7 +387,7 @@ public class Main {
             ),
             List.of("code"),
             List.of()
-        ));
+        ), new Statistic("courses", 200, 10, 114, 20, Map.of("code", 200, "title", 200, "credits", 4)));
 
         catalog.addTable(new TableSchema(
             "takes",
@@ -333,7 +398,7 @@ public class Main {
             ),
             List.of("id", "code"),
             List.of()
-        ));
+        ), new Statistic("takes", 2000, 100, 16, 20, Map.of("id", 800, "code", 200, "grade", 5)));
 
         return catalog;
     }
@@ -363,11 +428,24 @@ public class Main {
 
     private record NamedExpression(String label, ExpressionTree tree) { }
 
-    public static class InMemorySchemaCatalog implements ISchemaCatalog {
+    public static class InMemorySchemaCatalog implements ISchemaCatalog, IStatisticsProvider {
         private final Map<String, TableSchema> tables = new LinkedHashMap<>();
+        private final Map<String, Statistic> stats = new LinkedHashMap<>();
 
         public void addTable(TableSchema schema) {
-            tables.put(schema.tableName().toLowerCase(Locale.ROOT), schema);
+            Map<String, Integer> dv = new LinkedHashMap<>();
+            for (ColumnDefinition col : schema.columns()) {
+                dv.put(col.name(), 100);
+            }
+            addTable(schema, new Statistic(schema.tableName(), 1000, 50, 64, 20, dv));
+        }
+
+        public void addTable(TableSchema schema, Statistic statistic) {
+            String key = schema.tableName().toLowerCase(Locale.ROOT);
+            tables.put(key, schema);
+            if (statistic != null) {
+                stats.put(key, statistic);
+            }
         }
 
         public List<TableSchema> getAllSchemas() {
@@ -377,6 +455,11 @@ public class Main {
         @Override
         public TableSchema getTableSchema(String table) {
             return table == null ? null : tables.get(table.toLowerCase(Locale.ROOT));
+        }
+
+        @Override
+        public Statistic getStatistics(String table) {
+            return table == null ? null : stats.get(table.toLowerCase(Locale.ROOT));
         }
 
         @Override
