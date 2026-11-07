@@ -157,6 +157,46 @@ class ConcurrencyControlManagerTest {
         assertNull(noFrmCcm.getTransaction(txId));
     }
 
+    @Test
+    void timestampUpdatesNeverMoveBackwards() {
+        TimestampManager timestamps = new TimestampManager();
+        timestamps.updateReadTS(ITEM, 20);
+        timestamps.updateReadTS(ITEM, 10);
+        timestamps.updateWriteTS(ITEM, 30);
+        timestamps.updateWriteTS(ITEM, 15);
+        assertEquals(20, timestamps.getReadTS(ITEM));
+        assertEquals(30, timestamps.getWriteTS(ITEM));
+    }
+
+    @Test
+    void waitingLockRequestsAreRemovedAfterGrantAndRelease() {
+        LockManager locks = new LockManager();
+        Transaction first = new Transaction(1, 1);
+        Transaction second = new Transaction(2, 2);
+        assertEquals(AccessStatus.GRANTED, locks.acquireLock(first, ITEM, Locktype.EXCLUSIVE));
+        assertEquals(AccessStatus.WAITING, locks.acquireLock(second, ITEM, Locktype.SHARED));
+        assertEquals(ITEM, locks.getWaitingRequestsSnapshot().get(second).getData());
+        locks.releaseAllLocks(first);
+        assertEquals(AccessStatus.GRANTED, locks.acquireLock(second, ITEM, Locktype.SHARED));
+        assertTrue(locks.getWaitingRequestsSnapshot().isEmpty());
+        locks.releaseAllLocks(second);
+        assertTrue(locks.getLockTableSnapshot().isEmpty());
+    }
+
+    @Test
+    void defaultLockProtocolDetectsDeadlockUsingItsOwnLockManager() {
+        LockBasedProtocol locks = new LockBasedProtocol();
+        Transaction first = new Transaction(1, 1);
+        Transaction second = new Transaction(2, 2);
+        DataItem other = new DataItem("users", new RowId("users", 0, 1));
+        assertEquals(AccessStatus.GRANTED, locks.requestWrite(first, ITEM));
+        assertEquals(AccessStatus.GRANTED, locks.requestWrite(second, other));
+        assertEquals(AccessStatus.WAITING, locks.requestWrite(second, ITEM));
+        assertEquals(AccessStatus.WAITING, locks.requestWrite(first, other));
+        assertEquals(TransactionState.ABORTED, second.getState());
+        assertEquals(AccessStatus.GRANTED, locks.requestWrite(first, other));
+    }
+
     private static final class StubProtocol implements ConcurrencyProtocol {
         private AccessStatus status = AccessStatus.GRANTED;
         private final List<Integer> released = new ArrayList<>();
