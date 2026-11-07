@@ -188,4 +188,20 @@ class HeapFileTest {
             assertFalse(iterator.hasNext());
         }
     }
+
+    // truncate removes all rows and keeps the table file usable
+    @Test
+    void truncateRemovesAllRows(){
+        heapFile.insert(List.of(1, "alice"));
+        heapFile.insert(List.of(2, "bob"));
+
+        int deleted = heapFile.truncate();
+
+        assertEquals(2, deleted);
+        assertEquals(0, heapFile.blockCount());
+
+        try (RowIterator iterator = heapFile.scan()){
+            assertFalse(iterator.hasNext());
+        }
+    }
 }
