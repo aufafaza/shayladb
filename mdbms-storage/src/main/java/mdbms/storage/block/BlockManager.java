@@ -90,10 +90,27 @@ public class BlockManager {
         }
     }
 
-    // hapus file dari disk, file yang udah ga ada dianggap beres
+    /** Mengosongkan file yang ada. Tabel yang belum punya file tetap kosong. */
+    public synchronized void truncateFile(String fileName) {
+        Path path = pathFor(fileName);
+        try (FileChannel file = FileChannel.open(path, StandardOpenOption.WRITE,
+                StandardOpenOption.SYNC, LinkOption.NOFOLLOW_LINKS)) {
+            file.truncate(0);
+        } catch (NoSuchFileException e) {
+            return;
+        } catch (IOException e) {
+            throw ioFailure("Cannot truncate " + fileName, e);
+        }
+    }
+
+    /** hapus file dari disk, file yang udah ga ada dianggap beres. lempar
+    error jika file merupakan directory */
     public synchronized void deleteFile(String fileName) {
         Path path = pathFor(fileName);
         try {
+            if (Files.isDirectory(path, LinkOption.NOFOLLOW_LINKS)) {
+                throw new IOException("Cannot delete a directory");
+            }
             Files.deleteIfExists(path);
         } catch (IOException e) {
             throw ioFailure("Cannot delete " + fileName, e);
