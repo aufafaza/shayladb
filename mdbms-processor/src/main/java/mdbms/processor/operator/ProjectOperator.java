@@ -9,41 +9,58 @@ import mdbms.processor.ResultTableSchema;
 
 public class ProjectOperator extends QueryUnaryOperator{
     private final List<String> columns;
-    public ProjectOperator(IQueryOperator child,List<String> cols){
+    private ResultTableSchema outputSchema;
+
+    public ProjectOperator(IQueryOperator child,List<String> columns){
         super(child);
-        columns=List.copyOf(cols);
+        this.columns = List.copyOf(columns);
     }
 
-    public IResultRow next(){
-        IResultRow in=childOperator.next();
-        if(in==null)return null;
-        
-        ResultTableSchema out=new ResultTableSchema();
-        ResultRow row=new ResultRow(out);
-        for(String ref:columns){String[] p=parts(ref);
-            String table=p[0],name=p[1];
-            Object v=table==null?in.get(name):in.get(table,name);
-            String origin=table==null?in.getSchema().getColumnTableOrigin(name):table;ColumnDefinition def=null;
-            for(int i=0;i<in.getSchema().getColumns().size();i++){
-                ColumnDefinition c=in.getSchema().getColumns().get(i);
-                if(c.name().equalsIgnoreCase(name)&&(table==null||table.equalsIgnoreCase(in.getSchema().getColumnTableOrigin(c)))){
-                    def=c;break;
+    @Override public void open() {
+        childOperator.open();
+    }
+
+    private void createSchema(ResultTableSchema input) {
+        if (input == null) throw new IllegalStateException("Child operator tidak menghasilkan schema sesuai");
+        outputSchema = new ResultTableSchema();
+        for (String ref : columns) {
+            String[] p = parts(ref);
+            String origin = p[0] == null ? input.getColumnTableOrigin(p[1]) : p[0];
+            ColumnDefinition definition = null;
+            for (int i=0; i<input.getColumns().size(); i++) {
+                ColumnDefinition candidate = input.getColumns().get(i);
+                if (candidate.name().equalsIgnoreCase(p[1])
+                        && (p[0] == null || p[0].equalsIgnoreCase(input.getColumnTableOrigin(i)))) {
+                    definition = candidate;
+                    break;
                 }
             }
-            
-            if(def==null)def=new ColumnDefinition(name,mdbms.models.schema.DataType.VARCHAR,0,true);
-            
-            out.addColumn(origin,def);
-            row.set(origin==null?"":origin,name,v);
+            if (definition == null) throw new IllegalArgumentException("Unknown column: " + ref);
+            outputSchema.addColumn(origin, definition);
         }
-        
-        return row;
+    }
+
+
+    @Override public IResultRow next(){
+        IResultRow input = childOperator.next();
+        if (input == null) return null;
+        if (outputSchema == null) createSchema(input.getSchema());
+
+        ResultRow output = new ResultRow(outputSchema);
+        for (String ref : columns) {
+            String[] p = parts(ref);
+            String origin = p[0] == null ? input.getSchema().getOrigin(p[1]) : p[0];
+            output.set(origin, p[1], input.get(origin, p[1]));
+        }
+        output.setRowId(input.getRowId());
+        return output;
     }
 
     private static String[] parts(String ref){
-        String name=ref.trim();
-        int dot=name.indexOf('.');
+        String name = ref.trim();
+        int dot = name.indexOf('.');
         
-        return dot<0?new String[]{null,name}:new String[]{name.substring(0,dot),name.substring(dot+1)};
+       return dot < 0 ? new String[] { null, name }
+                : new String[] { name.substring(0, dot), name.substring(dot + 1) };
     }
 }

@@ -86,7 +86,7 @@ class OperatorQp4Test {
     void negativeLimitRejected() {
         assertThrows(IllegalArgumentException.class, () -> new LimitOperator(source(1), -1));
     }
-        @Test
+    @Test
     void sortMultipleColumns() {
         IQueryOperator input = source(3, 1, 2);
 

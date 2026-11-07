@@ -52,6 +52,10 @@ public class ResultTableSchema {
         return "";
     }
 
+    public String getColumnTableOrigin(int columnIndex) {
+        return getColumnTableOrigin(columns.get(columnIndex));
+    }
+
     public void addColumn(ColumnDefinition columnDefinition) {
         addColumn(tableName, columnDefinition);
     }

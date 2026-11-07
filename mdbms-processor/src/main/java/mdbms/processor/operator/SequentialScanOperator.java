@@ -25,35 +25,40 @@ public final class SequentialScanOperator implements IQueryOperator{
     private int pos;
     private ResultTableSchema tableSchema;
 
-    public SequentialScanOperator(IDataAccess a,ISchemaCatalog c,IConcurrencyControl cc,int tx,String t){
-        access=a;
-        catalog=c;
-        concurrency=cc;
-        txId=tx;
-        table=t;
+    public SequentialScanOperator(IDataAccess access, ISchemaCatalog catalog,
+            IConcurrencyControl concurrency, int txId, String table) {
+        this.access=access; 
+        this.catalog=catalog; 
+        this.concurrency=concurrency;
+        this.txId=txId; 
+        this.table=table;
     }
 
-    public void open(){
-        TableSchema s=catalog.getTableSchema(table);
-        if(s==null)throw new IllegalArgumentException("Tabel tidak ditemukan: "+table);
-        tableSchema = new ResultTableSchema(s);
-        rows=access.readBlock(new DataRetrieval(table,s.columns().stream().map(ColumnDefinition::name).toList(),List.of())).rows();
+    @Override public void open() {
+        TableSchema schema=catalog.getTableSchema(table);
+        if(schema==null) throw new IllegalArgumentException("Tabel tidak ditemukan: "+table);
+        tableSchema=new ResultTableSchema(schema);
+        rows=access.readBlock(new DataRetrieval(table,
+                schema.columns().stream().map(ColumnDefinition::name).toList(), List.of())).rows();
         pos=0;
     }
 
-    public IResultRow next(){
-        if(pos>=rows.size()) return null;
-        RowId id=rows.get(pos++).rowId();
-        AccessPermission.read(concurrency,txId,new DataItem(table,id));
-        Row r=access.fetchByRowId(id);
-
-        ResultRow row= new ResultRow(tableSchema,r.values());
-        row.setRowId(id);
-        return row;
+    @Override public IResultRow next() {
+        while(pos<rows.size()) {
+            Row scanned=rows.get(pos++);
+            RowId id=scanned.rowId();
+            AccessPermission.read(concurrency,txId,new DataItem(table,id));
+            Row current=access.fetchByRowId(id);
+            if(current==null || current.values()==null || current.values().isEmpty()) continue;
+            ResultRow result=new ResultRow(tableSchema,current.values());
+            result.setRowId(id);
+            return result;
+        }
+        return null;
     }
 
-    public void close(){
-        rows=List.of();
-        pos=0;
+    @Override public void close() { 
+        rows=List.of(); 
+        pos=0; 
     }
 }

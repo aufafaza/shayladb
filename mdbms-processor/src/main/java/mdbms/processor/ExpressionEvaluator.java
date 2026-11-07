@@ -38,6 +38,37 @@ public class ExpressionEvaluator {
         }
     }
 
+    public static boolean matches(List<Condition> conditions, IResultRow row) {
+        if (conditions == null || conditions.isEmpty()) return true;
+        for (Condition condition : conditions) {
+            if (!matches(condition, row)) return false;
+        }
+        return true;
+    }
+
+    public static boolean matches(
+        List<ExpressionTree> conditions,
+        IResultRow row
+    ) {
+        if (conditions == null || conditions.isEmpty()) {
+            return true;
+        }
+
+        for (ExpressionTree condition : conditions) {
+            if (condition == null || condition.getRoot() == null) {
+                continue;
+            }
+
+            Object result = evaluate(condition, row);
+
+            if (!Boolean.TRUE.equals(result)) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
     private static Object columnReference(ExpressionNode expressionNode, IResultRow row) {
         String tableName = expressionNode.getTableName();
         String columnName = expressionNode.getValue();
