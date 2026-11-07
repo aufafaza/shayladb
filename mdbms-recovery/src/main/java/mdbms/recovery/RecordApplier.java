@@ -12,10 +12,6 @@ public class RecordApplier {
 
     private final IDataAccess dataAccess;
 
-    public RecordApplier() {
-        this(null);
-    }
-
     public RecordApplier(IDataAccess dataAccess) {
         this.dataAccess = dataAccess;
     }
