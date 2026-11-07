@@ -2,10 +2,13 @@ package mdbms.processor.operator;
 
 import java.util.List;
 
+import mdbms.api.IConcurrencyControl;
 import mdbms.api.IDataAccess;
 import mdbms.api.ISchemaCatalog;
 import mdbms.models.access.DataRetrieval;
+import mdbms.models.data.DataItem;
 import mdbms.models.data.Row;
+import mdbms.models.data.RowId;
 import mdbms.models.schema.ColumnDefinition;
 import mdbms.models.schema.TableSchema;
 import mdbms.processor.IResultRow;
@@ -15,14 +18,18 @@ import mdbms.processor.ResultTableSchema;
 public final class SequentialScanOperator implements IQueryOperator{
     private final IDataAccess access; 
     private final ISchemaCatalog catalog; 
+    private final IConcurrencyControl concurrency;
+    private final int txId;
     private final String table; 
     private List<Row> rows=List.of();
     private int pos;
     private ResultTableSchema tableSchema;
 
-    public SequentialScanOperator(IDataAccess a,ISchemaCatalog c,String t){
+    public SequentialScanOperator(IDataAccess a,ISchemaCatalog c,IConcurrencyControl cc,int tx,String t){
         access=a;
         catalog=c;
+        concurrency=cc;
+        txId=tx;
         table=t;
     }
 
@@ -36,20 +43,13 @@ public final class SequentialScanOperator implements IQueryOperator{
 
     public IResultRow next(){
         if(pos>=rows.size()) return null;
-        Row r=rows.get(pos++);
+        RowId id=rows.get(pos++).rowId();
+        AccessPermission.read(concurrency,txId,new DataItem(table,id));
+        Row r=access.fetchByRowId(id);
 
         ResultRow row= new ResultRow(tableSchema,r.values());
-        row.setRowId(r.rowId());
+        row.setRowId(id);
         return row;
-    }
-
-    public ResultTableSchema getSchema(){
-        TableSchema ts=catalog.getTableSchema(table);
-        ResultTableSchema out=new ResultTableSchema(table);
-        
-        if(ts!=null)for(ColumnDefinition c:ts.columns())out.addColumn(table,c);
-        
-        return out;
     }
 
     public void close(){
