@@ -12,7 +12,13 @@ import mdbms.api.ISchemaCatalog;
 import mdbms.models.query.ParsedQuery;
 import mdbms.models.query.QueryTree;
 import mdbms.models.query.SortDirection;
+import mdbms.models.schema.IndexInfo;
+import mdbms.models.schema.IndexType;
+import mdbms.processor.operator.AbortOperator;
+import mdbms.processor.operator.BeginOperator;
 import mdbms.processor.operator.CartesianJoinOperator;
+import mdbms.processor.operator.CommitOperator;
+import mdbms.processor.operator.CreateIndexOperator;
 import mdbms.processor.operator.DeleteOperator;
 import mdbms.processor.operator.GroupByOperator;
 import mdbms.processor.operator.IQueryOperator;
@@ -89,15 +95,33 @@ public class PlanTranslator {
                 // false);
                 return null;
             case INSERT:
-                return new InsertOperator(dataAccess, concurrencyControl, txId, queryTree.getInsertValues());
+                return new InsertOperator(dataAccess, schemaCatalog, concurrencyControl, txId,
+                        queryTree.getTableName(), queryTree.getInsertValues());
             case UPDATE:
-                return new UpdateOperator(childOperators.get(0), dataAccess, schemaCatalog, concurrencyControl,
-                        txId, queryTree.getTableName(), queryTree.getUpdateColumn(), queryTree.getUpdateExpression());
+                return new UpdateOperator(targetRows(queryTree, txId), dataAccess, schemaCatalog, concurrencyControl,
+                        txId, queryTree.getTableName(), queryTree.getUpdateColumn().getColumnName(),
+                        queryTree.getUpdateExpression());
             case DELETE:
-                return new DeleteOperator(dataAccess, schemaCatalog, queryTree.tableName(), queryTree.getConditions());
+                return new DeleteOperator(targetRows(queryTree, txId), dataAccess, concurrencyControl, txId,
+                        queryTree.getTableName());
+            case CREATE_INDEX:
+                return new CreateIndexOperator(schemaCatalog, new IndexInfo(queryTree.getIndexName(),
+                        queryTree.getTableName(), queryTree.getIndexColumn().getColumnName(), IndexType.BPLUS_TREE));
+            case BEGIN:
+                return new BeginOperator(txId);
+            case COMMIT:
+                return new CommitOperator(concurrencyControl, txId);
+            case ABORT:
+                return new AbortOperator(concurrencyControl, txId);
             default:
                 return emptyOperator();
         }
+    }
+
+    private IQueryOperator targetRows(QueryTree queryTree, int txId) {
+        return new SelectOperator(
+                new SequentialScanOperator(dataAccess, schemaCatalog, concurrencyControl, txId, queryTree.getTableName()),
+                queryTree.getConditions());
     }
 
     private static IQueryOperator emptyOperator() {
