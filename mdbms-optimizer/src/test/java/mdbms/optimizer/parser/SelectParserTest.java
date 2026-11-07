@@ -198,6 +198,35 @@ class SelectParserTest {
         assertTrue(source("SELECT * FROM a NATURAL JOIN b").isNaturalJoin());
     }
 
+    @Test
+    void parsesLimitClauseAndStoresLimitValueInQueryTree() {
+        QueryTree project = parse("SELECT * FROM siswa WHERE umur >= 18 ORDER BY umur DESC LIMIT 10;");
+        QueryTree limit = project.getChildren().get(0);
+        QueryTree sort = limit.getChildren().get(0);
+        QueryTree select = sort.getChildren().get(0);
+
+        assertEquals(QueryNodeType.PROJECT, project.getNodeType());
+        assertEquals(QueryNodeType.LIMIT, limit.getNodeType());
+        assertEquals(10, limit.getLimit());
+        assertEquals(QueryNodeType.SORT, sort.getNodeType());
+        assertEquals(QueryNodeType.SELECT, select.getNodeType());
+        assertScan(select.getChildren().get(0), "siswa");
+
+        QueryTree directLimit = source("SELECT id FROM siswa LIMIT 0;");
+        assertEquals(QueryNodeType.LIMIT, directLimit.getNodeType());
+        assertEquals(0, directLimit.getLimit());
+        assertScan(directLimit.getChildren().get(0), "siswa");
+    }
+
+    @Test
+    void rejectsMalformedLimitClauses() {
+        assertError("SELECT * FROM siswa LIMIT;", ";");
+        assertError("SELECT * FROM siswa LIMIT -5;", "-");
+        assertError("SELECT * FROM siswa LIMIT 3.5;", "3.5");
+        assertError("SELECT * FROM siswa LIMIT abc;", "abc");
+        assertError("SELECT LIMIT FROM siswa;", "LIMIT");
+    }
+
     private QueryTree parse(String sql) {
         QueryTree tree = parser.parseSelect(stream(sql));
         System.out.println("=== QueryTree for: " + sql + " ===");

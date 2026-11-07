@@ -13,6 +13,7 @@ public class QueryTree {
     private List<ColumnReference> projectionColumns;
     private boolean naturalJoin;
     private List<OrderByClause> orderByClauses = List.of();
+    private Integer limit;
     private ColumnReference updateColumn;
     private ExpressionTree updateExpression;
     private List<ExpressionTree> insertValues = List.of();
@@ -56,6 +57,18 @@ public class QueryTree {
 
     public List<OrderByClause> getOrderByClauses() {
         return orderByClauses;
+    }
+
+    public Integer getLimit() {
+        return limit;
+    }
+
+    public void setLimit(int limit) {
+        requireNodeType(QueryNodeType.LIMIT);
+        if (limit < 0) {
+            throw new IllegalArgumentException("LIMIT must not be negative");
+        }
+        this.limit = limit;
     }
 
     public ColumnReference getUpdateColumn() {
@@ -225,6 +238,9 @@ public class QueryTree {
             details.add("orderBy=" + node.orderByClauses.stream()
                 .map(c -> c.getField() + " " + c.getDirection())
                 .toList());
+        }
+        if (node.limit != null) {
+            details.add("limit=" + node.limit);
         }
         if (node.updateColumn != null) {
             details.add("updateColumn=" + node.updateColumn);

@@ -94,6 +94,9 @@ public final class QueryPlanPrinter {
                 .map(clause -> column(clause.getField()) + " " + clause.getDirection())
                 .collect(Collectors.joining(", ")) + "]");
         }
+        if (node.getLimit() != null) {
+            result.add("limit=" + node.getLimit());
+        }
         if (node.getUpdateColumn() != null && node.getUpdateExpression() != null) {
             result.add("set=" + column(node.getUpdateColumn()) + " = " + printExpression(node.getUpdateExpression()));
         }
