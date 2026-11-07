@@ -16,9 +16,6 @@ import mdbms.processor.operator.IQueryOperator;
 
 public class QueryProcessor implements IQueryProcessor {
     private IQueryOptimizer queryOptimizer;
-    private IDataAccess dataAccess;
-    private ISchemaCatalog schemaCatalog;
-    private IFailureRecoveryManager failureRecovery;
     private IConcurrencyControl concurrencyControl;
     private PlanTranslator planTranslator;
 
@@ -29,9 +26,6 @@ public class QueryProcessor implements IQueryProcessor {
             IFailureRecoveryManager failureRecovery,
             IConcurrencyControl concurrencyControl) {
         this.queryOptimizer = queryOptimizer;
-        this.dataAccess = dataAccess;
-        this.schemaCatalog = schemaCatalog;
-        this.failureRecovery = failureRecovery;
         this.concurrencyControl = concurrencyControl;
         this.planTranslator = new PlanTranslator(dataAccess, schemaCatalog, concurrencyControl);
     }
