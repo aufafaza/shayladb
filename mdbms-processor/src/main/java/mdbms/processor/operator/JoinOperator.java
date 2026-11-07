@@ -52,8 +52,7 @@ public class JoinOperator extends QueryBinaryOperator {
         leftOperator.open();
         rightOperator.open();
         IResultRow row;
-        while ((row = rightOperator.next()) != null)
-            rightRows.add(row);
+        while ((row = rightOperator.next()) != null) rightRows.add(row);
         loadBlock();
     }
 
@@ -63,8 +62,7 @@ public class JoinOperator extends QueryBinaryOperator {
         rightIndex = 0;
         while (leftBlock.size() < blockSize) {
             IResultRow row = leftOperator.next();
-            if (row == null)
-                break;
+            if (row == null) break;
             leftBlock.add(row);
         }
     }
@@ -77,9 +75,8 @@ public class JoinOperator extends QueryBinaryOperator {
                 while (rightIndex < rightRows.size()) {
                     IResultRow right = rightRows.get(rightIndex++);
                     boolean match = natural ? JoinRowUtil.naturalMatch(left, right)
-                            : condition == null || condition.test(left, right);
-                    if (match)
-                        return JoinRowUtil.combine(left, right, natural);
+                            : condition == null || condition.test(left, right); 
+                    if (match) return JoinRowUtil.combine(left, right, natural);
                 }
                 rightIndex = 0;
                 leftIndex++;
@@ -91,17 +88,10 @@ public class JoinOperator extends QueryBinaryOperator {
 
     @Override
     public void close() {
-        try {
-            leftOperator.close();
-        } finally {
-            try {
-                rightOperator.close();
-            } finally {
-                rightRows.clear();
-                leftBlock.clear();
-                leftIndex = 0;
-                rightIndex = 0;
-            }
+        try { leftOperator.close(); }
+        finally {
+            try { rightOperator.close(); }
+            finally { rightRows.clear(); leftBlock.clear(); leftIndex = 0; rightIndex = 0; }
         }
     }
 }

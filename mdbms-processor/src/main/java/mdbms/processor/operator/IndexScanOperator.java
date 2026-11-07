@@ -35,13 +35,15 @@ public class IndexScanOperator implements IQueryOperator {
         this.key = key;
     }
 
-    public void open() {
+    @Override public void open() {
+        if(schemaCatalog.getTableSchema(tableName)==null) throw new IllegalArgumentException("Tabel tidak ditemukan: "+tableName);
+
         schema = new ResultTableSchema(schemaCatalog.getTableSchema(tableName));
         rowIds = dataAccess.searchIndex(indexName, key);
         position = 0;
     }
 
-    public IResultRow next() {
+    @Override public IResultRow next() {
         if (position >= rowIds.size()) return null;
         RowId rowId = rowIds.get(position++);
 
@@ -53,6 +55,8 @@ public class IndexScanOperator implements IQueryOperator {
         return result;
     }
 
-    public void close() {
+    @Override public void close() {
+        rowIds = List.of(); 
+        position = 0;
     }
 }

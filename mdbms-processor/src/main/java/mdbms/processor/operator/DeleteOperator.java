@@ -25,7 +25,7 @@ public class DeleteOperator extends QueryUnaryOperator implements IWriteOperator
         table=t;
     }
 
-    public void open(){
+    @Override public void open(){
         targets=new ArrayList<>();
         childOperator.open();
         IResultRow r;
@@ -33,7 +33,7 @@ public class DeleteOperator extends QueryUnaryOperator implements IWriteOperator
         childOperator.close();
     }
 
-    public IResultRow next(){
+    @Override public IResultRow next(){
         for(IResultRow r:targets){
             List<Object> oldValues=new ArrayList<>();
             for(ColumnDefinition c:r.getSchema().getColumns())oldValues.add(r.get(c.name()));
@@ -44,7 +44,7 @@ public class DeleteOperator extends QueryUnaryOperator implements IWriteOperator
         return null;
     }
 
-    public void close(){
+    @Override public void close(){
     }
 
     public int getAffectedRows(){
