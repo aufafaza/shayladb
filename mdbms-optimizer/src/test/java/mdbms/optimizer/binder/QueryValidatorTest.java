@@ -341,6 +341,17 @@ class QueryValidatorTest {
         assertTrue(ex.getMessage().contains("Cannot compare incompatible types"));
     }
 
+    @Test
+    void testValidateLimitNodeRequiresLimitValue() {
+        QueryTree scan = new QueryTree(QueryNodeType.TABLE_SCAN, PhysicalAlgorithm.DEFAULT, "students", List.of(), List.of(), 0);
+        QueryTree limitWithoutValue = new QueryTree(QueryNodeType.LIMIT, PhysicalAlgorithm.DEFAULT, null, List.of(), List.of(scan), 0);
+
+        assertThrows(QuerySemanticException.class, () -> validator.validate(limitWithoutValue));
+
+        limitWithoutValue.setLimit(10);
+        assertTrue(validator.validate(limitWithoutValue));
+    }
+
     private static class MockSchemaCatalog implements ISchemaCatalog {
         private final Map<String, TableSchema> tables = new HashMap<>();
 
