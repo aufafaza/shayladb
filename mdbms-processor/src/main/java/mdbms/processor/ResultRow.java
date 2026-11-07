@@ -30,9 +30,14 @@ public class ResultRow implements IResultRow {
 
     public ResultRow(ResultTableSchema schema, List<Object> values) {
         this(schema);
-        for (ColumnDefinition column : schema.getColumns()) {
+        Objects.requireNonNull(values, "values");
+        if (values.size() != schema.getColumns().size()) {
+            throw new IllegalArgumentException("Value count differs from result schema");
+        }
+        for (int i = 0; i < schema.getColumns().size(); i++) {
+            ColumnDefinition column = schema.getColumns().get(i);
             String tableName = schema.getColumnTableOrigin(column);
-            this.values.get(tableName).put(column.name(), null);
+            this.values.get(tableName).put(column.name(), values.get(i));
         }
     }
 
