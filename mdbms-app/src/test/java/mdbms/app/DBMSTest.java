@@ -111,15 +111,14 @@ class DBMSTest {
     }
 
     @Test
-    void unimplementedAlgorithmsGiveClearError() {
-        for (ConcurrencyAlgorithm algorithm : List.of(ConcurrencyAlgorithm.LOCK_BASED, ConcurrencyAlgorithm.VALIDATION_BASED)) {
-            DBMS dbms = withStubs(new DBMSConfig("dir", 8, algorithm));
+    void validationBasedAlgorithmGivesClearError() {
+        ConcurrencyAlgorithm algorithm = ConcurrencyAlgorithm.VALIDATION_BASED;
+        DBMS dbms = withStubs(new DBMSConfig("dir", 8, algorithm));
 
-            UnsupportedOperationException error = assertThrows(UnsupportedOperationException.class, dbms::start);
+        UnsupportedOperationException error = assertThrows(UnsupportedOperationException.class, dbms::start);
 
-            assertTrue(error.getMessage().contains(algorithm.name()));
-            assertFalse(dbms.isRunning());
-        }
+        assertTrue(error.getMessage().contains(algorithm.name()));
+        assertFalse(dbms.isRunning());
     }
 
     @Test
