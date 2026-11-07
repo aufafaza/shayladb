@@ -219,6 +219,23 @@ public class SystemCostEstimator implements ICostEstimator {
                 List<QueryTree> children = node.getChildren();
                 return children.isEmpty() ? new PlanEstimate(0L, 0L, Map.of()) : estimateOutput(children.get(0));
             }
+            case LIMIT -> {
+                List<QueryTree> children = node.getChildren();
+                PlanEstimate childEst = children.isEmpty() ? new PlanEstimate(0L, 0L, Map.of()) : estimateOutput(children.get(0));
+                if (node.getLimit() == null) {
+                    return childEst;
+                }
+                long limitedRows = Math.min(childEst.getEstimatedRows(), node.getLimit().longValue());
+                long limitedBlocks = limitedRows == 0 ? 0L : Math.min(
+                    childEst.getEstimatedBlocks(),
+                    Math.max(1L, Math.round((double) childEst.getEstimatedBlocks() * limitedRows / Math.max(1L, childEst.getEstimatedRows())))
+                );
+                Map<String, Long> dv = new LinkedHashMap<>();
+                for (Map.Entry<String, Long> e : childEst.getAllDistinctValues().entrySet()) {
+                    dv.put(e.getKey(), Math.min(e.getValue(), limitedRows));
+                }
+                return new PlanEstimate(limitedRows, limitedBlocks, dv);
+            }
             case INSERT, UPDATE, DELETE -> {
                 String tableName = node.getTableName();
                 Statistic stat = getTableStatistics(tableName);

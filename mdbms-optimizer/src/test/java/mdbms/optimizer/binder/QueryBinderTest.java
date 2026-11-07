@@ -417,6 +417,24 @@ class QueryBinderTest {
         assertTrue(ex.getMessage().contains("missing_col"));
     }
 
+    @Test
+    void testBindSelectStarWithLimitAndNaturalJoin() {
+        // SELECT * FROM students NATURAL JOIN takes LIMIT 5
+        QueryTree left = new QueryTree(QueryNodeType.TABLE_SCAN, PhysicalAlgorithm.DEFAULT, "students", List.of(), List.of(), 0);
+        QueryTree right = new QueryTree(QueryNodeType.TABLE_SCAN, PhysicalAlgorithm.DEFAULT, "takes", List.of(), List.of(), 0);
+        QueryTree join = new QueryTree(QueryNodeType.JOIN, PhysicalAlgorithm.DEFAULT, null, List.of(), List.of(left, right), 0, List.of(), true);
+        QueryTree limit = new QueryTree(QueryNodeType.LIMIT, PhysicalAlgorithm.DEFAULT, null, List.of(), List.of(join), 0);
+        limit.setLimit(5);
+        QueryTree project = new QueryTree(QueryNodeType.PROJECT, PhysicalAlgorithm.DEFAULT, null, List.of(), List.of(limit), 0, List.of(new ColumnReference(null, "*")), false);
+
+        BindingContext ctx = binder.bind(project);
+        assertEquals(5, limit.getLimit());
+        assertEquals(5, project.getProjectionColumns().size());
+        assertEquals(1, join.getConditions().size());
+        assertNotNull(ctx.getTableBinding("students"));
+        assertNotNull(ctx.getTableBinding("takes"));
+    }
+
     // Mock Schema Catalog for testing without full storage engine
     private static class MockSchemaCatalog implements ISchemaCatalog {
         private final Map<String, TableSchema> tables = new HashMap<>();

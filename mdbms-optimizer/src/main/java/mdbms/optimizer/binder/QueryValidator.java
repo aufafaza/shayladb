@@ -87,6 +87,11 @@ public class QueryValidator implements IQueryValidator {
         switch (node.getNodeType()) {
             case INSERT -> validateInsertValues(node, context);
             case UPDATE -> validateUpdateAssignments(node, context);
+            case LIMIT -> {
+                if (node.getLimit() == null || node.getLimit() < 0) {
+                    throw semanticError("LIMIT node must have a non-negative limit value");
+                }
+            }
             default -> {
                 // Other nodes are validated via children and conditions
             }

@@ -126,6 +126,11 @@ public class QueryBinder {
                     context.registerColumnBinding(node.getIndexColumn(), cb);
                 }
             }
+            case LIMIT -> {
+                if (node.getLimit() == null || node.getLimit() < 0) {
+                    throw semanticError("LIMIT value must be non-negative");
+                }
+            }
             default -> {
                 // Other nodes like CARTESIAN, TABLE_SCAN, BEGIN, COMMIT, ABORT require no direct column binding
             }
