@@ -4,6 +4,7 @@ import java.util.List;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.Map;
+import java.nio.charset.StandardCharsets;
 import mdbms.api.IDataAccess;
 import mdbms.api.IDurableStorage;
 import mdbms.api.IFailureRecoveryManager;
@@ -99,28 +100,27 @@ public final class StorageManager implements IDataAccess, ISchemaCatalog, IStati
             return result;
         }
 
+        List<Row> rowsToUpdate = new ArrayList<>();
         try (RowIterator iterator = heapFile.scan()){
             while (iterator.hasNext()){
-                Row oldRow = iterator.next();
+                Row row = iterator.next();
 
-                if (!matchesAll(request.conditions(), oldRow, schema)){
-                    continue;
+                if (matchesAll(request.conditions(), row, schema)){
+                    rowsToUpdate.add(row);
                 }
-
-                List<Object> newValues = new ArrayList<>(oldRow.values());
-
-                for (Map.Entry<String, Object> entry : request.values().entrySet()){
-                    int index = columnIndex(schema, entry.getKey());
-                    newValues.set(index, entry.getValue());
-                }
-
-                validateRow(schema, newValues);
-
-                Row newRow = heapFile.update(oldRow.rowId(), newValues);
-                result.add(newRow.rowId());
-
-                afterWrite(request.table(), oldRow, newRow);
             }
+        }
+        for (Row oldRow : rowsToUpdate){
+            List<Object> newValues = new ArrayList<>(oldRow.values());
+
+            for (Map.Entry<String, Object> entry : request.values().entrySet()){
+                int index = columnIndex(schema, entry.getKey());
+                newValues.set(index, entry.getValue());
+            }
+
+            validateRow(schema, newValues);
+            Row newRow = updateByRowId(oldRow.rowId(), newValues);
+            result.add(newRow.rowId());
         }
 
         return result;
@@ -158,6 +158,21 @@ public final class StorageManager implements IDataAccess, ISchemaCatalog, IStati
     public Row fetchByRowId(RowId rowId){
         HeapFile heapFile = heapFileOf(rowId.tableName());
         return heapFile.fetch(rowId);
+    }
+
+    @Override
+    public RowId reserveRowId(String table, List<Object> values){
+        TableSchema schema = requireSchema(table);
+        validateRow(schema, values);
+        HeapFile heapFile = heapFileOf(table);
+
+        return heapFile.reserve(values);
+    }
+
+    @Override
+    public void releaseRowId(RowId rowId){
+        HeapFile heapFile = heapFileOf(rowId.tableName());
+        heapFile.releaseReservation(rowId);
     }
 
     @Override
@@ -248,7 +263,10 @@ public final class StorageManager implements IDataAccess, ISchemaCatalog, IStati
     @Override
     public void dropTable(String table){
         requireSchema(table);
+
         indexManager.dropIndexesOf(table);
+        bufferPool.discardFile(table + ".tbl");
+        tables.remove(table);
         catalog.dropTable(table);
     }
 
@@ -432,8 +450,9 @@ public final class StorageManager implements IDataAccess, ISchemaCatalog, IStati
                     }
 
                     String stringValue = (String) value;
+                    int byteLength = stringValue.getBytes(StandardCharsets.UTF_8).length;
 
-                    if (column.length() > 0 && stringValue.length() > column.length()){
+                    if (column.length() > 0 && byteLength > column.length()){
                         throw new StorageException(
                             StorageErrorCode.SCHEMA_VIOLATION,
                             "Value too long for column: " + column.name()

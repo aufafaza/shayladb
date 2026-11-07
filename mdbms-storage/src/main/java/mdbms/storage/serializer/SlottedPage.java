@@ -114,6 +114,16 @@ public final class SlottedPage {
         return true;
     }
 
+    public void releaseReservation(int slot){
+        checkSlot(slot);
+
+        if (records.get(slot) != null || reservations.get(slot) == 0){
+            throw new IllegalStateException("Slot is not reserved");
+        }
+
+        reservations.set(slot, 0);
+    }
+
     public void writeSlot(int slot, byte[] data) {
         checkSlot(slot);
         if (reservations.get(slot) == 0 || records.get(slot) != null) {
