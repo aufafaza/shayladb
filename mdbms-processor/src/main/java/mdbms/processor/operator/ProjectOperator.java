@@ -49,7 +49,7 @@ public class ProjectOperator extends QueryUnaryOperator{
         ResultRow output = new ResultRow(outputSchema);
         for (String ref : columns) {
             String[] p = parts(ref);
-            String origin = p[0] == null ? input.getSchema().getOrigin(p[1]) : p[0];
+            String origin = p[0] == null ? input.getSchema().getColumnTableOrigin(p[1]) : p[0];
             output.set(origin, p[1], input.get(origin, p[1]));
         }
         output.setRowId(input.getRowId());
