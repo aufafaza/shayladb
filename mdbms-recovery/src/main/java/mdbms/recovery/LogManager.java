@@ -2,12 +2,12 @@ package mdbms.recovery;
 
 import java.time.Instant;
 import java.util.List;
-import mdbms.models.DataChangeLogRecord;
-import mdbms.models.LogRecord;
-import mdbms.models.LogType;
-import mdbms.models.RecordImage;
-import mdbms.models.RowId;
-import mdbms.models.TransactionLogRecord;
+import mdbms.models.data.RowId;
+import mdbms.models.log.DataChangeLogRecord;
+import mdbms.models.log.LogRecord;
+import mdbms.models.log.LogType;
+import mdbms.models.log.RecordImage;
+import mdbms.models.log.TransactionLogRecord;
 
 public class LogManager {
 

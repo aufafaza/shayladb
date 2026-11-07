@@ -1,0 +1,19 @@
+package mdbms.models.query;
+
+public enum QueryNodeType{ 
+    PROJECT, 
+    SELECT, 
+    JOIN, 
+    CARTESIAN, 
+    TABLE_SCAN, 
+    SORT, 
+    GROUP_BY, 
+    LIMIT, 
+    UPDATE,
+    INSERT,
+    DELETE,
+    CREATE_INDEX,
+    BEGIN,
+    COMMIT,
+    ABORT
+}

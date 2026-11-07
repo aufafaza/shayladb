@@ -1,6 +1,6 @@
 package mdbms.api;
 
-import mdbms.models.ParsedQuery;
+import mdbms.models.query.ParsedQuery;
 
 public interface IQueryOptimizer {
     ParsedQuery parseQuery(String query);
