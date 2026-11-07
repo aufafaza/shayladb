@@ -10,6 +10,7 @@ import mdbms.api.IFailureRecoveryManager;
 import mdbms.api.IQueryOptimizer;
 import mdbms.api.ISchemaCatalog;
 import mdbms.models.query.ParsedQuery;
+import mdbms.models.query.ColumnReference;
 import mdbms.models.query.QueryTree;
 import mdbms.models.query.SortDirection;
 import mdbms.models.schema.IndexInfo;
@@ -61,6 +62,7 @@ public class PlanTranslator {
         switch (queryTree.getNodeType()) {
             case TABLE_SCAN:
                 switch (queryTree.getAlgorithm()) {
+                    case DEFAULT:
                     case LINEAR_SCAN:
                         return new SequentialScanOperator(dataAccess, schemaCatalog, concurrencyControl, txId,
                                 queryTree.getTableName());
@@ -74,7 +76,8 @@ public class PlanTranslator {
                         throw new RuntimeException("Invalid algorithm for table scan: " + queryTree.getAlgorithm());
                 }
             case PROJECT:
-                return new ProjectOperator(childOperators.get(0), queryTree.getProjectionColumns());
+                return new ProjectOperator(childOperators.get(0), queryTree.getProjectionColumns().stream()
+                        .map(ColumnReference::toString).toList());
             case SELECT:
                 return new SelectOperator(childOperators.get(0), queryTree.getConditions());
             case LIMIT:
@@ -89,7 +92,7 @@ public class PlanTranslator {
                         queryTree.getOrderByClauses().stream()
                                 .map((clause) -> new SortOperator.SortKey(clause.getField().getTableName(),
                                         clause.getField().getColumnName(),
-                                        clause.getDirection() == SortDirection.ASC)));
+                                        clause.getDirection() == SortDirection.ASC)).toList());
             case GROUP_BY:
                 // return new GroupByOperator(childOperators.get(0), queryTree.getValue(),
                 // false);
