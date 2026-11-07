@@ -17,7 +17,11 @@ public class LockBasedProtocol implements ConcurrencyProtocol {
     private IntFunction<Transaction> transactionResolver;
 
     public LockBasedProtocol() {
-        this(new LockManager(), new DeadlockHandler());
+        this(new LockManager());
+    }
+
+    public LockBasedProtocol(LockManager lockManager) {
+        this(lockManager, new DeadlockHandler(lockManager));
     }
 
     public LockBasedProtocol(LockManager lockManager, DeadlockHandler deadlockHandler) {
@@ -36,7 +40,12 @@ public class LockBasedProtocol implements ConcurrencyProtocol {
     
     @Override 
     public AccessStatus requestRead(Transaction tx, DataItem data) {
-        return lockManager.acquireLock(tx, data, Locktype.SHARED);
+        return handleResult(tx, lockManager.acquireLock(tx, data, Locktype.SHARED));
+    }
+
+    @Override
+    public AccessStatus requestWrite(Transaction tx, DataItem data) {
+        return handleResult(tx, lockManager.acquireLock(tx, data, Locktype.EXCLUSIVE));
     }
 
     @Override
