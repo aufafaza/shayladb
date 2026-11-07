@@ -52,6 +52,13 @@ public class SelectParser {
             sort.setOrderByClauses(orderBy);
             source = sort;
         }
+        if (isKeyword(stream, "LIMIT")) {
+            int limitValue = parseLimit(stream);
+            QueryTree limit = new QueryTree(QueryNodeType.LIMIT, PhysicalAlgorithm.DEFAULT, null,
+                List.of(), List.of(source), 0);
+            limit.setLimit(limitValue);
+            source = limit;
+        }
         if (stream.peek().getType() != TokenType.semicolon && !stream.isAtEnd()) {
             throw syntaxError(stream, "Expected ';' or end of SELECT; unexpected or misplaced clause");
         }
@@ -116,7 +123,8 @@ public class SelectParser {
     }
 
     private Token expectIdentifier(TokenStream stream) {
-        if (isKeyword(stream, "JOIN") || isKeyword(stream, "NATURAL") || isOrderBy(stream)) {
+        if (isKeyword(stream, "JOIN") || isKeyword(stream, "NATURAL")
+            || isOrderBy(stream) || isKeyword(stream, "LIMIT")) {
             throw syntaxError(stream, "Expected an identifier before '" + stream.peek().getLexeme() + "'");
         }
         return stream.expect(TokenType.idTok);
@@ -172,5 +180,22 @@ public class SelectParser {
             clauses.add(new OrderByClause(field, direction));
         } while (stream.match(TokenType.comma));
         return List.copyOf(clauses);
+    }
+
+    private int parseLimit(TokenStream stream) {
+        expectKeyword(stream, "LIMIT");
+        if (stream.peek().getType() != TokenType.intLitTok) {
+            throw syntaxError(stream, "Expected non-negative integer literal after LIMIT");
+        }
+        Token limitToken = stream.advance();
+        try {
+            int value = Integer.parseInt(limitToken.getLexeme());
+            if (value < 0) {
+                throw syntaxError(stream, "LIMIT must not be negative");
+            }
+            return value;
+        } catch (NumberFormatException e) {
+            throw syntaxError(stream, "Invalid integer literal for LIMIT: '" + limitToken.getLexeme() + "'");
+        }
     }
 }

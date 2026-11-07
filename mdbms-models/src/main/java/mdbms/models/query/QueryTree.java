@@ -7,12 +7,13 @@ public class QueryTree {
     private final QueryNodeType nodeType;
     private PhysicalAlgorithm algorithm;
     private final String tableName;
-    private final List<ExpressionTree> conditions;
+    private List<ExpressionTree> conditions;
     private final List<QueryTree> children;
     private int estimatedCost;
-    private final List<ColumnReference> projectionColumns;
-    private final boolean naturalJoin;
+    private List<ColumnReference> projectionColumns;
+    private boolean naturalJoin;
     private List<OrderByClause> orderByClauses = List.of();
+    private Integer limit;
     private ColumnReference updateColumn;
     private ExpressionTree updateExpression;
     private List<ExpressionTree> insertValues = List.of();
@@ -56,6 +57,18 @@ public class QueryTree {
 
     public List<OrderByClause> getOrderByClauses() {
         return orderByClauses;
+    }
+
+    public Integer getLimit() {
+        return limit;
+    }
+
+    public void setLimit(int limit) {
+        requireNodeType(QueryNodeType.LIMIT);
+        if (limit < 0) {
+            throw new IllegalArgumentException("LIMIT must not be negative");
+        }
+        this.limit = limit;
     }
 
     public ColumnReference getUpdateColumn() {
@@ -138,6 +151,18 @@ public class QueryTree {
         return naturalJoin;
     }
 
+    public void setProjectionColumns(List<ColumnReference> projectionColumns) {
+        this.projectionColumns = List.copyOf(projectionColumns);
+    }
+
+    public void setConditions(List<ExpressionTree> conditions) {
+        this.conditions = List.copyOf(conditions);
+    }
+
+    public void setNaturalJoin(boolean naturalJoin) {
+        this.naturalJoin = naturalJoin;
+    }
+
     public QueryNodeType getNodeType() {
         return nodeType;
     }
@@ -213,6 +238,9 @@ public class QueryTree {
             details.add("orderBy=" + node.orderByClauses.stream()
                 .map(c -> c.getField() + " " + c.getDirection())
                 .toList());
+        }
+        if (node.limit != null) {
+            details.add("limit=" + node.limit);
         }
         if (node.updateColumn != null) {
             details.add("updateColumn=" + node.updateColumn);
