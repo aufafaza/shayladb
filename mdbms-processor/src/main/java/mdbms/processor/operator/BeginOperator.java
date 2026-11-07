@@ -1,6 +1,5 @@
 package mdbms.processor.operator;
 
-import mdbms.api.IConcurrencyControl;
 import mdbms.models.schema.ColumnDefinition;
 import mdbms.models.schema.DataType;
 import mdbms.processor.IResultRow;
@@ -8,12 +7,11 @@ import mdbms.processor.ResultRow;
 import mdbms.processor.ResultTableSchema;
 
 public class BeginOperator implements IQueryOperator {
-    private final IConcurrencyControl concurrencyControlManager;
-    private int transactionId;
+    private final int transactionId;
     private boolean isDone;
 
-    public BeginOperator(IConcurrencyControl concurrencyControlManager) {
-        this.concurrencyControlManager = concurrencyControlManager;
+    public BeginOperator(int transactionId) {
+        this.transactionId = transactionId;
     }
 
     public void open() {
@@ -24,9 +22,6 @@ public class BeginOperator implements IQueryOperator {
         if (isDone) return null;
         isDone = true;
 
-        transactionId = concurrencyControlManager.beginTransaction();
-        // TODO BUTUH beginTransaction yang juga catat BEGIN ke FRM dari CCM
-        // TODO BUTUH ClientSession menyimpan transactionId ini, dan ClientHandler gunakan untuk query berikutnya
         String message = "BEGIN TRANSACTION " + transactionId;
 
         ResultTableSchema schema = new ResultTableSchema();
@@ -37,9 +32,5 @@ public class BeginOperator implements IQueryOperator {
     }
 
     public void close() {
-    }
-
-    public int getTransactionId() {
-        return transactionId;
     }
 }
