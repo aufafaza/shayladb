@@ -94,10 +94,16 @@ public final class StorageManager implements IDataAccess, ISchemaCatalog, IStati
             validateRow(schema, values);
 
             RowId rowId = heapFile.insert(values);
-            result.add(rowId);
-
-            afterWrite(request.table(), null, new Row(rowId, values));
-            return result;
+            Row newRow = new Row(rowId, values);
+            try{
+                afterWrite(request.table(), null, newRow);
+                result.add(rowId);
+                return result;
+                
+            } catch (RuntimeException e){
+                heapFile.delete(rowId);
+                throw e;
+            }
         }
 
         List<Row> rowsToUpdate = new ArrayList<>();
@@ -267,6 +273,7 @@ public final class StorageManager implements IDataAccess, ISchemaCatalog, IStati
         indexManager.dropIndexesOf(table);
         bufferPool.discardFile(table + ".tbl");
         tables.remove(table);
+        statistics.invalidate(table);
         catalog.dropTable(table);
     }
 
