@@ -8,6 +8,7 @@ import mdbms.storage.block.BufferPool;
 import mdbms.storage.block.Block;
 import mdbms.storage.serializer.IRecordSerializer;
 import mdbms.storage.serializer.SlottedPage;
+import mdbms.storage.serializer.SlotEntry;
 import mdbms.storage.exception.StorageErrorCode;
 import mdbms.storage.exception.StorageException;
 
@@ -53,6 +54,41 @@ public class HeapFile{
         }
     }
 
+    public RowId reserve(List<Object> values){
+        byte[] record = serializer.serialize(values, schema);
+        int bytes = record.length;
+
+        Block block = pool.pin(fileName, findBlockWithSpace(bytes));
+
+        boolean dirty = false;
+        try{
+            SlottedPage page = new SlottedPage(block.data);
+            int slot = page.reserveSlot(bytes);
+            writeBack(block, page);
+            dirty = true;
+
+            return new RowId(schema.tableName(), block.blockNumber, slot);
+
+        } finally{
+            pool.unpin(block, dirty, NO_LSN);
+        }
+    }
+
+    public void releaseReservation(RowId rowId){
+        Block block = pool.pin(fileName, rowId.blockNumber());
+
+        boolean dirty = false;
+        try{
+            SlottedPage page = new SlottedPage(block.data);
+            page.releaseReservation(rowId.slot());
+            writeBack(block, page);
+            dirty = true;
+
+        } finally{
+            pool.unpin(block, dirty, NO_LSN);
+        }
+    }
+
     public RowId insert(List<Object> values){
         byte[] record = serializer.serialize(values, schema);
         int bytes = record.length;
@@ -79,12 +115,23 @@ public class HeapFile{
         try{
             SlottedPage page = new SlottedPage(block.data);
             int slot = rowId.slot();
+            SlotEntry entry = page.slotEntry(slot);
 
-            if (!page.reserveSlotAt(slot, bytes)){
-                throw new StorageException(
-                    StorageErrorCode.SLOT_UNAVAILABLE,
-                    "Slot unavailable for row: " + rowId
-                );
+            if (!entry.occupied() && entry.length() > 0){
+                if (bytes > entry.length()){
+                    throw new StorageException(
+                        StorageErrorCode.SLOT_UNAVAILABLE,
+                        "Reserved slot is too small for row: " + rowId
+                    );
+                }
+            }
+            else{
+                if (!page.reserveSlotAt(slot, bytes)){
+                    throw new StorageException(
+                        StorageErrorCode.SLOT_UNAVAILABLE,
+                        "Slot unavailable for row: " + rowId
+                    );
+                }
             }
 
             page.writeSlot(slot, record);
