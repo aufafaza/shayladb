@@ -8,6 +8,8 @@ import java.util.Set;
 import mdbms.models.schema.ColumnDefinition;
 import mdbms.models.schema.DataType;
 import mdbms.models.schema.TableSchema;
+import mdbms.storage.exception.StorageErrorCode;
+import mdbms.storage.exception.StorageException;
 
 public final class BinaryRecordSerializer implements IRecordSerializer {
     private final ValueCodec integerCodec = new IntegerCodec();
@@ -20,7 +22,7 @@ public final class BinaryRecordSerializer implements IRecordSerializer {
     public byte[] serialize(List<Object> values, TableSchema schema) {
         List<ColumnDefinition> columns = columns(schema);
         if (values == null || values.size() != columns.size()) {
-            throw new IllegalArgumentException("Value count differs from schema");
+            throw new StorageException(StorageErrorCode.SCHEMA_VIOLATION, "Value count differs from schema");
         }
         ByteArrayOutputStream out = new ByteArrayOutputStream();
         for (int i = 0; i < columns.size(); i++) {
@@ -28,7 +30,7 @@ public final class BinaryRecordSerializer implements IRecordSerializer {
             Object value = values.get(i);
             if (value == null) {
                 if (!column.nullable()) {
-                    throw new IllegalArgumentException("NULL in non-nullable column " + column.name());
+                    throw new StorageException(StorageErrorCode.SCHEMA_VIOLATION, "NULL in non-nullable column " + column.name());
                 }
                 out.write(0);
             } else {
@@ -44,65 +46,63 @@ public final class BinaryRecordSerializer implements IRecordSerializer {
     public List<Object> deserialize(byte[] data, TableSchema schema) {
         List<ColumnDefinition> columns = columns(schema);
         if (data == null) {
-            throw new IllegalArgumentException("Record bytes are null");
+            throw new StorageException(StorageErrorCode.INVALID_BLOCK, "Record bytes are null");
         }
         List<Object> values = new ArrayList<>(columns.size());
         int position = 0;
         for (ColumnDefinition column : columns) {
             if (position >= data.length) {
-                throw new IllegalArgumentException("Truncated null marker");
+                throw new StorageException(StorageErrorCode.INVALID_BLOCK, "Truncated null marker");
             }
             int marker = Byte.toUnsignedInt(data[position++]);
             if (marker == 0) {
                 if (!column.nullable()) {
-                    throw new IllegalArgumentException("NULL in non-nullable column " + column.name());
+                    throw new StorageException(StorageErrorCode.INVALID_BLOCK, "NULL in non-nullable column " + column.name());
                 }
                 values.add(null);
                 continue;
             }
             if (marker != 1) {
-                throw new IllegalArgumentException("Invalid null marker");
+                throw new StorageException(StorageErrorCode.INVALID_BLOCK, "Invalid null marker");
             }
             int size = switch (column.type()) {
                 case INTEGER, FLOAT -> 4;
                 case CHAR -> column.length();
                 case VARCHAR -> {
                     if (data.length - position < 2) {
-                        throw new IllegalArgumentException("Truncated VARCHAR length");
+                        throw new StorageException(StorageErrorCode.INVALID_BLOCK, "Truncated VARCHAR length");
                     }
-                    int length = (Byte.toUnsignedInt(data[position]) << 8)
-                            | Byte.toUnsignedInt(data[position + 1]);
+                    int length = (Byte.toUnsignedInt(data[position]) << 8) | Byte.toUnsignedInt(data[position + 1]);
                     yield 2 + length;
                 }
             };
             if (size > data.length - position) {
-                throw new IllegalArgumentException("Truncated field " + column.name());
+                throw new StorageException(StorageErrorCode.INVALID_BLOCK, "Truncated field " + column.name());
             }
             byte[] field = java.util.Arrays.copyOfRange(data, position, position + size);
             values.add(codec(column.type()).decode(field, column));
             position += size;
         }
         if (position != data.length) {
-            throw new IllegalArgumentException("Trailing record bytes");
+            throw new StorageException(StorageErrorCode.INVALID_BLOCK, "Trailing record bytes");
         }
         return values;
     }
 
     // mengecek skema lalu mengambil daftar kolomnya
     private List<ColumnDefinition> columns(TableSchema schema) {
-        if (schema == null || schema.tableName() == null || schema.tableName().isBlank()
-                || schema.columns() == null || schema.columns().isEmpty()) {
-            throw new IllegalArgumentException("Missing schema columns");
+        if (schema == null || schema.tableName() == null || schema.tableName().isBlank() || schema.columns() == null || schema.columns().isEmpty()) {
+            throw new StorageException(StorageErrorCode.SCHEMA_VIOLATION, "Missing schema columns");
         }
         List<ColumnDefinition> columns = new ArrayList<>(schema.columns());
         Set<String> names = new HashSet<>();
         for (ColumnDefinition column : columns) {
             if (column == null || column.type() == null) {
-                throw new IllegalArgumentException("Invalid column");
+                throw new StorageException(StorageErrorCode.SCHEMA_VIOLATION, "Invalid column");
             }
             CodecSupport.requireColumn(column, column.type());
             if (!names.add(column.name())) {
-                throw new IllegalArgumentException("Duplicate column " + column.name());
+                throw new StorageException(StorageErrorCode.SCHEMA_VIOLATION, "Duplicate column " + column.name());
             }
         }
         return columns;

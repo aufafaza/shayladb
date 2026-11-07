@@ -4,6 +4,8 @@ import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import mdbms.storage.exception.StorageErrorCode;
+import mdbms.storage.exception.StorageException;
 
 public final class SlottedPage {
     public static final int PAGE_SIZE = 4096;
@@ -23,20 +25,20 @@ public final class SlottedPage {
     // membuat halaman dari data biner
     public SlottedPage(byte[] bytes) {
         if (bytes == null || bytes.length != PAGE_SIZE) {
-            throw new IllegalArgumentException("Page must contain exactly 4096 bytes");
+            throw new StorageException(StorageErrorCode.INVALID_BLOCK, "Page must contain exactly 4096 bytes");
         }
         ByteBuffer buffer = ByteBuffer.wrap(bytes);
         if (buffer.getInt() != MAGIC || buffer.getInt() != VERSION) {
-            throw new IllegalArgumentException("Invalid page magic or version");
+            throw new StorageException(StorageErrorCode.INVALID_BLOCK, "Invalid page magic or version");
         }
         int count = buffer.getInt();
         int payloadStart = buffer.getInt();
         if (count < 0 || count > (PAGE_SIZE - HEADER_SIZE) / SLOT_SIZE) {
-            throw new IllegalArgumentException("Invalid slot count");
+            throw new StorageException(StorageErrorCode.INVALID_BLOCK, "Invalid slot count");
         }
         int directoryEnd = HEADER_SIZE + count * SLOT_SIZE;
         if (payloadStart < directoryEnd || payloadStart > PAGE_SIZE) {
-            throw new IllegalArgumentException("Invalid payload boundary");
+            throw new StorageException(StorageErrorCode.INVALID_BLOCK, "Invalid payload boundary");
         }
         boolean[] used = new boolean[PAGE_SIZE];
         int occupiedBytes = 0;
@@ -52,11 +54,10 @@ public final class SlottedPage {
                 records.add(null);
                 reservations.add(length);
                 reservedBytes += length;
-            } else if (state == OCCUPIED && length > 0 && offset >= payloadStart
-                    && (long) offset + length <= PAGE_SIZE) {
+            } else if (state == OCCUPIED && length > 0 && offset >= payloadStart && (long) offset + length <= PAGE_SIZE) {
                 for (int at = offset; at < offset + length; at++) {
                     if (used[at]) {
-                        throw new IllegalArgumentException("Overlapping records");
+                        throw new StorageException(StorageErrorCode.INVALID_BLOCK, "Overlapping records");
                     }
                     used[at] = true;
                 }
@@ -64,18 +65,17 @@ public final class SlottedPage {
                 reservations.add(0);
                 occupiedBytes += length;
             } else {
-                throw new IllegalArgumentException("Invalid slot entry");
+                throw new StorageException(StorageErrorCode.INVALID_BLOCK, "Invalid slot entry");
             }
         }
-        if (occupiedBytes != PAGE_SIZE - payloadStart
-                || (long) directoryEnd + occupiedBytes + reservedBytes > PAGE_SIZE) {
-            throw new IllegalArgumentException("Invalid page space accounting");
+        if (occupiedBytes != PAGE_SIZE - payloadStart || (long) directoryEnd + occupiedBytes + reservedBytes > PAGE_SIZE) {
+            throw new StorageException(StorageErrorCode.INVALID_BLOCK, "Invalid page space accounting");
         }
     }
 
     public boolean hasSpace(int recordLength) {
         if (recordLength <= 0) {
-            throw new IllegalArgumentException("Record length must be positive");
+            throw new StorageException(StorageErrorCode.SCHEMA_VIOLATION, "Record length must be positive");
         }
         return usedBytes() + SLOT_SIZE + recordLength <= PAGE_SIZE;
     }
@@ -92,7 +92,7 @@ public final class SlottedPage {
     // menyiapkan slot kosong buat record baru
     public int reserveSlot(int recordLength) {
         if (!hasSpace(recordLength)) {
-            throw new IllegalStateException("Page is full");
+            throw new StorageException(StorageErrorCode.SLOT_UNAVAILABLE, "Page is full");
         }
         int slot = records.size();
         records.add(null);
@@ -104,10 +104,9 @@ public final class SlottedPage {
     public boolean reserveSlotAt(int slot, int length) {
         checkSlot(slot);
         if (length <= 0) {
-            throw new IllegalArgumentException("Record length must be positive");
+            throw new StorageException(StorageErrorCode.SCHEMA_VIOLATION, "Record length must be positive");
         }
-        if (records.get(slot) != null || reservations.get(slot) != 0
-                || usedBytes() + length > PAGE_SIZE) {
+        if (records.get(slot) != null || reservations.get(slot) != 0 || usedBytes() + length > PAGE_SIZE) {
             return false;
         }
         reservations.set(slot, length);
@@ -127,10 +126,10 @@ public final class SlottedPage {
     public void writeSlot(int slot, byte[] data) {
         checkSlot(slot);
         if (reservations.get(slot) == 0 || records.get(slot) != null) {
-            throw new IllegalStateException("Slot is not reserved");
+            throw new StorageException(StorageErrorCode.SLOT_UNAVAILABLE, "Slot is not reserved");
         }
         if (data == null || data.length == 0 || data.length > reservations.get(slot)) {
-            throw new IllegalArgumentException("Record exceeds reserved length");
+            throw new StorageException(StorageErrorCode.SCHEMA_VIOLATION, "Record exceeds reserved length");
         }
         records.set(slot, data.clone());
         reservations.set(slot, 0);
@@ -140,11 +139,11 @@ public final class SlottedPage {
     public boolean replaceRecord(int slot, byte[] data) {
         checkSlot(slot);
         if (data == null || data.length == 0) {
-            throw new IllegalArgumentException("Record data must not be empty");
+            throw new StorageException(StorageErrorCode.SCHEMA_VIOLATION, "Record data must not be empty");
         }
         byte[] previous = records.get(slot);
         if (previous == null) {
-            throw new IllegalStateException("Slot contains no active record");
+            throw new StorageException(StorageErrorCode.SLOT_UNAVAILABLE, "Slot contains no active record");
         }
         if (usedBytes() - previous.length + data.length > PAGE_SIZE) {
             return false;
@@ -157,7 +156,7 @@ public final class SlottedPage {
         checkSlot(slot);
         byte[] record = records.get(slot);
         if (record == null) {
-            throw new IllegalStateException("Slot contains no record");
+            throw new StorageException(StorageErrorCode.SLOT_UNAVAILABLE, "Slot contains no record");
         }
         return record.clone();
     }
@@ -165,27 +164,9 @@ public final class SlottedPage {
     public void deleteRecord(int slot) {
         checkSlot(slot);
         if (records.get(slot) == null) {
-            throw new IllegalStateException("Slot contains no record");
+            throw new StorageException(StorageErrorCode.SLOT_UNAVAILABLE, "Slot contains no record");
         }
         records.set(slot, null);
-    }
-
-    // melihat posisi dan kondisi sebuah slot
-    public SlotEntry slotEntry(int slot) {
-        checkSlot(slot);
-        byte[] record = records.get(slot);
-        if (record == null) {
-            return reservations.get(slot) > 0
-                    ? new SlotEntry(-1, reservations.get(slot), false)
-                    : new SlotEntry(0, 0, false);
-        }
-        int offset = PAGE_SIZE;
-        for (int i = 0; i <= slot; i++) {
-            if (records.get(i) != null) {
-                offset -= records.get(i).length;
-            }
-        }
-        return new SlotEntry(offset, record.length, true);
     }
 
     // menyusun seluruh halaman jadi data biner
@@ -226,7 +207,7 @@ public final class SlottedPage {
 
     private void checkSlot(int slot) {
         if (slot < 0 || slot >= records.size()) {
-            throw new IllegalArgumentException("Invalid slot " + slot);
+            throw new StorageException(StorageErrorCode.SLOT_UNAVAILABLE, "Invalid slot " + slot);
         }
     }
 }

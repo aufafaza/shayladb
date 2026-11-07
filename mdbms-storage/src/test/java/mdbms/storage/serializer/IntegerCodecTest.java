@@ -4,6 +4,8 @@ import static org.junit.jupiter.api.Assertions.*;
 
 import mdbms.models.schema.ColumnDefinition;
 import mdbms.models.schema.DataType;
+import mdbms.storage.exception.StorageErrorCode;
+import mdbms.storage.exception.StorageException;
 import org.junit.jupiter.api.Test;
 
 class IntegerCodecTest {
@@ -21,9 +23,11 @@ class IntegerCodecTest {
     // memastikan tipe dan ukuran byte yang salah ditolak
     @Test
     void rejectsWrongTypeAndSize() {
-        assertThrows(IllegalArgumentException.class, () -> codec.encode(1L, column));
-        assertThrows(IllegalArgumentException.class, () -> codec.decode(new byte[3], column));
-        assertThrows(IllegalArgumentException.class,
+        assertEquals(StorageErrorCode.SCHEMA_VIOLATION,
+                assertThrows(StorageException.class, () -> codec.encode(1L, column)).getCode());
+        assertEquals(StorageErrorCode.INVALID_BLOCK,
+                assertThrows(StorageException.class, () -> codec.decode(new byte[3], column)).getCode());
+        assertThrows(StorageException.class,
                 () -> codec.encode(1, new ColumnDefinition("bad", DataType.FLOAT, 0, false)));
     }
 }
