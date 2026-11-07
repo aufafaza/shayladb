@@ -1,5 +1,6 @@
 package mdbms.storage;
 
+import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -433,7 +434,7 @@ public final class StorageManager implements IDataAccess, ISchemaCatalog, IStati
 
                     String stringValue = (String) value;
 
-                    if (column.length() > 0 && stringValue.length() > column.length()){
+                    if (column.length() > 0 && stringValue.getBytes(StandardCharsets.UTF_8).length > column.length()){
                         throw new StorageException(
                             StorageErrorCode.SCHEMA_VIOLATION,
                             "Value too long for column: " + column.name()
