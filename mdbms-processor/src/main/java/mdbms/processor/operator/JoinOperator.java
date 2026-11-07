@@ -3,7 +3,11 @@ package mdbms.processor.operator;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.function.BiPredicate;
+
+import mdbms.models.query.ExpressionTree;
+import mdbms.processor.ExpressionEvaluator;
 import mdbms.processor.IResultRow;
+import mdbms.processor.exception.UnexpectedTypeException;
 
 public class JoinOperator extends QueryBinaryOperator {
     private final BiPredicate<IResultRow, IResultRow> condition;
@@ -15,11 +19,26 @@ public class JoinOperator extends QueryBinaryOperator {
     private int rightIndex;
 
     public JoinOperator(IQueryOperator left, IQueryOperator right,
-                        BiPredicate<IResultRow, IResultRow> condition,
-                        boolean natural, int blockSize) {
+            List<ExpressionTree> conditions,
+            boolean natural, int blockSize) {
         super(left, right);
-        if (blockSize <= 0) throw new IllegalArgumentException("Ukuran blok harus positif");
-        this.condition = condition;
+        if (blockSize <= 0)
+            throw new IllegalArgumentException("Ukuran blok harus positif");
+        this.condition = (row1, row2) -> conditions.stream()
+                .map(condition -> {
+                    Object result = ExpressionEvaluator.evaluate(condition, row1, row2);
+                    if (result instanceof String) {
+                        throw new UnexpectedTypeException("BOOLEAN", "STRING");
+                    }
+                    if (result instanceof Long) {
+                        throw new UnexpectedTypeException("BOOLEAN", "INTEGER");
+                    }
+                    if (result instanceof Double) {
+                        throw new UnexpectedTypeException("BOOLEAN", "REAL");
+                    }
+                    return (Boolean) result;
+                })
+                .reduce(true, (a, b) -> a && b);
         this.natural = natural;
         this.blockSize = blockSize;
     }
@@ -56,7 +75,7 @@ public class JoinOperator extends QueryBinaryOperator {
                 while (rightIndex < rightRows.size()) {
                     IResultRow right = rightRows.get(rightIndex++);
                     boolean match = natural ? JoinRowUtil.naturalMatch(left, right)
-                        : condition == null || condition.test(left, right);
+                            : condition == null || condition.test(left, right); 
                     if (match) return JoinRowUtil.combine(left, right, natural);
                 }
                 rightIndex = 0;

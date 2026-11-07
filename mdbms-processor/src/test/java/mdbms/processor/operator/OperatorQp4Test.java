@@ -15,7 +15,8 @@ class OperatorQp4Test {
             public ResultTableSchema getSchema() { return new ResultTableSchema(); }
 
             @Override
-            public Object get(String columnName) { return "nilai".equals(columnName) ? nilai : null; }
+            public Object get(String columnName) { if ("nilai".equals(columnName)) return nilai; if ("kelompok".equals(columnName)) return nilai % 2;
+            return null;}
 
             @Override
             public Object get(String tableName, String columnName) { return get(columnName); }
@@ -84,5 +85,28 @@ class OperatorQp4Test {
     @Test
     void negativeLimitRejected() {
         assertThrows(IllegalArgumentException.class, () -> new LimitOperator(source(1), -1));
+    }
+    @Test
+    void sortMultipleColumns() {
+        IQueryOperator input = source(3, 1, 2);
+
+        SortOperator operator = new SortOperator(input, List.of(
+            new SortOperator.SortKey(null, "kelompok", true),
+            new SortOperator.SortKey(null, "nilai", false)
+        ));
+
+        assertEquals(List.of(2, 3, 1), collect(operator));
+    }
+
+    @Test
+    void sortMultipleColumnsAscending() {
+        IQueryOperator input = source(9, 2, 5);
+
+        SortOperator operator = new SortOperator(input, List.of(
+            new SortOperator.SortKey(null, "kelompok", true),
+            new SortOperator.SortKey(null, "nilai", true)
+        ));
+
+        assertEquals(List.of(2, 5, 9), collect(operator));
     }
 }
