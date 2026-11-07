@@ -173,7 +173,6 @@ public final class ConcurrencyControlManager implements IConcurrencyControl {
     public void abortTransaction(int txId, String reason) {
         Transaction tx = requireTransaction(txId);
         synchronized (tx) {
-            if (frm != null) frm.writeTransactionLog(txId, LogType.ABORT);
             if (tx.getState() == TransactionState.COMMITTED || tx.getState() == TransactionState.ABORTED) {
                 return;
             }
