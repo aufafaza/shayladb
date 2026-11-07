@@ -2,7 +2,7 @@ package mdbms.processor.operator;
 
 import java.util.List;
 
-import mdbms.models.data.Condition;
+import mdbms.models.query.ExpressionTree;
 import mdbms.processor.ExpressionEvaluator;
 import mdbms.processor.IResultRow;
 
