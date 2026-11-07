@@ -131,6 +131,7 @@ public class HeapFile{
         }
     }
 
+    // ganti isi baris di tempat, kalau ga muat baris baru di insert dulu baru yang lama dihapus biar data ga hilang kalau gagal
     public Row update(RowId rowId, List<Object> values){
         byte[] record = serializer.serialize(values, schema);
         Block block = pool.pin(fileName, rowId.blockNumber());
@@ -151,8 +152,19 @@ public class HeapFile{
             pool.unpin(block, dirty, NO_LSN);
         }
 
-        delete(rowId);        
-        return new Row(insert(values), values);
+        RowId moved = insert(values);
+        try{
+            delete(rowId);
+        } catch (RuntimeException e){
+            try{
+                delete(moved);
+            } catch (RuntimeException cleanup){
+                e.addSuppressed(cleanup);
+            }
+            throw e;
+        }
+
+        return new Row(moved, values);
     }
 
     public Row delete(RowId rowId){

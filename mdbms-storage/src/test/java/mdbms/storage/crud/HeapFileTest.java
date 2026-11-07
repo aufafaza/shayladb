@@ -7,14 +7,17 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.List;
 import mdbms.models.data.Row;
 import mdbms.models.data.RowId;
 import mdbms.models.schema.ColumnDefinition;
 import mdbms.models.schema.DataType;
 import mdbms.models.schema.TableSchema;
+import mdbms.storage.block.Block;
 import mdbms.storage.block.BlockManager;
 import mdbms.storage.block.BufferPool;
+import mdbms.storage.exception.StorageErrorCode;
 import mdbms.storage.exception.StorageException;
 import mdbms.storage.serializer.BinaryRecordSerializer;
 import mdbms.storage.serializer.IRecordSerializer;
@@ -203,5 +206,24 @@ class HeapFileTest {
         try (RowIterator iterator = heapFile.scan()){
             assertFalse(iterator.hasNext());
         }
+    }
+
+    // update yang harus pindah tapi insert nya gagal karena buffer penuh tetap nyimpen baris lama
+    @Test
+    void failedMoveKeepsOldRow(){
+        RowId firstId = heapFile.insert(List.of(1, "a".repeat(1400)));
+        heapFile.insert(List.of(2, "b".repeat(1400)));
+        Block heldPage = pool.pin("users.tbl", firstId.blockNumber());
+        List<Block> others = new ArrayList<>();
+        for (int i = 0; i < 7; i++) others.add(pool.appendBlock("other.tbl"));
+
+        StorageException e = assertThrows(StorageException.class,
+                () -> heapFile.update(firstId, List.of(1, "c".repeat(3000))));
+
+        assertEquals(StorageErrorCode.BUFFER_FULL, e.getCode());
+        assertEquals(List.of(1, "a".repeat(1400)), heapFile.fetch(firstId).values());
+        assertEquals(1, heapFile.blockCount());
+        pool.unpin(heldPage, false, 0);
+        for (Block block : others) pool.unpin(block, false, 0);
     }
 }
