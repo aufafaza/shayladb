@@ -259,6 +259,7 @@ public final class ConcurrencyControlManager implements IConcurrencyControl {
     private void configureProtocol(ConcurrencyProtocol protocol) {
         if (protocol instanceof LockBasedProtocol lockBasedProtocol) {
             lockBasedProtocol.setAbortHandler(this::abortFromProtocol);
+            lockBasedProtocol.setTransactionResolver(activeTransactions::get);
         }
     }
 

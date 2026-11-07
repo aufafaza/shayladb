@@ -2,6 +2,7 @@ package mdbms.concurrency;
 
 import java.util.Objects;
 import java.util.function.Consumer;
+import java.util.function.IntFunction;
 
 import mdbms.models.data.DataItem;
 import mdbms.models.transaction.AccessStatus;
@@ -13,6 +14,7 @@ public class LockBasedProtocol implements ConcurrencyProtocol {
     private final LockManager lockManager;
     private final DeadlockHandler deadlockHandler;
     private Consumer<Transaction> abortHandler;
+    private IntFunction<Transaction> transactionResolver;
 
     public LockBasedProtocol() {
         this(new LockManager(), new DeadlockHandler());
@@ -26,6 +28,11 @@ public class LockBasedProtocol implements ConcurrencyProtocol {
     void setAbortHandler(Consumer<Transaction> abortHandler) {
         this.abortHandler = Objects.requireNonNull(abortHandler, "Abort handler is required");
     }
+
+    void setTransactionResolver(IntFunction<Transaction> transactionResolver) {
+        this.transactionResolver = Objects.requireNonNull(
+                transactionResolver, "Transaction resolver is required");
+    }
     
     @Override 
     public AccessStatus requestRead(Transaction tx, DataItem data) {
@@ -34,8 +41,10 @@ public class LockBasedProtocol implements ConcurrencyProtocol {
 
     @Override
     public AccessStatus requestWrite(int txId, DataItem data, Object oldVal, Object newVal) {
-        // TODO [DELETE COMMMENT KALO UDH]
-        return AccessStatus.WAITING;
+        if (transactionResolver == null) return AccessStatus.ABORTED;
+        Transaction tx = transactionResolver.apply(txId);
+        if (tx == null) return AccessStatus.ABORTED;
+        return requestWrite(tx, data);
     }
 
     @Override 
