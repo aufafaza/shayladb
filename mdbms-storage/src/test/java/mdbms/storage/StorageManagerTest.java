@@ -160,6 +160,24 @@ class StorageManagerTest {
         assertTrue(readUsers().isEmpty());
     }
 
+    // batas char dan varchar dihitung dari byte utf-8 saat insert dan update
+    @Test
+    void textColumnsUseUtf8ByteLength() {
+        storage.updateTableSchema(new TableSchema("labels", List.of(
+                new ColumnDefinition("id", DataType.INTEGER, 0, false),
+                new ColumnDefinition("code", DataType.CHAR, 4, false),
+                new ColumnDefinition("note", DataType.VARCHAR, 4, false)),
+                List.of("id"), List.of()));
+
+        RowId rowId = storage.writeBlock(new DataWrite("labels", Map.of("id", 1, "code", "éé", "note", "éé"), List.of())).get(0);
+        assertEquals(List.of(1, "éé", "éé"), storage.fetchByRowId(rowId).values());
+        assertCode(StorageErrorCode.SCHEMA_VIOLATION,
+                () -> storage.writeBlock(new DataWrite("labels", Map.of("id", 2, "code", "ééé", "note", "ok"), List.of())));
+        assertCode(StorageErrorCode.SCHEMA_VIOLATION,
+                () -> storage.updateByRowId(rowId, List.of(1, "ok", "ééé")));
+        assertEquals(List.of(1, "éé", "éé"), storage.fetchByRowId(rowId).values());
+    }
+
     // FRM palsu yang selalu bilang log udah aman biar flush bisa jalan
     private static IFailureRecoveryManager acceptingFrm() {
         return (IFailureRecoveryManager) Proxy.newProxyInstance(

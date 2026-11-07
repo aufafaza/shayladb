@@ -15,12 +15,10 @@ final class CodecSupport {
 
     // validasi kolom sesuai tipenya
     static void requireColumn(ColumnDefinition column, DataType type) {
-        if (column == null || column.name() == null || column.name().isBlank()
-                || column.type() != type) {
+        if (column == null || column.name() == null || column.name().isBlank() || column.type() != type) {
             throw new StorageException(StorageErrorCode.SCHEMA_VIOLATION, "Invalid column for " + type);
         }
-        if (column.length() < 0 || ((type == DataType.CHAR || type == DataType.VARCHAR)
-                && (column.length() == 0 || column.length() > 65535))) {
+        if (column.length() < 0 || ((type == DataType.CHAR || type == DataType.VARCHAR) && (column.length() == 0 || column.length() > 65535))) {
             throw new StorageException(StorageErrorCode.SCHEMA_VIOLATION, "Invalid length for " + column.name());
         }
     }

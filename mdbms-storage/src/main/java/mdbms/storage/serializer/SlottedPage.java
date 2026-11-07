@@ -54,8 +54,7 @@ public final class SlottedPage {
                 records.add(null);
                 reservations.add(length);
                 reservedBytes += length;
-            } else if (state == OCCUPIED && length > 0 && offset >= payloadStart
-                    && (long) offset + length <= PAGE_SIZE) {
+            } else if (state == OCCUPIED && length > 0 && offset >= payloadStart && (long) offset + length <= PAGE_SIZE) {
                 for (int at = offset; at < offset + length; at++) {
                     if (used[at]) {
                         throw new StorageException(StorageErrorCode.INVALID_BLOCK, "Overlapping records");
@@ -69,8 +68,7 @@ public final class SlottedPage {
                 throw new StorageException(StorageErrorCode.INVALID_BLOCK, "Invalid slot entry");
             }
         }
-        if (occupiedBytes != PAGE_SIZE - payloadStart
-                || (long) directoryEnd + occupiedBytes + reservedBytes > PAGE_SIZE) {
+        if (occupiedBytes != PAGE_SIZE - payloadStart || (long) directoryEnd + occupiedBytes + reservedBytes > PAGE_SIZE) {
             throw new StorageException(StorageErrorCode.INVALID_BLOCK, "Invalid page space accounting");
         }
     }
@@ -108,8 +106,7 @@ public final class SlottedPage {
         if (length <= 0) {
             throw new StorageException(StorageErrorCode.SCHEMA_VIOLATION, "Record length must be positive");
         }
-        if (records.get(slot) != null || reservations.get(slot) != 0
-                || usedBytes() + length > PAGE_SIZE) {
+        if (records.get(slot) != null || reservations.get(slot) != 0 || usedBytes() + length > PAGE_SIZE) {
             return false;
         }
         reservations.set(slot, length);

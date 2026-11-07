@@ -30,8 +30,7 @@ public final class BinaryRecordSerializer implements IRecordSerializer {
             Object value = values.get(i);
             if (value == null) {
                 if (!column.nullable()) {
-                    throw new StorageException(StorageErrorCode.SCHEMA_VIOLATION,
-                            "NULL in non-nullable column " + column.name());
+                    throw new StorageException(StorageErrorCode.SCHEMA_VIOLATION, "NULL in non-nullable column " + column.name());
                 }
                 out.write(0);
             } else {
@@ -58,8 +57,7 @@ public final class BinaryRecordSerializer implements IRecordSerializer {
             int marker = Byte.toUnsignedInt(data[position++]);
             if (marker == 0) {
                 if (!column.nullable()) {
-                    throw new StorageException(StorageErrorCode.INVALID_BLOCK,
-                            "NULL in non-nullable column " + column.name());
+                    throw new StorageException(StorageErrorCode.INVALID_BLOCK, "NULL in non-nullable column " + column.name());
                 }
                 values.add(null);
                 continue;
@@ -74,8 +72,7 @@ public final class BinaryRecordSerializer implements IRecordSerializer {
                     if (data.length - position < 2) {
                         throw new StorageException(StorageErrorCode.INVALID_BLOCK, "Truncated VARCHAR length");
                     }
-                    int length = (Byte.toUnsignedInt(data[position]) << 8)
-                            | Byte.toUnsignedInt(data[position + 1]);
+                    int length = (Byte.toUnsignedInt(data[position]) << 8) | Byte.toUnsignedInt(data[position + 1]);
                     yield 2 + length;
                 }
             };
@@ -94,8 +91,7 @@ public final class BinaryRecordSerializer implements IRecordSerializer {
 
     // mengecek skema lalu mengambil daftar kolomnya
     private List<ColumnDefinition> columns(TableSchema schema) {
-        if (schema == null || schema.tableName() == null || schema.tableName().isBlank()
-                || schema.columns() == null || schema.columns().isEmpty()) {
+        if (schema == null || schema.tableName() == null || schema.tableName().isBlank() || schema.columns() == null || schema.columns().isEmpty()) {
             throw new StorageException(StorageErrorCode.SCHEMA_VIOLATION, "Missing schema columns");
         }
         List<ColumnDefinition> columns = new ArrayList<>(schema.columns());
@@ -106,8 +102,7 @@ public final class BinaryRecordSerializer implements IRecordSerializer {
             }
             CodecSupport.requireColumn(column, column.type());
             if (!names.add(column.name())) {
-                throw new StorageException(StorageErrorCode.SCHEMA_VIOLATION,
-                        "Duplicate column " + column.name());
+                throw new StorageException(StorageErrorCode.SCHEMA_VIOLATION, "Duplicate column " + column.name());
             }
         }
         return columns;
