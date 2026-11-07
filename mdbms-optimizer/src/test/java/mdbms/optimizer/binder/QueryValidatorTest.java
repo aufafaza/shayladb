@@ -376,6 +376,12 @@ class QueryValidatorTest {
             }
         }
 
+        public void dropTable(String table) {
+            if (table != null) {
+                tables.remove(table.toLowerCase());
+            }
+        }
+
         @Override
         public List<IndexInfo> getIndexes(String table) {
             return List.of();

@@ -491,6 +491,15 @@ public class Main {
             }
         }
 
+        public void dropTable(String table) {
+            if (table == null) {
+                return;
+            }
+            String key = table.toLowerCase(Locale.ROOT);
+            tables.remove(key);
+            stats.remove(key);
+        }
+
         @Override
         public List<IndexInfo> getIndexes(String table) {
             return List.of();
