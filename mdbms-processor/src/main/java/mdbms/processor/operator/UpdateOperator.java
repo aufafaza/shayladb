@@ -5,28 +5,31 @@ import java.util.List;
 import mdbms.api.IConcurrencyControl;
 import mdbms.api.IDataAccess;
 import mdbms.api.ISchemaCatalog;
-import mdbms.models.AccessStatus;
-import mdbms.models.ColumnDefinition;
-import mdbms.models.DataItem;
+import mdbms.models.data.DataItem;
+import mdbms.models.data.Row;
+import mdbms.models.query.ExpressionTree;
+import mdbms.models.schema.ColumnDefinition;
+import mdbms.models.schema.DataType;
+import mdbms.processor.ExpressionEvaluator;
 import mdbms.processor.IResultRow;
 
-public class UpdateOperator extends QueryUnaryOperator {
+public class UpdateOperator extends QueryUnaryOperator implements IWriteOperator {
     private final IDataAccess dataAccess;
     private final ISchemaCatalog schemaCatalog;
     private final IConcurrencyControl concurrencyControlManager;
     private final int transactionId;
     private final String tableName;
     private final String columnName;
-    private final Object newValue;
+    private final ExpressionTree newValue;
     private List<String> columnNames;
     private int columnIndex;
+    private DataType columnType;
     private List<IResultRow> targetRows;
-    private boolean isDone;
     private int affectedRows;
 
     public UpdateOperator(IQueryOperator childOperator, IDataAccess dataAccess, ISchemaCatalog schemaCatalog,
             IConcurrencyControl concurrencyControlManager, int transactionId, String tableName,
-            String columnName, Object newValue) {
+            String columnName, ExpressionTree newValue) {
         super(childOperator);
         this.dataAccess = dataAccess;
         this.schemaCatalog = schemaCatalog;
@@ -38,10 +41,12 @@ public class UpdateOperator extends QueryUnaryOperator {
     }
 
     public void open() {
-        columnNames = schemaCatalog.getTableSchema(tableName).columns().stream()
+        List<ColumnDefinition> columns = schemaCatalog.getTableSchema(tableName).columns();
+        columnNames = columns.stream()
                 .map(ColumnDefinition::name)
                 .toList();
         columnIndex = columnNames.indexOf(columnName);
+        columnType = columns.get(columnIndex).type();
 
         targetRows = new ArrayList<>();
         childOperator.open();
@@ -50,28 +55,27 @@ public class UpdateOperator extends QueryUnaryOperator {
             targetRows.add(row);
         }
         childOperator.close();
-        isDone = false;
-        affectedRows = 0;
     }
 
     public IResultRow next() {
-        if (isDone) return null;
-        isDone = true;
-
         for (IResultRow row : targetRows) {
-            requestWrite(new DataItem(tableName, row.getRowId()));
-            List<Object> newValues = new ArrayList<>();
+            List<Object> oldValues = new ArrayList<>();
             for (String name : columnNames) {
-                newValues.add(row.get(name));
+                oldValues.add(row.get(name));
             }
-            // TODO BUTUH ExpressionEvaluator dari QP2
-            newValues.set(columnIndex, newValue);
-            // TODO BUTUH method dari CCM untuk kirim catatan perubahan ke FRM
-            dataAccess.updateByRowId(row.getRowId(), newValues);
+            List<Object> newValues = new ArrayList<>(oldValues);
+            newValues.set(columnIndex, toColumnType(ExpressionEvaluator.evaluate(newValue, row), columnType));
+
+            DataItem item = new DataItem(tableName, row.getRowId());
+            AccessPermission.write(concurrencyControlManager, transactionId, item, oldValues, newValues);
+            Row updated = dataAccess.updateByRowId(row.getRowId(), newValues);
+            if (!updated.rowId().equals(row.getRowId())) {
+                AccessPermission.write(concurrencyControlManager, transactionId, item, newValues, null);
+                AccessPermission.write(concurrencyControlManager, transactionId,
+                        new DataItem(tableName, updated.rowId()), null, newValues);
+            }
         }
         affectedRows = targetRows.size();
-
-        // TODO BUTUH ResultRow dari QP2 untuk return jumlah baris yang diubah
         return null;
     }
 
@@ -82,18 +86,11 @@ public class UpdateOperator extends QueryUnaryOperator {
         return affectedRows;
     }
 
-    private void requestWrite(DataItem item) {
-        AccessStatus status = concurrencyControlManager.requestWrite(transactionId, item);
-        while (status == AccessStatus.WAITING) {
-            try {
-                Thread.sleep(10);
-            } catch (InterruptedException e) {
-                throw new IllegalStateException("Interrupted while waiting for CCM", e);
-            }
-            status = concurrencyControlManager.requestWrite(transactionId, item);
+    private static Object toColumnType(Object value, DataType type) {
+        if (value instanceof Number number) {
+            if (type == DataType.INTEGER) return number.intValue();
+            if (type == DataType.FLOAT) return number.floatValue();
         }
-        if (status == AccessStatus.ABORTED) {
-            throw new IllegalStateException("Transaction " + transactionId + " was aborted by CCM");
-        }
+        return value;
     }
 }

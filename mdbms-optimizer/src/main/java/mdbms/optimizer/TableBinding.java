@@ -1,6 +1,6 @@
 package mdbms.optimizer;
 
-import mdbms.models.TableSchema;
+import mdbms.models.schema.TableSchema;
 
 public class TableBinding {
     private final String tableName;

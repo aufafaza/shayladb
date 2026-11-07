@@ -2,12 +2,15 @@ package mdbms.processor.operator;
 
 import java.util.List;
 
+import mdbms.api.IConcurrencyControl;
 import mdbms.api.IDataAccess;
 import mdbms.api.ISchemaCatalog;
-import mdbms.models.ColumnDefinition;
-import mdbms.models.DataRetrieval;
-import mdbms.models.Row;
-import mdbms.models.TableSchema;
+import mdbms.models.access.DataRetrieval;
+import mdbms.models.data.DataItem;
+import mdbms.models.data.Row;
+import mdbms.models.data.RowId;
+import mdbms.models.schema.ColumnDefinition;
+import mdbms.models.schema.TableSchema;
 import mdbms.processor.IResultRow;
 import mdbms.processor.ResultRow;
 import mdbms.processor.ResultTableSchema;
@@ -15,41 +18,51 @@ import mdbms.processor.ResultTableSchema;
 public final class SequentialScanOperator implements IQueryOperator{
     private final IDataAccess access; 
     private final ISchemaCatalog catalog; 
+    private final IConcurrencyControl concurrency;
+    private final int txId;
     private final String table; 
     private List<Row> rows=List.of();
     private int pos;
+    private ResultTableSchema tableSchema;
 
-    public SequentialScanOperator(IDataAccess a,ISchemaCatalog c,String t){
-        access=a;
-        catalog=c;
-        table=t;
+    public SequentialScanOperator(IDataAccess access, ISchemaCatalog catalog,
+            IConcurrencyControl concurrency, int txId, String table) {
+        this.access=access; 
+        this.catalog=catalog; 
+        this.concurrency=concurrency;
+        this.txId=txId; 
+        this.table=table;
     }
 
-    public void open(){
-        TableSchema s=catalog.getTableSchema(table);
-        if(s==null)throw new IllegalArgumentException("Tabel tidak ditemukan: "+table);
-        rows=access.readBlock(new DataRetrieval(table,s.columns().stream().map(ColumnDefinition::name).toList(),List.of())).rows();
+    @Override public void open() {
+        TableSchema schema=catalog.getTableSchema(table);
+        if(schema==null) throw new IllegalArgumentException("Tabel tidak ditemukan: "+table);
+        tableSchema=new ResultTableSchema(schema);
+        rows=access.readBlock(new DataRetrieval(table,
+                schema.columns().stream().map(ColumnDefinition::name).toList(), List.of())).rows();
         pos=0;
     }
 
-    public IResultRow next(){
-        if(pos>=rows.size()) return null;
-        Row r=rows.get(pos++);
-
-        return ResultRow.from(table,catalog.getTableSchema(table).columns(),r.values());
+    @Override public IResultRow next() {
+        while(pos<rows.size()) {
+            Row scanned=rows.get(pos++);
+            RowId id=scanned.rowId();
+            AccessPermission.read(concurrency,txId,new DataItem(table,id));
+            Row current=access.fetchByRowId(id);
+            if(current==null || current.values()==null || current.values().isEmpty()) continue;
+            ResultRow result=new ResultRow(tableSchema,current.values());
+            result.setRowId(id);
+            return result;
+        }
+        return null;
     }
 
-    public ResultTableSchema getSchema(){
-        TableSchema ts=catalog.getTableSchema(table);
-        ResultTableSchema out=new ResultTableSchema(table);
-        
-        if(ts!=null)for(ColumnDefinition c:ts.columns())out.addColumn(table,c);
-        
-        return out;
+    @Override public ResultTableSchema getOutputSchema() { 
+        return tableSchema; 
     }
 
-    public void close(){
-        rows=List.of();
-        pos=0;
+    @Override public void close() { 
+        rows=List.of(); 
+        pos=0; 
     }
 }

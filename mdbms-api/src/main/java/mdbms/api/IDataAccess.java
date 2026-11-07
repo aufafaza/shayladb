@@ -1,12 +1,12 @@
 package mdbms.api;
 
 import java.util.List;
-import mdbms.models.DataDeletion;
-import mdbms.models.DataRetrieval;
-import mdbms.models.DataWrite;
-import mdbms.models.Row;
-import mdbms.models.RowId;
-import mdbms.models.Rows;
+import mdbms.models.access.DataDeletion;
+import mdbms.models.access.DataRetrieval;
+import mdbms.models.access.DataWrite;
+import mdbms.models.data.Row;
+import mdbms.models.data.RowId;
+import mdbms.models.data.Rows;
 
 public interface IDataAccess{
     Rows readBlock(DataRetrieval request);

@@ -3,8 +3,8 @@ package mdbms.optimizer;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
-import mdbms.models.ColumnReference;
-import mdbms.models.ExpressionTree;
+import mdbms.models.query.ColumnReference;
+import mdbms.models.query.ExpressionTree;
 
 public class BindingContext {
     private Map<String, TableBinding> tableBindings;

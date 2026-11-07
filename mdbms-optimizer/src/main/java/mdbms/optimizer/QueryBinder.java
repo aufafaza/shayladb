@@ -1,10 +1,10 @@
 package mdbms.optimizer;
 
 import mdbms.api.ISchemaCatalog;
-import mdbms.models.ColumnReference;
-import mdbms.models.ExpressionTree;
-import mdbms.models.QueryTree;
-import mdbms.models.TableSchema;
+import mdbms.models.query.ColumnReference;
+import mdbms.models.query.ExpressionTree;
+import mdbms.models.query.QueryTree;
+import mdbms.models.schema.TableSchema;
 
 public class QueryBinder {
     private final ISchemaCatalog schemaCatalog;
