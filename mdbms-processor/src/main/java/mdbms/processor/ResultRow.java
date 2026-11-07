@@ -7,6 +7,8 @@ import java.util.Objects;
 
 import mdbms.models.data.RowId;
 import mdbms.models.schema.ColumnDefinition;
+import mdbms.processor.exception.AmbiguousColumnException;
+import mdbms.processor.exception.InvalidColumnReferenceException;
 
 public class ResultRow implements IResultRow {
     private final ResultTableSchema tableSchema;
@@ -14,9 +16,8 @@ public class ResultRow implements IResultRow {
     private RowId rowId;
 
     public ResultRow(ResultTableSchema schema) {
-        if (schema == null) {
-            throw new NullPointerException("Schema cannot be null");
-        }
+        Objects.requireNonNull(schema);
+        
         this.tableSchema = Objects.requireNonNull(schema, "schema");
         for (ColumnDefinition column : schema.getColumns()) {
             String tableName = schema.getColumnTableOrigin(column);
@@ -29,9 +30,14 @@ public class ResultRow implements IResultRow {
 
     public ResultRow(ResultTableSchema schema, List<Object> values) {
         this(schema);
-        for (ColumnDefinition column : schema.getColumns()) {
+        Objects.requireNonNull(values, "values");
+        if (values.size() != schema.getColumns().size()) {
+            throw new IllegalArgumentException("Value count differs from result schema");
+        }
+        for (int i = 0; i < schema.getColumns().size(); i++) {
+            ColumnDefinition column = schema.getColumns().get(i);
             String tableName = schema.getColumnTableOrigin(column);
-            this.values.get(tableName).put(column.name(), null);
+            this.values.get(tableName).put(column.name(), values.get(i));
         }
     }
 
@@ -42,15 +48,13 @@ public class ResultRow implements IResultRow {
 
     @Override
     public Object get(String columnName) {
-        if (columnName == null) {
-            throw new NullPointerException("Cannot get null columnName");
-        }
+        Objects.requireNonNull(columnName);
 
         ColumnDefinition matchingColumn = null;
         for (ColumnDefinition column : tableSchema.getColumns()) {
             if (column.name().equals(columnName)) {
                 if (matchingColumn != null) {
-                    throw new IllegalArgumentException("Ambiguous column name: " + columnName);
+                    throw new AmbiguousColumnException(columnName);
                 }
                 matchingColumn = column;
             }
@@ -65,12 +69,8 @@ public class ResultRow implements IResultRow {
 
     @Override
     public Object get(String tableName, String columnName) {
-        if (tableName == null) {
-            throw new NullPointerException("tableName cannot be null");
-        }
-        if (columnName == null) {
-            throw new NullPointerException("columnName cannot be null");
-        }
+        Objects.requireNonNull(tableName);
+        Objects.requireNonNull(columnName);
 
         Map<String, Object> tableValues = values.get(tableName);
         if (tableValues == null)
@@ -80,18 +80,11 @@ public class ResultRow implements IResultRow {
     }
 
     public void set(String tableName, String columnName, Object value) {
-        if (tableName == null) {
-            throw new NullPointerException("tableName cannot be null");
-        }
-        if (columnName == null) {
-            throw new NullPointerException("columnName cannot be null");
-        }
+        Objects.requireNonNull(tableName);
+        Objects.requireNonNull(columnName);
 
-        if (!values.containsKey(tableName)) {
-            throw new IllegalArgumentException("There is no table named " + tableName);
-        }
-        if (!values.get(tableName).containsKey(columnName)) {
-            throw new IllegalArgumentException("There is no column from table " + tableName + " named " + columnName);
+        if (!values.containsKey(tableName) || !values.get(tableName).containsKey(columnName)) {
+            throw new InvalidColumnReferenceException(tableName, columnName);
         }
         values.get(tableName).put(columnName, value);
     }
