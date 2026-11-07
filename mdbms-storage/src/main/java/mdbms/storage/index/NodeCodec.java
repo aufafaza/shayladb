@@ -72,7 +72,7 @@ public final class NodeCodec {
         buffer.putInt(8, node.getNextLeaf());
 
         for (int i = 0; i < keyCount; i++) {
-            byte[] encoded = encodeKey(node.getKey(i));
+            byte[] encoded = keyCodec.encode(node.getKey(i), column);
             System.arraycopy(encoded, 0, block.data, HEADER_SIZE + i * keySize, encoded.length);
         }
         int pointerStart = HEADER_SIZE + keyCount * keySize;
@@ -106,17 +106,8 @@ public final class NodeCodec {
         return column.length();
     }
 
-    // encode key pakai codec SM3, key yang ditolak codec misal kepanjangan dalam byte jadi SCHEMA_VIOLATION
-    private byte[] encodeKey(Object key) {
-        try {
-            return keyCodec.encode(key, column);
-        } catch (IllegalArgumentException e) {
-            throw new StorageException(StorageErrorCode.SCHEMA_VIOLATION,
-                    "Key " + key + " cannot be stored in index on column " + column.name(), e);
-        }
-    }
-
     // potong slot key sesuai format codec, VARCHAR cuma diambil sepanjang prefix panjangnya
+    // error dari codec SM3 udah berupa StorageException jadi langsung diterusin
     private Object decodeKey(Block block, int offset) {
         int length = keySize;
         if (column.type() == DataType.VARCHAR) {
@@ -125,12 +116,7 @@ public final class NodeCodec {
                 throw corrupt(block, "VARCHAR key longer than its slot");
             }
         }
-        try {
-            return keyCodec.decode(Arrays.copyOfRange(block.data, offset, offset + length), column);
-        } catch (IllegalArgumentException e) {
-            throw new StorageException(StorageErrorCode.INVALID_BLOCK,
-                    "Corrupt key in index block " + block.blockNumber, e);
-        }
+        return keyCodec.decode(Arrays.copyOfRange(block.data, offset, offset + length), column);
     }
 
     // total byte header, key, dan pointer buat node dengan jumlah key segini

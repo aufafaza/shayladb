@@ -101,7 +101,7 @@ public final class StorageManager implements IDataAccess, ISchemaCatalog, IStati
                 return result;
                 
             } catch (RuntimeException e){
-                heapFile.delete(rowId);
+                undo(e, () -> heapFile.delete(rowId));
                 throw e;
             }
         }
@@ -195,7 +195,7 @@ public final class StorageManager implements IDataAccess, ISchemaCatalog, IStati
         try{
             afterWrite(rowId.tableName(), null, newRow);
         } catch (RuntimeException e){
-            heapFile.delete(rowId);
+            undo(e, () -> heapFile.delete(rowId));
             throw e;
         }
     }
@@ -216,10 +216,12 @@ public final class StorageManager implements IDataAccess, ISchemaCatalog, IStati
             return newRow;
         } catch (RuntimeException e){
             if (newRow.rowId().equals(oldRow.rowId())){
-                heapFile.update(oldRow.rowId(), oldRow.values());
+                undo(e, () -> heapFile.update(oldRow.rowId(), oldRow.values()));
             } else{
-                heapFile.delete(newRow.rowId());
-                heapFile.insertAt(oldRow.rowId(), oldRow.values());
+                undo(e, () -> {
+                    heapFile.delete(newRow.rowId());
+                    heapFile.insertAt(oldRow.rowId(), oldRow.values());
+                });
             }
 
             throw e;
@@ -236,7 +238,7 @@ public final class StorageManager implements IDataAccess, ISchemaCatalog, IStati
             afterWrite(rowId.tableName(), oldRow, null);
             return oldRow;
         } catch (RuntimeException e){
-            heapFile.insertAt(oldRow.rowId(), oldRow.values());
+            undo(e, () -> heapFile.insertAt(oldRow.rowId(), oldRow.values()));
             throw e;
         }
     }
@@ -309,16 +311,18 @@ public final class StorageManager implements IDataAccess, ISchemaCatalog, IStati
         return bufferPool.getBufferStats();
     }
 
-    // ambil schema tabel, lempar TABLE_NOT_FOUND kalau ga ada karena getSchema SM4 lempar IllegalArgumentException
+    // ambil schema tabel, getSchema SM4 udah lempar TABLE_NOT_FOUND sendiri kalau tabelnya ga ada
     private TableSchema requireSchema(String table){
-        if (!catalog.tableExists(table)){
-            throw new StorageException(
-                StorageErrorCode.TABLE_NOT_FOUND,
-                "Table not found: " + table
-            );
-        }
-
         return catalog.getSchema(table);
+    }
+
+    // jalanin pembatalan di heap, kalau pembatalannya ikut gagal errornya ditempel ke error asli biar ga ketutup
+    private static void undo(RuntimeException cause, Runnable action){
+        try{
+            action.run();
+        } catch (RuntimeException e){
+            cause.addSuppressed(e);
+        }
     }
 
     private HeapFile heapFileOf(String table){
