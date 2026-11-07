@@ -46,6 +46,7 @@ public final class ConcurrencyControlManager implements IConcurrencyControl {
     public ConcurrencyControlManager(ConcurrencyProtocol protocol, IFailureRecoveryManager frm) {
         this.protocol = Objects.requireNonNull(protocol, "protocol");
         this.frm = frm;
+        configureProtocol(protocol);
     }
 
     public void setProtocol(ConcurrencyProtocol protocol) {
@@ -55,6 +56,7 @@ public final class ConcurrencyControlManager implements IConcurrencyControl {
                 throw new IllegalStateException("Cannot change protocol while transactions are active");
             }
             this.protocol = protocol;
+            configureProtocol(protocol);
         }
     }
 
@@ -165,7 +167,7 @@ public final class ConcurrencyControlManager implements IConcurrencyControl {
     public void abortTransaction(int txId, String reason) {
         Transaction tx = requireTransaction(txId);
         synchronized (tx) {
-            frm.writeTransactionLog(txId, LogType.ABORT);
+            if (frm != null) frm.writeTransactionLog(txId, LogType.ABORT);
             if (tx.getState() == TransactionState.COMMITTED || tx.getState() == TransactionState.ABORTED) {
                 return;
             }
@@ -245,6 +247,18 @@ public final class ConcurrencyControlManager implements IConcurrencyControl {
             synchronized (lifecycleMonitor) {
                 lifecycleMonitor.notifyAll();
             }
+        }
+    }
+
+    private void abortFromProtocol(Transaction tx) {
+        if (activeTransactions.containsKey(tx.getId())) {
+            failAndAbort(tx, "Deadlock victim");
+        }
+    }
+
+    private void configureProtocol(ConcurrencyProtocol protocol) {
+        if (protocol instanceof LockBasedProtocol lockBasedProtocol) {
+            lockBasedProtocol.setAbortHandler(this::abortFromProtocol);
         }
     }
 
