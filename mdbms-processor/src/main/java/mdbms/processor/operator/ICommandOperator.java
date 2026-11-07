@@ -1,5 +1,0 @@
-package mdbms.processor.operator;
-
-public class ICommandOperator {
-    
-}
