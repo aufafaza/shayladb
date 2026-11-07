@@ -370,4 +370,88 @@ class StorageManagerTest {
         assertArrayEquals(expected, disk.readBlock("users.tbl", 0));
         assertEquals(0, storage.getBufferStats().dirtyBlocks());
     }
+
+    // adds an index that always fails during insert
+    @SuppressWarnings("unchecked")
+    private void addFailingInsertIndex() throws Exception {
+        Field managerField = StorageManager.class.getDeclaredField("indexManager");
+        managerField.setAccessible(true);
+        mdbms.storage.index.IndexManager manager =
+                (mdbms.storage.index.IndexManager) managerField.get(storage);
+
+        Field indexesField = mdbms.storage.index.IndexManager.class.getDeclaredField("indexes");
+        indexesField.setAccessible(true);
+        Map<String, mdbms.storage.index.Index> indexes =
+                (Map<String, mdbms.storage.index.Index>) indexesField.get(manager);
+
+        mdbms.storage.index.Index failingIndex = new mdbms.storage.index.Index() {
+            private final IndexInfo info =
+                    new IndexInfo("idx_fail", "users", "id", IndexType.BPLUS_TREE);
+
+            @Override
+            public void create() {}
+
+            @Override
+            public void insert(Object key, RowId rowId) {
+                throw new RuntimeException("forced index failure");
+            }
+
+            @Override
+            public void delete(Object key, RowId rowId) {}
+
+            @Override
+            public List<RowId> search(Object key) {
+                return List.of();
+            }
+
+            @Override
+            public List<RowId> searchRange(
+                    Object low, Object high, boolean lowInclusive, boolean highInclusive) {
+                return List.of();
+            }
+
+            @Override
+            public void clear() {}
+
+            @Override
+            public void destroy() {}
+
+            @Override
+            public IndexInfo getInfo() {
+                return info;
+            }
+        };
+
+        indexes.put("idx_fail", failingIndex);
+    }
+
+    // failed index maintenance removes the row already inserted into the heap
+    @Test
+    void failedIndexMaintenanceRollsBackInsert() throws Exception {
+        createUsers();
+        addFailingInsertIndex();
+
+        RuntimeException error = assertThrows(
+                RuntimeException.class,
+                () -> storage.writeBlock(
+                        new DataWrite("users", user(1, "alice", 3.5f), List.of())));
+
+        assertEquals("forced index failure", error.getMessage());
+        assertTrue(readUsers().isEmpty());
+    }
+
+    // dropping a table clears its cached statistics
+    @Test
+    void dropTableInvalidatesStatisticsCache() {
+        createUsers();
+        storage.writeBlock(new DataWrite("users", user(1, "alice", 3.5f), List.of()));
+
+        assertEquals(1, storage.getStatistics("users").nr());
+
+        storage.dropTable("users");
+        createUsers();
+
+        assertEquals(0, storage.getStatistics("users").nr());
+        assertEquals(0, storage.getStatistics("users").br());
+    }
 }
