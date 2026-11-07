@@ -17,7 +17,6 @@
 | `mdbms-processor` | `mdbms-api` |
 | `mdbms-concurrency` | `mdbms-api` |
 | `mdbms-recovery` | `mdbms-api` |
-| `mdbms-mocks` | `mdbms-api` |
 | `mdbms-app` | `mdbms-storage`, `mdbms-optimizer`, `mdbms-processor`, `mdbms-concurrency`, `mdbms-recovery` |
 
 ## Build
@@ -36,7 +35,8 @@ mvn -pl mdbms-storage -am test       # run one module's tests
 ```
 
 - Tests go in `mdbms-<name>/src/test/java/mdbms/<name>/`
-- CI fails on a PR to `main` if any module has no tests, a failing test, or only skipped tests
+- CI fails on a PR to `main` if any module with code has no tests, a failing test, or only skipped tests
+- Modules with no classes yet and `mdbms-api` (interfaces only) don't need tests
 
 ## Run
 

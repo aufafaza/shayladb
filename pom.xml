@@ -17,8 +17,8 @@
         <module>mdbms-processor</module>
         <module>mdbms-concurrency</module>
         <module>mdbms-recovery</module>
-        <module>mdbms-mocks</module>
         <module>mdbms-app</module>
+        <module>mdbms-net</module>
     </modules>
 
     <properties>
@@ -66,12 +66,12 @@
             </dependency>
             <dependency>
                 <groupId>mdbms</groupId>
-                <artifactId>mdbms-mocks</artifactId>
+                <artifactId>mdbms-app</artifactId>
                 <version>${project.version}</version>
             </dependency>
             <dependency>
                 <groupId>mdbms</groupId>
-                <artifactId>mdbms-app</artifactId>
+                <artifactId>mdbms-net</artifactId>
                 <version>${project.version}</version>
             </dependency>
             <dependency>
