@@ -3,12 +3,14 @@ package mdbms.storage;
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.lang.reflect.Field;
 import java.lang.reflect.Proxy;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -106,6 +108,13 @@ class StorageManagerTest {
         assertCode(StorageErrorCode.TABLE_NOT_FOUND,
                 () -> storage.deleteBlock(new DataDeletion("ghost", List.of())));
         assertCode(StorageErrorCode.TABLE_NOT_FOUND, () -> storage.fetchByRowId(MISSING_ROW));
+
+        // reserveRowId rejects a missing table
+        assertCode(StorageErrorCode.TABLE_NOT_FOUND, () -> storage.reserveRowId("ghost", List.of(1)));
+
+        // releaseRowId rejects a RowId from a missing table
+        assertCode(StorageErrorCode.TABLE_NOT_FOUND, () -> storage.releaseRowId(MISSING_ROW));
+
         assertCode(StorageErrorCode.TABLE_NOT_FOUND, () -> storage.insertAt(MISSING_ROW, List.of(1)));
         assertCode(StorageErrorCode.TABLE_NOT_FOUND, () -> storage.updateByRowId(MISSING_ROW, List.of(1)));
         assertCode(StorageErrorCode.TABLE_NOT_FOUND, () -> storage.deleteByRowId(MISSING_ROW));
@@ -148,6 +157,80 @@ class StorageManagerTest {
         assertEquals(Arrays.asList(2, "bob", null), remaining.get(0).values());
     }
 
+    // reserveRowId can prepare a RowId before the row is written
+    @Test
+    void reserveRowIdThenInsertAtStoresRow() {
+        createUsers();
+        List<Object> values = Arrays.asList(1, "alice", 3.5f);
+        RowId rowId = storage.reserveRowId("users", values);
+
+        assertTrue(readUsers().isEmpty());
+
+        storage.insertAt(rowId, values);
+        Row row = storage.fetchByRowId(rowId);
+
+        assertEquals(rowId, row.rowId());
+        assertEquals(values, row.values());
+        assertEquals(1, readUsers().size());
+    }
+
+    // releaseRowId cancels a reservation and the same RowId can be used again
+    @Test
+    void releaseRowIdCancelsReservation() {
+        createUsers();
+        List<Object> values = Arrays.asList(1, "alice", 3.5f);
+        RowId rowId = storage.reserveRowId("users", values);
+        storage.releaseRowId(rowId);
+
+        assertTrue(readUsers().isEmpty());
+
+        storage.insertAt(rowId, values);
+        Row row = storage.fetchByRowId(rowId);
+
+        assertEquals(rowId, row.rowId());
+        assertEquals(values, row.values());
+    }
+
+    // update does not process the same row again after it moves to another block
+    @Test
+    void updateDoesNotProcessMovedRowTwice() {
+        storage.updateTableSchema(new TableSchema(
+                "large_users",
+                List.of(
+                        new ColumnDefinition("id", DataType.INTEGER, 0, false),
+                        new ColumnDefinition("payload", DataType.VARCHAR, 3500, false)),
+                List.of("id"),
+                List.of()));
+
+        Map<String, Object> first = new LinkedHashMap<>();
+        first.put("id", 1);
+        first.put("payload", "a");
+
+        Map<String, Object> second = new LinkedHashMap<>();
+        second.put("id", 2);
+        second.put("payload", "b".repeat(1800));
+
+        storage.writeBlock(new DataWrite("large_users", first, List.of()));
+        storage.writeBlock(new DataWrite("large_users", second, List.of()));
+
+        Map<String, Object> update = Map.of("payload", "c".repeat(3000));
+        List<RowId> updated = storage.writeBlock(
+                new DataWrite("large_users", update, List.of(ID_IS_1)));
+
+        assertEquals(1, updated.size());
+
+        List<Row> rows = storage.readBlock(
+                new DataRetrieval("large_users", List.of(), List.of())).rows();
+
+        assertEquals(2, rows.size());
+
+        List<Row> matched = storage.readBlock(
+                new DataRetrieval("large_users", List.of(), List.of(ID_IS_1))).rows();
+
+        assertEquals(1, matched.size());
+        assertEquals("c".repeat(3000), matched.get(0).values().get(1));
+    }
+
     // kolom FLOAT cuma terima Float, Double dari luar ditolak
     @Test
     void floatColumnRejectsDouble() {
@@ -157,6 +240,18 @@ class StorageManagerTest {
 
         assertCode(StorageErrorCode.SCHEMA_VIOLATION,
                 () -> storage.writeBlock(new DataWrite("users", values, List.of())));
+        assertTrue(readUsers().isEmpty());
+    }
+
+    // checks VARCHAR length using UTF-8 bytes instead of character count
+    @Test
+    void varcharLengthUsesUtf8Bytes() {
+        createUsers();
+
+        Map<String, Object> values = user(1, "é".repeat(11), 3.5f);
+
+        assertCode(StorageErrorCode.SCHEMA_VIOLATION, () -> storage.writeBlock(new DataWrite("users", values, List.of())));
+
         assertTrue(readUsers().isEmpty());
     }
 
@@ -192,19 +287,28 @@ class StorageManagerTest {
         assertEquals(List.of(cici, moved.rowId()), storage.searchIndexRange("idx_users_id", null, null, true, true));
     }
 
-    // index ke tabel atau nama yang ga ada kasih kode error yang jelas, drop tabel ikut ngapus index nya
+    // index ke tabel atau nama yang ga ada kasih kode error yang jelas, drop tabel ikut ngapus index dan file tabelnya
     @Test
     void indexErrorsAndDropTable() {
         assertCode(StorageErrorCode.TABLE_NOT_FOUND, () -> storage.createIndex("idx_ghost_id", "ghost", "id"));
         assertCode(StorageErrorCode.INDEX_NOT_FOUND, () -> storage.searchIndex("idx_users_id", 1));
 
         createUsers();
+
+        // insert one row to create the table file
+        storage.writeBlock(
+                new DataWrite("users", user(1, "alice", 3.5f), List.of()));
+
         storage.createIndex("idx_users_id", "users", "id");
         assertCode(StorageErrorCode.INDEX_ALREADY_EXISTS, () -> storage.createIndex("idx_users_id", "users", "name"));
         assertCode(StorageErrorCode.COLUMN_NOT_FOUND, () -> storage.createIndex("idx_users_age", "users", "age"));
 
         storage.dropTable("users");
         assertCode(StorageErrorCode.INDEX_NOT_FOUND, () -> storage.searchIndex("idx_users_id", 1));
+
+        // dropping a table must remove its catalog entry and .tbl file
+        assertNull(storage.getTableSchema("users"));
+        assertFalse(Files.exists(directory.resolve("users.tbl")));
     }
 
     // setelah flush dan StorageManager dibikin ulang, index dibuka lagi dari katalog
