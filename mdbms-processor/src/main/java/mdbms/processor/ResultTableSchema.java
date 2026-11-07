@@ -38,9 +38,7 @@ public class ResultTableSchema {
     }
 
     public String getColumnTableOrigin(ColumnDefinition columnDefinition) {
-        if (columnDefinition == null) {
-            throw new NullPointerException("columnDefinition cannot be null");
-        }
+        Objects.requireNonNull(columnDefinition);
         return columnTableOrigin.get(columnDefinition);
     }
 
@@ -49,12 +47,8 @@ public class ResultTableSchema {
     }
 
     public void addColumn(String originTableName, ColumnDefinition columnDefinition) {
-        if (originTableName == null) {
-            throw new NullPointerException("originTableName cannot be null");
-        }
-        if (columnDefinition == null) {
-            throw new NullPointerException("columnDefinition cannot be null");
-        }
+        Objects.requireNonNull(originTableName);
+        Objects.requireNonNull(columnDefinition);
         columns.add(columnDefinition);
         columnTableOrigin.put(columnDefinition, originTableName);
     }
@@ -76,8 +70,10 @@ public class ResultTableSchema {
         for (int i = 0; i < columns.size(); i++) {
             String name = columns.get(i).name();
             if (name.equals(columnName)) {
-                if (!hasColumn) hasColumn = true;
-                else return true;
+                if (!hasColumn)
+                    hasColumn = true;
+                else
+                    return true;
             }
         }
         return false;

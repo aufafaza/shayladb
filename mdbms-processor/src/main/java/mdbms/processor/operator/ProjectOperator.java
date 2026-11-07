@@ -14,27 +14,6 @@ public class ProjectOperator extends QueryUnaryOperator{
         columns=List.copyOf(cols);
     }
 
-    public ResultTableSchema getSchema(){
-        ResultTableSchema src=childOperator.getSchema();
-        if(src==null)return null;
-        
-        ResultTableSchema out=new ResultTableSchema();
-        for(String ref:columns){
-            String[] p=parts(ref);
-            String table=p[0],name=p[1];
-            for(int i=0;i<src.getColumns().size();i++){
-                ColumnDefinition c=src.getColumns().get(i);
-                String origin=src.getOrigin(i);
-                if(c.name().equalsIgnoreCase(name)&&(table==null||table.equalsIgnoreCase(origin))){
-                    out.addColumn(origin,c);
-                    break;
-                }
-            }
-        }
-        
-        return out;
-    }
-
     public IResultRow next(){
         IResultRow in=childOperator.next();
         if(in==null)return null;

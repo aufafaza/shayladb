@@ -16,9 +16,6 @@ import mdbms.processor.operator.IQueryOperator;
 
 public class QueryProcessor implements IQueryProcessor {
     private IQueryOptimizer queryOptimizer;
-    private IDataAccess dataAccess;
-    private ISchemaCatalog schemaCatalog;
-    private IFailureRecoveryManager failureRecovery;
     private IConcurrencyControl concurrencyControl;
     private PlanTranslator planTranslator;
 
@@ -29,20 +26,16 @@ public class QueryProcessor implements IQueryProcessor {
             IFailureRecoveryManager failureRecovery,
             IConcurrencyControl concurrencyControl) {
         this.queryOptimizer = queryOptimizer;
-        this.dataAccess = dataAccess;
-        this.schemaCatalog = schemaCatalog;
-        this.failureRecovery = failureRecovery;
         this.concurrencyControl = concurrencyControl;
-        this.planTranslator = new PlanTranslator(
-                queryOptimizer, dataAccess, schemaCatalog, failureRecovery, concurrencyControl);
+        this.planTranslator = new PlanTranslator(dataAccess, schemaCatalog, concurrencyControl);
     }
 
     @Override
     public ExecutionResult executeQuery(String query, int txId) {
         ParsedQuery parsedQuery = queryOptimizer.parseQuery(query);
         ParsedQuery optimizedQuery = queryOptimizer.optimizeQuery(parsedQuery);
-        IQueryOperator translatedQuery = planTranslator.translate(optimizedQuery);
- 
+        IQueryOperator translatedQuery = planTranslator.translate(optimizedQuery, txId);
+
         List<String> columns = new ArrayList<>();
         List<List<Object>> rows = new ArrayList<>();
         try {
@@ -65,13 +58,14 @@ public class QueryProcessor implements IQueryProcessor {
                     String tableName = tableSchema.getColumnTableOrigin(definition);
                     row.add(resultRow.get(tableName, definition.name()));
                 }
-            } 
+            }
             translatedQuery.close();
         } catch (Exception e) {
             concurrencyControl.abortTransaction(txId, "Query execution failed");
+        } finally {
+            translatedQuery.close();
         }
-
-        // TODO: count the affected rows
+        
         ExecutionResult executionResult = new ExecutionResult(true, columns, rows, 0, "Query executed");
         return executionResult;
     }
