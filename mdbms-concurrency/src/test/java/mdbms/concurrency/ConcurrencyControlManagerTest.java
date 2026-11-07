@@ -217,6 +217,7 @@ class ConcurrencyControlManagerTest {
         @Override
         public RecoveryResult rollbackTransaction(int txId) {
             rolledBack.add(txId);
+            transactionLogs.add(LogType.ABORT);
             return result(true);
         }
 
