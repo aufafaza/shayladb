@@ -56,12 +56,14 @@ public class PlanTranslator {
             case TABLE_SCAN:
                 switch (queryTree.getAlgorithm()) {
                     case LINEAR_SCAN:
-                        return new SequentialScanOperator(dataAccess, schemaCatalog, queryTree.getTableName());
+                        return new SequentialScanOperator(dataAccess, schemaCatalog, concurrencyControl, txId,
+                                queryTree.getTableName());
                     case INDEX_SCAN:
-                        // return new IndexScanOperator(dataAccess, schemaCatalog,
-                        // queryTree.getTableName(),
-                        // indexName);
-                        return null;
+                        return new IndexScanOperator(dataAccess, schemaCatalog, concurrencyControl, txId,
+                                queryTree.getTableName(),
+                                queryTree.getIndexName(), null);
+                    // TODO: figure out what should be the key
+                    // I think some how operator lain harus ngasih keynya dari condition...
                     default:
                         throw new RuntimeException("Invalid algorithm for table scan: " + queryTree.getAlgorithm());
                 }
