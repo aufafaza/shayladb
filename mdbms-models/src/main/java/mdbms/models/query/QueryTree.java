@@ -7,11 +7,11 @@ public class QueryTree {
     private final QueryNodeType nodeType;
     private PhysicalAlgorithm algorithm;
     private final String tableName;
-    private final List<ExpressionTree> conditions;
+    private List<ExpressionTree> conditions;
     private final List<QueryTree> children;
     private int estimatedCost;
-    private final List<ColumnReference> projectionColumns;
-    private final boolean naturalJoin;
+    private List<ColumnReference> projectionColumns;
+    private boolean naturalJoin;
     private List<OrderByClause> orderByClauses = List.of();
     private ColumnReference updateColumn;
     private ExpressionTree updateExpression;
@@ -136,6 +136,18 @@ public class QueryTree {
     //A natural JOIN is resolved from catalog columns by the binder.
     public boolean isNaturalJoin() {
         return naturalJoin;
+    }
+
+    public void setProjectionColumns(List<ColumnReference> projectionColumns) {
+        this.projectionColumns = List.copyOf(projectionColumns);
+    }
+
+    public void setConditions(List<ExpressionTree> conditions) {
+        this.conditions = List.copyOf(conditions);
+    }
+
+    public void setNaturalJoin(boolean naturalJoin) {
+        this.naturalJoin = naturalJoin;
     }
 
     public QueryNodeType getNodeType() {

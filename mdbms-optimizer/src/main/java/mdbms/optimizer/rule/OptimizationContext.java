@@ -32,12 +32,14 @@ public class OptimizationContext {
     }
 
     public Statistic getStatistics(String table) {
-        // TODO
-        return null;
+        return (statisticsProvider != null && table != null) ? statisticsProvider.getStatistics(table) : null;
     }
 
     public List<IndexInfo> getIndexes(String table) {
-        // TODO
-        return List.of();
+        return (schemaCatalog != null && table != null) ? schemaCatalog.getIndexes(table) : List.of();
+    }
+
+    public ICostEstimator getCostEstimator() {
+        return costEstimator;
     }
 }

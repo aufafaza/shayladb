@@ -20,7 +20,8 @@ public class QueryErrorCollector {
     public boolean hasFatalError() {
         for (QueryProcessingException exception : exceptions) {
             if (exception.getCategory() == ErrorCategory.LEXICAL_ERROR
-                || exception.getCategory() == ErrorCategory.SYNTAX_ERROR) {
+                || exception.getCategory() == ErrorCategory.SYNTAX_ERROR
+                || exception.getCategory() == ErrorCategory.SEMANTIC_ERROR) {
                 return true;
             }
         }
