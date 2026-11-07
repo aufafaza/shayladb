@@ -161,6 +161,21 @@ public final class StorageManager implements IDataAccess, ISchemaCatalog, IStati
     }
 
     @Override
+    public RowId reserveRowId(String table, List<Object> values){
+        TableSchema schema = requireSchema(table);
+        validateRow(schema, values);
+        HeapFile heapFile = heapFileOf(table);
+
+        return heapFile.reserve(values);
+    }
+
+    @Override
+    public void releaseRowId(RowId rowId){
+        HeapFile heapFile = heapFileOf(rowId.tableName());
+        heapFile.releaseReservation(rowId);
+    }
+
+    @Override
     public void insertAt(RowId rowId, List<Object> values){
         TableSchema schema = requireSchema(rowId.tableName());
 
