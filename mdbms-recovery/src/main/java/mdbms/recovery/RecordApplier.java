@@ -1,6 +1,6 @@
 package mdbms.recovery;
 
-import mdbms.models.DataChangeLogRecord;
+import mdbms.models.log.DataChangeLogRecord;
 
 public class RecordApplier {
 

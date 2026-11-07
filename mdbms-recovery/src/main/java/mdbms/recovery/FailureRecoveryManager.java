@@ -1,13 +1,13 @@
 package mdbms.recovery;
 
 import mdbms.api.IFailureRecoveryManager;
-import mdbms.models.DataChangeLogRecord;
-import mdbms.models.LogRecord;
-import mdbms.models.LogType;
-import mdbms.models.RecordImage;
-import mdbms.models.RecoveryResult;
-import mdbms.models.RowId;
-import mdbms.models.TransactionLogRecord;
+import mdbms.models.data.RowId;
+import mdbms.models.log.DataChangeLogRecord;
+import mdbms.models.log.LogRecord;
+import mdbms.models.log.LogType;
+import mdbms.models.log.RecordImage;
+import mdbms.models.log.RecoveryResult;
+import mdbms.models.log.TransactionLogRecord;
 
 import java.time.Instant;
 import java.util.List;

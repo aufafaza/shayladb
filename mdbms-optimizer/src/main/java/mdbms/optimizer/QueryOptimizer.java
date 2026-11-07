@@ -3,7 +3,11 @@ package mdbms.optimizer;
 import java.util.List;
 import mdbms.api.IQueryOptimizer;
 import mdbms.api.ISchemaCatalog;
-import mdbms.models.ParsedQuery;
+import mdbms.models.query.ParsedQuery;
+import mdbms.optimizer.binder.IQueryValidator;
+import mdbms.optimizer.cost.ICostEstimator;
+import mdbms.optimizer.parser.ShaylaParser;
+import mdbms.optimizer.rule.IOptimizationRule;
 
 public class QueryOptimizer implements IQueryOptimizer {
     private final ISchemaCatalog schemaCatalog;
