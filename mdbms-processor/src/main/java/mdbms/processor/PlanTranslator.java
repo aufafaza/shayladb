@@ -11,6 +11,7 @@ import mdbms.api.IQueryOptimizer;
 import mdbms.api.ISchemaCatalog;
 import mdbms.models.query.ParsedQuery;
 import mdbms.models.query.QueryTree;
+import mdbms.models.query.SortDirection;
 import mdbms.processor.operator.CartesianJoinOperator;
 import mdbms.processor.operator.DeleteOperator;
 import mdbms.processor.operator.GroupByOperator;
@@ -73,9 +74,14 @@ public class PlanTranslator {
             case CARTESIAN:
                 return new CartesianJoinOperator(childOperators.get(0), childOperators.get(1));
             case JOIN:
-                return new JoinOperator(childOperators.get(0), childOperators.get(1), queryTree.getConditions(), queryTree.isNaturalJoin(), JOIN_BLOCK_SIZE);
+                return new JoinOperator(childOperators.get(0), childOperators.get(1), queryTree.getConditions(),
+                        queryTree.isNaturalJoin(), JOIN_BLOCK_SIZE);
             case SORT:
-                return new SortOperator(childOperators.get(0), queryTree.getOrderByClauses());
+                return new SortOperator(childOperators.get(0),
+                        queryTree.getOrderByClauses().stream()
+                                .map((clause) -> new SortOperator.SortKey(clause.getField().getTableName(),
+                                        clause.getField().getColumnName(),
+                                        clause.getDirection() == SortDirection.ASC)));
             case GROUP_BY:
                 // return new GroupByOperator(childOperators.get(0), queryTree.getValue(),
                 // false);
