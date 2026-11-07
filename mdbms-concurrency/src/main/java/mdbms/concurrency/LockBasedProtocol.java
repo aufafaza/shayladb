@@ -33,11 +33,12 @@ public class LockBasedProtocol implements ConcurrencyProtocol {
     }
 
     @Override
-    public AccessStatus requestWrite(Transaction tx, DataItem data) {
-        return lockManager.acquireLock(tx, data, Locktype.EXCLUSIVE);
+    public AccessStatus requestWrite(int txId, DataItem data, Object oldVal, Object newVal) {
+        // TODO [DELETE COMMMENT KALO UDH]
+        return AccessStatus.WAITING;
     }
 
-    @Override
+    @Override 
     public void releaseResources(Transaction tx) {
         lockManager.releaseAllLocks(tx);
     }
