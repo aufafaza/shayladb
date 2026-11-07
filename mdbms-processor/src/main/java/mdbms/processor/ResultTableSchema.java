@@ -39,7 +39,17 @@ public class ResultTableSchema {
 
     public String getColumnTableOrigin(ColumnDefinition columnDefinition) {
         Objects.requireNonNull(columnDefinition);
-        return columnTableOrigin.get(columnDefinition);
+        return columnTableOrigin.getOrDefault(columnDefinition, "");
+    }
+
+    public String getColumnTableOrigin(String columnName) {
+        Objects.requireNonNull(columnName);
+        for (ColumnDefinition column : columns) {
+            if (column.name().equalsIgnoreCase(columnName)) {
+                return getColumnTableOrigin(column);
+            }
+        }
+        return "";
     }
 
     public void addColumn(ColumnDefinition columnDefinition) {
@@ -57,7 +67,7 @@ public class ResultTableSchema {
         for (int i = 0; i < columns.size(); i++) {
             String name = columns.get(i).name();
             for (int j = i + 1; j < columns.size(); j++) {
-                if (name.equals(columns.get(j).name())) {
+                if (name.equalsIgnoreCase(columns.get(j).name())) {
                     return true;
                 }
             }
@@ -69,7 +79,7 @@ public class ResultTableSchema {
         boolean hasColumn = false;
         for (int i = 0; i < columns.size(); i++) {
             String name = columns.get(i).name();
-            if (name.equals(columnName)) {
+            if (name.equalsIgnoreCase(columnName)) {
                 if (!hasColumn)
                     hasColumn = true;
                 else

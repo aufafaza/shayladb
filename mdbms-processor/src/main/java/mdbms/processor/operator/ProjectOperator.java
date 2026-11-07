@@ -23,10 +23,10 @@ public class ProjectOperator extends QueryUnaryOperator{
         for(String ref:columns){String[] p=parts(ref);
             String table=p[0],name=p[1];
             Object v=table==null?in.get(name):in.get(table,name);
-            String origin=table==null?in.getSchema().getOrigin(name):table;ColumnDefinition def=null;
+            String origin=table==null?in.getSchema().getColumnTableOrigin(name):table;ColumnDefinition def=null;
             for(int i=0;i<in.getSchema().getColumns().size();i++){
                 ColumnDefinition c=in.getSchema().getColumns().get(i);
-                if(c.name().equalsIgnoreCase(name)&&(table==null||table.equalsIgnoreCase(in.getSchema().getOrigin(i)))){
+                if(c.name().equalsIgnoreCase(name)&&(table==null||table.equalsIgnoreCase(in.getSchema().getColumnTableOrigin(c)))){
                     def=c;break;
                 }
             }
