@@ -3,6 +3,8 @@ package mdbms.storage.serializer;
 import java.nio.ByteBuffer;
 import mdbms.models.schema.ColumnDefinition;
 import mdbms.models.schema.DataType;
+import mdbms.storage.exception.StorageErrorCode;
+import mdbms.storage.exception.StorageException;
 
 public final class FloatCodec implements ValueCodec {
     // mengubah float jadi 4 byte
@@ -10,7 +12,7 @@ public final class FloatCodec implements ValueCodec {
     public byte[] encode(Object value, ColumnDefinition column) {
         CodecSupport.requireColumn(column, DataType.FLOAT);
         if (!(value instanceof Float number)) {
-            throw new IllegalArgumentException("Expected Float");
+            throw new StorageException(StorageErrorCode.SCHEMA_VIOLATION, "Expected Float");
         }
         return ByteBuffer.allocate(4).putInt(Float.floatToRawIntBits(number)).array();
     }
@@ -20,7 +22,7 @@ public final class FloatCodec implements ValueCodec {
     public Object decode(byte[] data, ColumnDefinition column) {
         CodecSupport.requireColumn(column, DataType.FLOAT);
         if (data == null || data.length != 4) {
-            throw new IllegalArgumentException("FLOAT requires exactly four bytes");
+            throw new StorageException(StorageErrorCode.INVALID_BLOCK, "FLOAT requires exactly four bytes");
         }
         return Float.intBitsToFloat(ByteBuffer.wrap(data).getInt());
     }

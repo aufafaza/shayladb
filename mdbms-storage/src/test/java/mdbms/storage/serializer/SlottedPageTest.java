@@ -8,6 +8,8 @@ import java.util.List;
 import mdbms.models.schema.ColumnDefinition;
 import mdbms.models.schema.DataType;
 import mdbms.models.schema.TableSchema;
+import mdbms.storage.exception.StorageErrorCode;
+import mdbms.storage.exception.StorageException;
 import org.junit.jupiter.api.Test;
 
 class SlottedPageTest {
@@ -51,7 +53,9 @@ class SlottedPageTest {
         SlottedPage restored = new SlottedPage(page.toBytes());
         assertArrayEquals(new byte[] {1, 2, 3}, restored.readRecord(a));
         assertArrayEquals(new byte[] {4, 5}, restored.readRecord(b));
-        assertEquals(page.slotEntry(a), restored.slotEntry(a));
+        assertEquals(page.slotCount(), restored.slotCount());
+        assertTrue(restored.isOccupied(a));
+        assertTrue(restored.isOccupied(b));
         assertArrayEquals(page.toBytes(), restored.toBytes());
     }
 
@@ -61,13 +65,15 @@ class SlottedPageTest {
         SlottedPage page = new SlottedPage();
         int a = page.reserveSlot(2);
         page.writeSlot(a, new byte[] {7, 8});
-        assertThrows(IllegalStateException.class, () -> page.writeSlot(a, new byte[] {9}));
+        assertEquals(StorageErrorCode.SLOT_UNAVAILABLE,
+                assertThrows(StorageException.class,
+                        () -> page.writeSlot(a, new byte[] {9})).getCode());
         assertArrayEquals(new byte[] {7, 8}, page.readRecord(a));
         page.deleteRecord(a);
         int b = page.reserveSlot(1);
         assertEquals(1, b);
-        assertThrows(IllegalStateException.class, () -> page.readRecord(a));
-        assertThrows(IllegalArgumentException.class, () -> page.readRecord(10));
+        assertThrows(StorageException.class, () -> page.readRecord(a));
+        assertThrows(StorageException.class, () -> page.readRecord(10));
     }
 
     // memastikan halaman penuh dan direktori rusak ditolak dengan aman
@@ -79,11 +85,12 @@ class SlottedPageTest {
         Arrays.fill(full, (byte) 5);
         page.writeSlot(slot, full);
         assertFalse(page.hasSpace(1));
-        assertThrows(IllegalStateException.class, () -> page.reserveSlot(1));
+        assertThrows(StorageException.class, () -> page.reserveSlot(1));
         assertArrayEquals(full, page.readRecord(slot));
         byte[] corrupt = page.toBytes();
         ByteBuffer.wrap(corrupt).putInt(16, 0);
-        assertThrows(IllegalArgumentException.class, () -> new SlottedPage(corrupt));
+        assertEquals(StorageErrorCode.INVALID_BLOCK,
+                assertThrows(StorageException.class, () -> new SlottedPage(corrupt)).getCode());
         assertArrayEquals(full, page.readRecord(slot));
     }
 
@@ -93,7 +100,7 @@ class SlottedPageTest {
         SlottedPage page = new SlottedPage();
         int slot = page.reserveSlot(3);
         SlottedPage restored = new SlottedPage(page.toBytes());
-        assertThrows(IllegalArgumentException.class,
+        assertThrows(StorageException.class,
                 () -> restored.writeSlot(slot, new byte[] {1, 2, 3, 4}));
         restored.writeSlot(slot, new byte[] {1, 2});
         assertArrayEquals(new byte[] {1, 2}, restored.readRecord(slot));
@@ -114,8 +121,8 @@ class SlottedPageTest {
         assertTrue(page.isOccupied(active));
         assertFalse(page.isOccupied(reserved));
         assertFalse(page.isOccupied(deleted));
-        assertThrows(IllegalArgumentException.class, () -> page.isOccupied(-1));
-        assertThrows(IllegalArgumentException.class, () -> page.isOccupied(page.slotCount()));
+        assertThrows(StorageException.class, () -> page.isOccupied(-1));
+        assertThrows(StorageException.class, () -> page.isOccupied(page.slotCount()));
 
         SlottedPage restored = new SlottedPage(page.toBytes());
         assertEquals(3, restored.slotCount());
@@ -139,9 +146,11 @@ class SlottedPageTest {
         assertFalse(page.reserveSlotAt(active, 3));
         assertFalse(page.reserveSlotAt(reserved, 3));
         assertArrayEquals(before, page.toBytes());
-        assertThrows(IllegalArgumentException.class, () -> page.reserveSlotAt(-1, 2));
-        assertThrows(IllegalArgumentException.class, () -> page.reserveSlotAt(3, 2));
-        assertThrows(IllegalArgumentException.class, () -> page.reserveSlotAt(oldSlot, 0));
+        assertThrows(StorageException.class, () -> page.reserveSlotAt(-1, 2));
+        assertThrows(StorageException.class, () -> page.reserveSlotAt(3, 2));
+        assertEquals(StorageErrorCode.SCHEMA_VIOLATION,
+                assertThrows(StorageException.class,
+                        () -> page.reserveSlotAt(oldSlot, 0)).getCode());
         assertArrayEquals(before, page.toBytes());
 
         assertTrue(page.reserveSlotAt(oldSlot, 3));
@@ -207,18 +216,18 @@ class SlottedPageTest {
         byte[] before = page.toBytes();
 
         assertFalse(page.replaceRecord(changed, new byte[11]));
-        assertThrows(IllegalArgumentException.class, () -> page.replaceRecord(-1, new byte[] {1}));
-        assertThrows(IllegalArgumentException.class, () -> page.replaceRecord(changed, null));
-        assertThrows(IllegalArgumentException.class, () -> page.replaceRecord(changed, new byte[0]));
+        assertThrows(StorageException.class, () -> page.replaceRecord(-1, new byte[] {1}));
+        assertThrows(StorageException.class, () -> page.replaceRecord(changed, null));
+        assertThrows(StorageException.class, () -> page.replaceRecord(changed, new byte[0]));
         assertArrayEquals(before, page.toBytes());
         assertArrayEquals(new byte[10], page.readRecord(changed));
         assertEquals(SlottedPage.PAGE_SIZE - 16 - 24 - 10, page.readRecord(other).length);
 
         page.deleteRecord(changed);
-        assertThrows(IllegalStateException.class,
+        assertThrows(StorageException.class,
                 () -> page.replaceRecord(changed, new byte[] {1}));
         assertTrue(page.reserveSlotAt(changed, 1));
-        assertThrows(IllegalStateException.class,
+        assertThrows(StorageException.class,
                 () -> page.replaceRecord(changed, new byte[] {1}));
     }
 }
