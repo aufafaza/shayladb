@@ -50,6 +50,7 @@ public class Main {
                 System.out.println("  [3] Binder  (Parse + Bind + Validate: Output Bound QueryTree & Binding Tables)");
                 System.out.println("  [4] All     (Lexer + Parser + Binder & Validator)");
                 System.out.println("  [5] Tables  (View or Add Table Schema Stubs)");
+                System.out.println("  [6] Plan    (Parse + Bind + Validate: Output Unoptimized Execution Plan)");
                 System.out.println("  [0] Exit");
                 System.out.print("Choice: ");
 
@@ -66,12 +67,13 @@ public class Main {
                     continue;
                 }
                 if (!choice.equals("1") && !choice.equals("2") && !choice.equals("3") && !choice.equals("4")
+                    && !choice.equals("6") && !choice.equalsIgnoreCase("plan")
                     && !choice.equalsIgnoreCase("lexer")
                     && !choice.equalsIgnoreCase("parser")
                     && !choice.equalsIgnoreCase("binder")
                     && !choice.equalsIgnoreCase("all")
                     && !choice.equalsIgnoreCase("both")) {
-                    System.out.println("Invalid choice. Please enter 1, 2, 3, 4, 5, or 0.");
+                    System.out.println("Invalid choice. Please enter 1, 2, 3, 4, 5, 6, or 0.");
                     continue;
                 }
 
@@ -101,6 +103,21 @@ public class Main {
         }
         if (runBinder) {
             runBinderMode(sql);
+        }
+        if (mode.equals("6") || mode.equalsIgnoreCase("plan")) {
+            runPlanMode(sql);
+        }
+    }
+
+    public static void runPlanMode(String sql) {
+        System.out.println("\n--- [PLAN, unoptimized] ---");
+        QueryErrorCollector collector = new QueryErrorCollector();
+        ShaylaParser parser = new ShaylaParser(new ShaylaLexer(sql, collector));
+        try {
+            QueryTree plan = new QueryOptimizer(CATALOG, parser).parseQuery(sql).queryTree();
+            System.out.print(new QueryPlanPrinter().printPlan(plan));
+        } catch (QueryProcessingException e) {
+            System.err.println(e.getFormattedError());
         }
     }
 

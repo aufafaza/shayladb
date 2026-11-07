@@ -86,10 +86,10 @@ public class TokenStream {
 
     public void printAllParsedToken(){
         if (tokens.isEmpty() && tokens.get(0).getType() == TokenType.EOF){
-            System.out.println("Tidak ada Tokens");
+            System.out.println("no tokens");
         }else{
             for (Token token : tokens) {
-                System.out.println("Dikenali " + "\""+token.getLexeme() + "\"" + " dengan tipe " + token.getType().toString() + " pada baris " + token.getLine() + ", kolom " + token.getColumn());
+                System.out.println("Known " + "\""+token.getLexeme() + "\"" + " with type " + token.getType().toString() + "  at line " + token.getLine() + ", column: " + token.getColumn());
             }
         }
     }

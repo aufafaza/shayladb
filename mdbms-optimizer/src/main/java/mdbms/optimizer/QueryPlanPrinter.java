@@ -15,6 +15,10 @@ import mdbms.models.query.QueryTree;
 
 /** Read-only text rendering for query plans supplied by the driver. */
 public final class QueryPlanPrinter {
+    public String printPlan(QueryTree plan) {
+        return formatPlan(plan, new StringBuilder());
+    }
+
     /**
      * Formats a plan using the authoritative total from ICostEstimator.calculateTotalCost(plan).
      * This method neither invokes the estimator nor interprets/sums individual node costs.
@@ -25,7 +29,11 @@ public final class QueryPlanPrinter {
         if (totalCost < 0) {
             throw new IllegalArgumentException("Total estimated cost must not be negative");
         }
-        StringBuilder output = new StringBuilder("Total estimated cost: ").append(totalCost).append('\n');
+        return formatPlan(plan, new StringBuilder("Total estimated cost: ").append(totalCost).append('\n'));
+    }
+
+    private String formatPlan(QueryTree plan, StringBuilder output) {
+        Objects.requireNonNull(plan, "plan");
         Deque<PlanEntry> pending = new ArrayDeque<>();
         pending.push(new PlanEntry(plan, 0));
         while (!pending.isEmpty()) {
