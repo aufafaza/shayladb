@@ -3,43 +3,51 @@ package mdbms.processor.operator;
 import java.util.ArrayList;
 import java.util.List;
 
+import mdbms.api.IConcurrencyControl;
 import mdbms.api.IDataAccess;
-import mdbms.api.ISchemaCatalog;
-import mdbms.models.access.DataRetrieval;
-import mdbms.models.data.Condition;
-import mdbms.models.data.Row;
-import mdbms.models.data.RowId;
-import mdbms.models.data.Rows;
+import mdbms.models.data.DataItem;
 import mdbms.models.schema.ColumnDefinition;
-import mdbms.models.schema.TableSchema;
-import mdbms.processor.ExpressionEvaluator;
-import mdbms.processor.ResultRow;
+import mdbms.processor.IResultRow;
 
-public class DeleteOperator {
+public class DeleteOperator extends QueryUnaryOperator implements IWriteOperator {
     private final IDataAccess access;
-    private final ISchemaCatalog catalog;
+    private final IConcurrencyControl concurrency;
+    private final int txId;
     private final String table;
-    private final List<Condition> conditions;
+    private List<IResultRow> targets;
+    private int affectedRows;
 
-    public DeleteOperator(IDataAccess a,ISchemaCatalog c,String t,List<Condition> cond){
+    public DeleteOperator(IQueryOperator child,IDataAccess a,IConcurrencyControl cc,int tx,String t){
+        super(child);
         access=a;
-        catalog=c;
+        concurrency=cc;
+        txId=tx;
         table=t;
-        conditions=List.copyOf(cond);
     }
 
-    public int execute(){
-        TableSchema ts=catalog.getTableSchema(table);
-        if(ts==null)throw new IllegalArgumentException("Tabel tidak ditemukan: "+table);
-        Rows rs=access.readBlock(new DataRetrieval(table,ts.columns().stream().map(ColumnDefinition::name).toList(),List.of()));
-        List<RowId> ids=new ArrayList<>();
-        
-        for(Row raw:rs.rows())if(ExpressionEvaluator.matches(conditions,ResultRow.from(table,ts.columns(),raw.values())))ids.add(raw.rowId());
-        
-        int count=0;for(RowId id:ids){
-            access.deleteByRowId(id);
-            count++;
+    @Override public void open(){
+        targets=new ArrayList<>();
+        childOperator.open();
+        IResultRow r;
+        while((r=childOperator.next())!=null)targets.add(r);
+        childOperator.close();
+    }
+
+    @Override public IResultRow next(){
+        for(IResultRow r:targets){
+            List<Object> oldValues=new ArrayList<>();
+            for(ColumnDefinition c:r.getSchema().getColumns())oldValues.add(r.get(c.name()));
+            AccessPermission.write(concurrency,txId,new DataItem(table,r.getRowId()),oldValues,null);
+            access.deleteByRowId(r.getRowId());
         }
-        return count;
+        affectedRows=targets.size();
+        return null;
+    }
+
+    @Override public void close(){
+    }
+
+    public int getAffectedRows(){
+        return affectedRows;
     }
 }

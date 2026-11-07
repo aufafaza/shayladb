@@ -6,16 +6,14 @@ import mdbms.api.IConcurrencyControl;
 import mdbms.api.IDataAccess;
 import mdbms.api.ISchemaCatalog;
 import mdbms.models.data.DataItem;
+import mdbms.models.data.Row;
 import mdbms.models.query.ExpressionTree;
 import mdbms.models.schema.ColumnDefinition;
 import mdbms.models.schema.DataType;
-import mdbms.models.transaction.AccessStatus;
 import mdbms.processor.ExpressionEvaluator;
 import mdbms.processor.IResultRow;
-import mdbms.processor.ResultRow;
-import mdbms.processor.ResultTableSchema;
 
-public class UpdateOperator extends QueryUnaryOperator {
+public class UpdateOperator extends QueryUnaryOperator implements IWriteOperator {
     private final IDataAccess dataAccess;
     private final ISchemaCatalog schemaCatalog;
     private final IConcurrencyControl concurrencyControlManager;
@@ -25,8 +23,9 @@ public class UpdateOperator extends QueryUnaryOperator {
     private final ExpressionTree newValue;
     private List<String> columnNames;
     private int columnIndex;
+    private DataType columnType;
     private List<IResultRow> targetRows;
-    private boolean isDone;
+    private int affectedRows;
 
     public UpdateOperator(IQueryOperator childOperator, IDataAccess dataAccess, ISchemaCatalog schemaCatalog,
             IConcurrencyControl concurrencyControlManager, int transactionId, String tableName,
@@ -42,10 +41,12 @@ public class UpdateOperator extends QueryUnaryOperator {
     }
 
     public void open() {
-        columnNames = schemaCatalog.getTableSchema(tableName).columns().stream()
+        List<ColumnDefinition> columns = schemaCatalog.getTableSchema(tableName).columns();
+        columnNames = columns.stream()
                 .map(ColumnDefinition::name)
                 .toList();
         columnIndex = columnNames.indexOf(columnName);
+        columnType = columns.get(columnIndex).type();
 
         targetRows = new ArrayList<>();
         childOperator.open();
@@ -54,46 +55,42 @@ public class UpdateOperator extends QueryUnaryOperator {
             targetRows.add(row);
         }
         childOperator.close();
-        isDone = false;
     }
 
     public IResultRow next() {
-        if (isDone) return null;
-        isDone = true;
-
         for (IResultRow row : targetRows) {
-            requestWrite(new DataItem(tableName, row.getRowId()));
-            List<Object> newValues = new ArrayList<>();
+            List<Object> oldValues = new ArrayList<>();
             for (String name : columnNames) {
-                newValues.add(row.get(name));
+                oldValues.add(row.get(name));
             }
-            newValues.set(columnIndex, ExpressionEvaluator.evaluate(newValue, row));
-            // TODO BUTUH method dari CCM untuk kirim catatan perubahan ke FRM
-            dataAccess.updateByRowId(row.getRowId(), newValues);
-        }
+            List<Object> newValues = new ArrayList<>(oldValues);
+            newValues.set(columnIndex, toColumnType(ExpressionEvaluator.evaluate(newValue, row), columnType));
 
-        ResultTableSchema schema = new ResultTableSchema();
-        schema.addColumn(new ColumnDefinition("affected_rows", DataType.INTEGER, 0, false));
-        ResultRow result = new ResultRow(schema);
-        result.set(schema.getTableName(), "affected_rows", targetRows.size());
-        return result;
+            DataItem item = new DataItem(tableName, row.getRowId());
+            AccessPermission.write(concurrencyControlManager, transactionId, item, oldValues, newValues);
+            Row updated = dataAccess.updateByRowId(row.getRowId(), newValues);
+            if (!updated.rowId().equals(row.getRowId())) {
+                AccessPermission.write(concurrencyControlManager, transactionId, item, newValues, null);
+                AccessPermission.write(concurrencyControlManager, transactionId,
+                        new DataItem(tableName, updated.rowId()), null, newValues);
+            }
+        }
+        affectedRows = targetRows.size();
+        return null;
     }
 
     public void close() {
     }
 
-    private void requestWrite(DataItem item) {
-        AccessStatus status = concurrencyControlManager.requestWrite(transactionId, item);
-        while (status == AccessStatus.WAITING) {
-            try {
-                Thread.sleep(10);
-            } catch (InterruptedException e) {
-                throw new IllegalStateException("Interrupted while waiting for CCM", e);
-            }
-            status = concurrencyControlManager.requestWrite(transactionId, item);
+    public int getAffectedRows() {
+        return affectedRows;
+    }
+
+    private static Object toColumnType(Object value, DataType type) {
+        if (value instanceof Number number) {
+            if (type == DataType.INTEGER) return number.intValue();
+            if (type == DataType.FLOAT) return number.floatValue();
         }
-        if (status == AccessStatus.ABORTED) {
-            throw new IllegalStateException("Transaction " + transactionId + " was aborted by CCM");
-        }
+        return value;
     }
 }

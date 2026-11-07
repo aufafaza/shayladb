@@ -38,10 +38,22 @@ public class ResultTableSchema {
     }
 
     public String getColumnTableOrigin(ColumnDefinition columnDefinition) {
-        if (columnDefinition == null) {
-            throw new NullPointerException("columnDefinition cannot be null");
+        Objects.requireNonNull(columnDefinition);
+        return columnTableOrigin.getOrDefault(columnDefinition, "");
+    }
+
+    public String getColumnTableOrigin(String columnName) {
+        Objects.requireNonNull(columnName);
+        for (ColumnDefinition column : columns) {
+            if (column.name().equalsIgnoreCase(columnName)) {
+                return getColumnTableOrigin(column);
+            }
         }
-        return columnTableOrigin.get(columnDefinition);
+        return "";
+    }
+
+    public String getColumnTableOrigin(int columnIndex) {
+        return getColumnTableOrigin(columns.get(columnIndex));
     }
 
     public void addColumn(ColumnDefinition columnDefinition) {
@@ -49,12 +61,8 @@ public class ResultTableSchema {
     }
 
     public void addColumn(String originTableName, ColumnDefinition columnDefinition) {
-        if (originTableName == null) {
-            throw new NullPointerException("originTableName cannot be null");
-        }
-        if (columnDefinition == null) {
-            throw new NullPointerException("columnDefinition cannot be null");
-        }
+        Objects.requireNonNull(originTableName);
+        Objects.requireNonNull(columnDefinition);
         columns.add(columnDefinition);
         columnTableOrigin.put(columnDefinition, originTableName);
     }
@@ -63,7 +71,7 @@ public class ResultTableSchema {
         for (int i = 0; i < columns.size(); i++) {
             String name = columns.get(i).name();
             for (int j = i + 1; j < columns.size(); j++) {
-                if (name.equals(columns.get(j).name())) {
+                if (name.equalsIgnoreCase(columns.get(j).name())) {
                     return true;
                 }
             }
@@ -75,9 +83,11 @@ public class ResultTableSchema {
         boolean hasColumn = false;
         for (int i = 0; i < columns.size(); i++) {
             String name = columns.get(i).name();
-            if (name.equals(columnName)) {
-                if (!hasColumn) hasColumn = true;
-                else return true;
+            if (name.equalsIgnoreCase(columnName)) {
+                if (!hasColumn)
+                    hasColumn = true;
+                else
+                    return true;
             }
         }
         return false;
