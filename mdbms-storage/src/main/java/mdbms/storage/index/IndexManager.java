@@ -1,5 +1,7 @@
 package mdbms.storage.index;
 
+import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -129,41 +131,66 @@ public final class IndexManager {
         }
     }
 
-    // baris baru masuk ke semua index tabelnya
+    // baris baru masuk ke semua index tabelnya, kalau satu gagal index yang udah keisi dibalikin lagi
     public void onInsert(Row row, TableSchema schema) {
         lock.readLock().lock();
         try {
-            for (Index index : indexesOf(schema.tableName())) {
-                index.insert(keyOf(row, schema, index.getInfo().columnName()), row.rowId());
+            List<Runnable> undo = new ArrayList<>();
+            try {
+                for (Index index : indexesOf(schema.tableName())) {
+                    Object key = keyOf(row, schema, index.getInfo().columnName());
+                    index.insert(key, row.rowId());
+                    undo.add(() -> index.delete(key, row.rowId()));
+                }
+            } catch (RuntimeException e) {
+                rollback(undo, e);
+                throw e;
             }
         } finally {
             lock.readLock().unlock();
         }
     }
 
-    // baris yang berubah dihapus dari index lalu dimasukin lagi, index yang key dan RowId nya sama dilewatin
+    // entri baru dimasukin dulu baru entri lama dihapus, jadi kalau gagal di tengah baris tetap bisa dicari
+    // kalau satu index gagal semua index yang udah berubah dibalikin, index yang key dan RowId nya sama dilewatin
     public void onUpdate(Row oldRow, Row newRow, TableSchema schema) {
         lock.readLock().lock();
         try {
-            for (Index index : indexesOf(schema.tableName())) {
-                String column = index.getInfo().columnName();
-                Object oldKey = keyOf(oldRow, schema, column);
-                Object newKey = keyOf(newRow, schema, column);
-                if (Objects.equals(oldKey, newKey) && oldRow.rowId().equals(newRow.rowId())) continue;
-                index.delete(oldKey, oldRow.rowId());
-                index.insert(newKey, newRow.rowId());
+            List<Runnable> undo = new ArrayList<>();
+            try {
+                for (Index index : indexesOf(schema.tableName())) {
+                    String column = index.getInfo().columnName();
+                    Object oldKey = keyOf(oldRow, schema, column);
+                    Object newKey = keyOf(newRow, schema, column);
+                    if (Objects.equals(oldKey, newKey) && oldRow.rowId().equals(newRow.rowId())) continue;
+                    index.insert(newKey, newRow.rowId());
+                    undo.add(() -> index.delete(newKey, newRow.rowId()));
+                    index.delete(oldKey, oldRow.rowId());
+                    undo.add(() -> index.insert(oldKey, oldRow.rowId()));
+                }
+            } catch (RuntimeException e) {
+                rollback(undo, e);
+                throw e;
             }
         } finally {
             lock.readLock().unlock();
         }
     }
 
-    // baris yang dihapus dikeluarin dari semua index tabelnya
+    // baris yang dihapus dikeluarin dari semua index tabelnya, kalau satu gagal entri yang udah kehapus dimasukin lagi
     public void onDelete(Row row, TableSchema schema) {
         lock.readLock().lock();
         try {
-            for (Index index : indexesOf(schema.tableName())) {
-                index.delete(keyOf(row, schema, index.getInfo().columnName()), row.rowId());
+            List<Runnable> undo = new ArrayList<>();
+            try {
+                for (Index index : indexesOf(schema.tableName())) {
+                    Object key = keyOf(row, schema, index.getInfo().columnName());
+                    index.delete(key, row.rowId());
+                    undo.add(() -> index.insert(key, row.rowId()));
+                }
+            } catch (RuntimeException e) {
+                rollback(undo, e);
+                throw e;
             }
         } finally {
             lock.readLock().unlock();
@@ -179,6 +206,17 @@ public final class IndexManager {
             }
         } finally {
             lock.readLock().unlock();
+        }
+    }
+
+    // jalanin langkah pembatalan dari yang terakhir, error pas pembatalan ditempel ke error asli biar ga ketutup
+    private static void rollback(List<Runnable> undo, RuntimeException cause) {
+        for (int i = undo.size() - 1; i >= 0; i--) {
+            try {
+                undo.get(i).run();
+            } catch (RuntimeException e) {
+                cause.addSuppressed(e);
+            }
         }
     }
 
@@ -204,10 +242,11 @@ public final class IndexManager {
         return index;
     }
 
-    // semua index yang nempel di satu tabel
+    // semua index yang nempel di satu tabel, diurutin per nama biar urutan update selalu sama
     private List<Index> indexesOf(String table) {
         return indexes.values().stream()
                 .filter(index -> index.getInfo().tableName().equals(table))
+                .sorted(Comparator.comparing(index -> index.getInfo().indexName()))
                 .toList();
     }
 

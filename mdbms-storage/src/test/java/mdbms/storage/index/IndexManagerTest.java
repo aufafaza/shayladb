@@ -201,4 +201,48 @@ class IndexManagerTest {
     void rejectsInvalidDegreeOverride() {
         assertCode(StorageErrorCode.SCHEMA_VIOLATION, () -> new IndexManager(catalog, pool, 2));
     }
+
+    // bikin index id dan name, name diurutin belakangan jadi gagal setelah index id udah keubah
+    private void createIdAndNameIndexes() {
+        manager.createIndex("idx_a_id", USERS, "id", rows(List.of()));
+        manager.createIndex("idx_b_name", USERS, "name", rows(List.of()));
+    }
+
+    // insert yang gagal di index kedua ga ninggalin entri di index pertama
+    @Test
+    void failedInsertRollsBackEarlierIndexes() {
+        createIdAndNameIndexes();
+
+        assertCode(StorageErrorCode.SCHEMA_VIOLATION, () -> manager.onInsert(user(0, 1, "kepanjangan", 1.0f), USERS));
+
+        assertTrue(manager.search("idx_a_id", 1).isEmpty());
+    }
+
+    // update yang gagal di index kedua balikin index pertama ke entri lama
+    @Test
+    void failedUpdateRollsBackEarlierIndexes() {
+        createIdAndNameIndexes();
+        Row alice = user(0, 1, "alice", 1.0f);
+        manager.onInsert(alice, USERS);
+
+        assertCode(StorageErrorCode.SCHEMA_VIOLATION,
+                () -> manager.onUpdate(alice, user(3, 10, "kepanjangan", 1.0f), USERS));
+
+        assertEquals(List.of(alice.rowId()), manager.search("idx_a_id", 1));
+        assertTrue(manager.search("idx_a_id", 10).isEmpty());
+        assertEquals(List.of(alice.rowId()), manager.search("idx_b_name", "alice"));
+    }
+
+    // delete yang gagal di index kedua masukin lagi entri yang udah kehapus di index pertama
+    @Test
+    void failedDeleteRollsBackEarlierIndexes() {
+        createIdAndNameIndexes();
+        Row alice = user(0, 1, "alice", 1.0f);
+        manager.onInsert(alice, USERS);
+
+        assertCode(StorageErrorCode.SCHEMA_VIOLATION,
+                () -> manager.onDelete(user(0, 1, "kepanjangan", 1.0f), USERS));
+
+        assertEquals(List.of(alice.rowId()), manager.search("idx_a_id", 1));
+    }
 }
