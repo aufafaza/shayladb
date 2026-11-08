@@ -1,6 +1,7 @@
 package mdbms.concurrency;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
@@ -52,7 +53,12 @@ class ConcurrencyControlManagerTest {
 
     @Test
     void beginTransactionAssignsUniqueIds() {
-        assertNotEquals(ccm.beginTransaction(), ccm.beginTransaction());
+        int first = ccm.beginTransaction();
+        int second = ccm.beginTransaction();
+
+        assertEquals(1, first);
+        assertEquals(first + 1, second);
+        assertNotEquals(first, second);
     }
 
     @Test
@@ -63,18 +69,18 @@ class ConcurrencyControlManagerTest {
         ccm.commitTransaction(txId);
 
         assertEquals(TransactionState.COMMITTED, tx.getState());
-        assertEquals(List.of(LogType.COMMIT), frm.transactionLogs);
+        assertEquals(List.of(LogType.BEGIN, LogType.COMMIT), frm.transactionLogs);
         assertEquals(List.of(txId), protocol.released);
         assertNull(ccm.getTransaction(txId));
     }
 
     @Test
     void commitAbortsWhenLogWriteFails() {
-        frm.logSucceeds = false;
         int txId = ccm.beginTransaction();
         Transaction tx = ccm.getTransaction(txId);
+        frm.logSucceeds = false;
 
-        ccm.commitTransaction(txId);
+        assertThrows(IllegalStateException.class, () -> ccm.commitTransaction(txId));
 
         assertEquals(TransactionState.ABORTED, tx.getState());
         assertEquals(List.of(txId), frm.rolledBack);
@@ -94,6 +100,7 @@ class ConcurrencyControlManagerTest {
         ccm.abortTransaction(txId, "test");
 
         assertEquals(TransactionState.ABORTED, tx.getState());
+        assertEquals(List.of(LogType.BEGIN, LogType.ABORT), frm.transactionLogs);
         assertEquals(List.of(txId), frm.rolledBack);
         assertEquals(List.of(txId), protocol.released);
         assertNull(ccm.getTransaction(txId));
@@ -132,6 +139,64 @@ class ConcurrencyControlManagerTest {
         assertEquals(AccessStatus.ABORTED, ccm.requestRead(txId, ITEM));
     }
 
+    @Test
+    void requestForAbortedTransactionIsAborted() {
+        int txId = ccm.beginTransaction();
+        ccm.abortTransaction(txId, "test");
+
+        assertEquals(AccessStatus.ABORTED, ccm.requestRead(txId, ITEM));
+    }
+
+    @Test
+    void beginAndAbortWithoutFailureRecoveryManager() {
+        IConcurrencyControl noFrmCcm = new ConcurrencyControlManager(protocol);
+
+        int txId = assertDoesNotThrow(noFrmCcm::beginTransaction);
+        assertEquals(1, txId);
+        assertDoesNotThrow(() -> noFrmCcm.abortTransaction(txId, "test"));
+        assertNull(noFrmCcm.getTransaction(txId));
+    }
+
+    @Test
+    void timestampUpdatesNeverMoveBackwards() {
+        TimestampManager timestamps = new TimestampManager();
+        timestamps.updateReadTS(ITEM, 20);
+        timestamps.updateReadTS(ITEM, 10);
+        timestamps.updateWriteTS(ITEM, 30);
+        timestamps.updateWriteTS(ITEM, 15);
+        assertEquals(20, timestamps.getReadTS(ITEM));
+        assertEquals(30, timestamps.getWriteTS(ITEM));
+    }
+
+    @Test
+    void waitingLockRequestsAreRemovedAfterGrantAndRelease() {
+        LockManager locks = new LockManager();
+        Transaction first = new Transaction(1, 1);
+        Transaction second = new Transaction(2, 2);
+        assertEquals(AccessStatus.GRANTED, locks.acquireLock(first, ITEM, Locktype.EXCLUSIVE));
+        assertEquals(AccessStatus.WAITING, locks.acquireLock(second, ITEM, Locktype.SHARED));
+        assertEquals(ITEM, locks.getWaitingRequestsSnapshot().get(second).getData());
+        locks.releaseAllLocks(first);
+        assertEquals(AccessStatus.GRANTED, locks.acquireLock(second, ITEM, Locktype.SHARED));
+        assertTrue(locks.getWaitingRequestsSnapshot().isEmpty());
+        locks.releaseAllLocks(second);
+        assertTrue(locks.getLockTableSnapshot().isEmpty());
+    }
+
+    @Test
+    void defaultLockProtocolDetectsDeadlockUsingItsOwnLockManager() {
+        LockBasedProtocol locks = new LockBasedProtocol();
+        Transaction first = new Transaction(1, 1);
+        Transaction second = new Transaction(2, 2);
+        DataItem other = new DataItem("users", new RowId("users", 0, 1));
+        assertEquals(AccessStatus.GRANTED, locks.requestWrite(first, ITEM));
+        assertEquals(AccessStatus.GRANTED, locks.requestWrite(second, other));
+        assertEquals(AccessStatus.WAITING, locks.requestWrite(second, ITEM));
+        assertEquals(AccessStatus.WAITING, locks.requestWrite(first, other));
+        assertEquals(TransactionState.ABORTED, second.getState());
+        assertEquals(AccessStatus.GRANTED, locks.requestWrite(first, other));
+    }
+
     private static final class StubProtocol implements ConcurrencyProtocol {
         private AccessStatus status = AccessStatus.GRANTED;
         private final List<Integer> released = new ArrayList<>();
@@ -143,6 +208,11 @@ class ConcurrencyControlManagerTest {
 
         @Override
         public AccessStatus requestWrite(Transaction tx, DataItem data) {
+            return status;
+        }
+
+        @Override
+        public AccessStatus requestWrite(int txId, DataItem data, Object oldVal, Object newVal) {
             return status;
         }
 
@@ -187,6 +257,7 @@ class ConcurrencyControlManagerTest {
         @Override
         public RecoveryResult rollbackTransaction(int txId) {
             rolledBack.add(txId);
+            transactionLogs.add(LogType.ABORT);
             return result(true);
         }
 

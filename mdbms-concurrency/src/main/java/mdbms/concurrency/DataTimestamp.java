@@ -9,19 +9,27 @@ public class DataTimestamp {
         this.writeTS = writeTS;
     }
 
-    public  long getWriteTS() {
+    public synchronized long getWriteTS() {
         return  this.writeTS;
     }
 
-    public  long getReadTS() {
+    public synchronized long getReadTS() {
         return  this.readTS;
     }
 
-    public  void setWriteTS(long writeTS) {
+    public synchronized void setWriteTS(long writeTS) {
         this.writeTS = writeTS;
     }
 
-    public  void setReadTS(long readTS) {
+    public synchronized void setReadTS(long readTS) {
         this.readTS = readTS;
+    }
+
+    public synchronized void updateReadTS(long timestamp) {
+        readTS = Math.max(readTS, timestamp);
+    }
+
+    public synchronized void updateWriteTS(long timestamp) {
+        writeTS = Math.max(writeTS, timestamp);
     }
 }

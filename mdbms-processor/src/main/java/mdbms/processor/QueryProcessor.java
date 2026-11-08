@@ -12,13 +12,12 @@ import mdbms.api.ISchemaCatalog;
 import mdbms.models.query.ExecutionResult;
 import mdbms.models.query.ParsedQuery;
 import mdbms.models.schema.ColumnDefinition;
+import mdbms.processor.exception.QueryExecutionException;
 import mdbms.processor.operator.IQueryOperator;
+import mdbms.processor.operator.IWriteOperator;
 
 public class QueryProcessor implements IQueryProcessor {
     private IQueryOptimizer queryOptimizer;
-    private IDataAccess dataAccess;
-    private ISchemaCatalog schemaCatalog;
-    private IFailureRecoveryManager failureRecovery;
     private IConcurrencyControl concurrencyControl;
     private PlanTranslator planTranslator;
 
@@ -29,20 +28,16 @@ public class QueryProcessor implements IQueryProcessor {
             IFailureRecoveryManager failureRecovery,
             IConcurrencyControl concurrencyControl) {
         this.queryOptimizer = queryOptimizer;
-        this.dataAccess = dataAccess;
-        this.schemaCatalog = schemaCatalog;
-        this.failureRecovery = failureRecovery;
         this.concurrencyControl = concurrencyControl;
-        this.planTranslator = new PlanTranslator(
-                queryOptimizer, dataAccess, schemaCatalog, failureRecovery, concurrencyControl);
+        this.planTranslator = new PlanTranslator(dataAccess, schemaCatalog, concurrencyControl);
     }
 
     @Override
     public ExecutionResult executeQuery(String query, int txId) {
         ParsedQuery parsedQuery = queryOptimizer.parseQuery(query);
         ParsedQuery optimizedQuery = queryOptimizer.optimizeQuery(parsedQuery);
-        IQueryOperator translatedQuery = planTranslator.translate(optimizedQuery);
- 
+        IQueryOperator translatedQuery = planTranslator.translate(optimizedQuery, txId);
+
         List<String> columns = new ArrayList<>();
         List<List<Object>> rows = new ArrayList<>();
         try {
@@ -65,14 +60,24 @@ public class QueryProcessor implements IQueryProcessor {
                     String tableName = tableSchema.getColumnTableOrigin(definition);
                     row.add(resultRow.get(tableName, definition.name()));
                 }
-            } 
-            translatedQuery.close();
+                rows.add(row);
+            }
+        } catch (QueryExecutionException e) {
+            concurrencyControl.abortTransaction(txId, "Query execution failed");
+            ExecutionResult executionResult = new ExecutionResult(false, null, null, 0, e.getMessage());
+            return executionResult;
         } catch (Exception e) {
             concurrencyControl.abortTransaction(txId, "Query execution failed");
+            return new ExecutionResult(false, columns, rows, 0, e.getMessage());
+        } finally {
+            translatedQuery.close();
         }
 
-        // TODO: count the affected rows
-        ExecutionResult executionResult = new ExecutionResult(true, columns, rows, 0, "Query executed");
+        int affectedRows = 0;
+        if (translatedQuery instanceof IWriteOperator) {
+            affectedRows = ((IWriteOperator) translatedQuery).getAffectedRows();
+        }
+        ExecutionResult executionResult = new ExecutionResult(true, columns, rows, affectedRows, "Query executed");
         return executionResult;
     }
 

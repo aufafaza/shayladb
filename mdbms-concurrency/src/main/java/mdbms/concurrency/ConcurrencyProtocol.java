@@ -10,5 +10,7 @@ public interface ConcurrencyProtocol {
 
     AccessStatus requestWrite(Transaction tx, DataItem data);
 
+    AccessStatus requestWrite(int txId, DataItem data, Object oldVal, Object newVal) ;
+
     void releaseResources(Transaction tx);
 }
