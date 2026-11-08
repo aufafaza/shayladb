@@ -11,6 +11,8 @@ public interface ISchemaCatalog{
 
     void updateTableSchema(TableSchema schema);
 
+    void dropTable(String table);
+
     List<IndexInfo> getIndexes(String table);
 
     IndexInfo createIndex(String name, String table, String column);
