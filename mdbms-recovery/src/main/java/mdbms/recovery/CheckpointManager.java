@@ -97,7 +97,6 @@ public class CheckpointManager {
         
         long targetCommitLsn = -1;
 
-        // Cari record COMMIT milik targetTxId untuk mendapatkan batas targetCommitLsn
         for (LogRecord record : allLogs) {
             if (record.getTxId() == targetTxId && record.getType() == LogType.COMMIT) {
                 targetCommitLsn = record.getLsn();
@@ -111,7 +110,6 @@ public class CheckpointManager {
 
         long lastProcessedLsn = -1;
 
-        // Me-redo semua transaksi yang COMMIT pada lsn <= targetCommitLsn
         for (LogRecord record : allLogs) {
             if (record.getLsn() > targetCommitLsn) {
                 break;
@@ -131,7 +129,6 @@ public class CheckpointManager {
             }
         }
 
-        // Perbaikan Poin 4: Memanggil storageManager.flushBuffer() dan pemotongan log
         if (storageManager != null) {
             storageManager.flushBuffer();
         }
@@ -145,11 +142,9 @@ public class CheckpointManager {
         );
     }
 
-    // Perbaikan Poin 5: Helper Pencari Checkpoint Terakhir untuk CrashRecoveryManager
     public CheckpointLogRecord findLastCompletedCheckpoint() {
         List<LogRecord> allLogs = logManager.readLogs(null);
         
-        // Memindai mundur LogRecord bertipe LogType.CHECKPOINT
         for (int i = allLogs.size() - 1; i >= 0; i--) {
             LogRecord record = allLogs.get(i);
             if (record.getType() == LogType.CHECKPOINT && record instanceof CheckpointLogRecord cp) {
