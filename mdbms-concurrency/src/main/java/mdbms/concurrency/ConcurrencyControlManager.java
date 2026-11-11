@@ -2,6 +2,7 @@ package mdbms.concurrency;
 
 import java.util.Collections;
 import java.util.List;
+import java.util.ArrayList;
 import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
@@ -9,13 +10,13 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 import mdbms.api.IConcurrencyControl;
 import mdbms.api.IFailureRecoveryManager;
-import mdbms.models.Operation;
-import mdbms.models.AccessStatus;
-import mdbms.models.DataItem;
-import mdbms.models.LogType;
-import mdbms.models.RecoveryResult;
-import mdbms.models.Transaction;
-import mdbms.models.TransactionState;
+import mdbms.models.transaction.Operation;
+import mdbms.models.transaction.AccessStatus;
+import mdbms.models.data.DataItem;
+import mdbms.models.log.LogType;
+import mdbms.models.log.RecoveryResult;
+import mdbms.models.transaction.Transaction;
+import mdbms.models.transaction.TransactionState;
 import mdbms.models.log.RecordImage;
 
 /**
@@ -194,7 +195,10 @@ public final class ConcurrencyControlManager implements IConcurrencyControl {
             LogType opType = (oldVal == null) ? LogType.INSERT : (newVal == null ? LogType.DELETE : LogType.UPDATE);
             RecordImage beforeImg = toRecordImage(oldVal);
             RecordImage afterImg = toRecordImage(newVal);
-            frm.writeDataLog(txId, opType, data.tableName(), data.rowId(), beforeImg, afterImg);
+            RecoveryResult result = frm.writeDataLog(txId, opType, data.tableName(), data.rowId(), beforeImg, afterImg);
+            if (result == null || !result.isSuccess()) {
+                throw new IllegalStateException("Unable to persist " + opType.toString().toLowerCase() +" log for transaction " + txId);
+            }
         }
         return status;
     }
@@ -292,7 +296,7 @@ public final class ConcurrencyControlManager implements IConcurrencyControl {
     private static RecordImage toRecordImage(Object val) {
         if (val == null) return null;
         if (val instanceof RecordImage img) return img;
-        if (val instanceof List<?> list) return new RecordImage((List<Object>) list);
+        if (val instanceof List<?> list) return new RecordImage(new ArrayList<Object>(list));
         return new RecordImage(List.of(val));
     }
 }
