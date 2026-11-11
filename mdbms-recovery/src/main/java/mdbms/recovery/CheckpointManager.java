@@ -1,6 +1,11 @@
 package mdbms.recovery;
 
 import mdbms.api.IDurableStorage;
+import mdbms.models.log.DataChangeLogRecord;
+import mdbms.models.log.LogRecord;
+import mdbms.models.log.LogType;
+
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
@@ -9,7 +14,7 @@ import java.util.Set;
 public class CheckpointManager {
     private final LogManager logManager;
     private final IDurableStorage storageManager;
-    private final RecordApplier recordApplier; // Kelas untuk Undo/Redo (dari PIC 13524024)
+    private final RecordApplier recordApplier;
 
     public CheckpointManager(LogManager logManager, IDurableStorage storageManager, RecordApplier recordApplier) {
         this.logManager = logManager;
@@ -17,46 +22,39 @@ public class CheckpointManager {
         this.recordApplier = recordApplier;
     }
 
-    public void createCheckpoint() {
-        logManager.flushLog(); 
+    public void executeCheckpoint(List<Integer> activeTxIds) {
+        logManager.flushUpTo(logManager.getCurrentLsn());
         
-        storageManager.flushBuffer();
+        if (storageManager != null) {
+            storageManager.flushBuffer();
+        }
         
-        List<Integer> activeTxIds = logManager.getActiveTransactions(); 
-        CheckpointLogRecord cpRecord = new CheckpointLogRecord(
-            logManager.generateNextLsn(), 
-            System.currentTimeMillis(), 
-            activeTxIds
-        );
-        
-        logManager.appendRecord(cpRecord);
-        logManager.flushLog(); 
+        logManager.appendCheckpointLog(activeTxIds);
     }
 
-    public void recoverToPointInTime(long targetTimestamp, String snapshotPath) {
+    public void recoverToPointInTime(Instant targetTimestamp, String snapshotPath) {
         restoreSnapshot(snapshotPath); 
 
-        LogReader reader = logManager.getReader();
+        List<LogRecord> allLogs = logManager.readLogs(null);
+        
         Set<Integer> committedTxs = new HashSet<>();
-        List<LogRecord> recordsToRedo = new ArrayList<>();
+        List<DataChangeLogRecord> recordsToRedo = new ArrayList<>();
 
-        while (reader.hasNext()) {
-            LogRecord record = reader.next();
-            
-            if (record.getTimestamp() > targetTimestamp) {
-                break; 
+        for (LogRecord record : allLogs) {
+            if (record.getTimestamp().isAfter(targetTimestamp)) {
+                break;
             }
 
             if (record.getType() == LogType.COMMIT) {
                 committedTxs.add(record.getTxId());
             }
             
-            if (record.isDataRecord()) {
-                recordsToRedo.add(record);
+            if (record instanceof DataChangeLogRecord dataRecord) {
+                recordsToRedo.add(dataRecord);
             }
         }
 
-        for (LogRecord record : recordsToRedo) {
+        for (DataChangeLogRecord record : recordsToRedo) {
             if (committedTxs.contains(record.getTxId())) {
                 recordApplier.redo(record);
             }
@@ -64,6 +62,6 @@ public class CheckpointManager {
     }
 
     private void restoreSnapshot(String snapshotPath) {
-        
+        // TODO: Integrasikan pemindahan/penimpaan file .tbl fisik di data directory 
     }
 }
