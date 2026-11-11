@@ -16,6 +16,7 @@ import mdbms.models.LogType;
 import mdbms.models.RecoveryResult;
 import mdbms.models.Transaction;
 import mdbms.models.TransactionState;
+import mdbms.models.log.RecordImage;
 
 /**
  * CC1 transaction manager and facade. It owns transaction lifecycle and
@@ -188,7 +189,14 @@ public final class ConcurrencyControlManager implements IConcurrencyControl {
 
     @Override
     public AccessStatus requestWrite(int txId, DataItem data, Object oldVal, Object newVal) {
-        return request(txId, data, true);
+        AccessStatus status = request(txId, data, true);
+        if (status == AccessStatus.GRANTED && frm != null && (oldVal != null || newVal != null)) {
+            LogType opType = (oldVal == null) ? LogType.INSERT : (newVal == null ? LogType.DELETE : LogType.UPDATE);
+            RecordImage beforeImg = toRecordImage(oldVal);
+            RecordImage afterImg = toRecordImage(newVal);
+            frm.writeDataLog(txId, opType, data.tableName(), data.rowId(), beforeImg, afterImg);
+        }
+        return status;
     }
 
     @Override
@@ -281,4 +289,10 @@ public final class ConcurrencyControlManager implements IConcurrencyControl {
         }
     }
 
+    private static RecordImage toRecordImage(Object val) {
+        if (val == null) return null;
+        if (val instanceof RecordImage img) return img;
+        if (val instanceof List<?> list) return new RecordImage((List<Object>) list);
+        return new RecordImage(List.of(val));
+    }
 }
