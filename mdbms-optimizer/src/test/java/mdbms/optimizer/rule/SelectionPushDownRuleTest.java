@@ -6,12 +6,14 @@ import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.List;
+import java.util.Map;
 import mdbms.models.query.ExpressionNode;
 import mdbms.models.query.ExpressionTree;
 import mdbms.models.query.QueryNodeType;
 import mdbms.models.query.QueryTree;
 import mdbms.models.schema.ColumnDefinition;
 import mdbms.models.schema.DataType;
+import mdbms.models.schema.Statistic;
 import mdbms.models.schema.TableSchema;
 import mdbms.optimizer.Main;
 import mdbms.optimizer.QueryPlanPrinter;
@@ -92,9 +94,9 @@ class SelectionPushDownRuleTest {
     @Test
     void splitsConjunctiveSelectionIntoChain() {
         assertEquals(
-            "SELECT [conditions=[(students.id > 1)]]\n"
-                + "  SELECT [conditions=[(students.gpa >= 3.5)]]\n"
-                + "    SELECT [conditions=[(students.name <> 'x')]]\n"
+            "SELECT [conditions=[(students.name <> 'x')]]\n"
+                + "  SELECT [conditions=[(students.id > 1)]]\n"
+                + "    SELECT [conditions=[(students.gpa >= 3.5)]]\n"
                 + "      TABLE_SCAN [table=students]\n",
             optimizeSelection("SELECT name FROM students "
                 + "WHERE students.id > 1 AND students.gpa >= 3.5 AND students.name <> 'x';"));
@@ -155,6 +157,29 @@ class SelectionPushDownRuleTest {
                 + "    TABLE_SCAN [table=students]\n"
                 + "  TABLE_SCAN [table=takes]\n",
             optimizeSelection("SELECT name FROM students, takes WHERE gpa > 3.0;"));
+    }
+
+    @Test
+    void putsMostSelectiveConditionClosestToTable() {
+        Main.InMemorySchemaCatalog catalog = new Main.InMemorySchemaCatalog();
+        catalog.addTable(new TableSchema("students", List.of(
+                new ColumnDefinition("id", DataType.INTEGER, 4, false),
+                new ColumnDefinition("name", DataType.VARCHAR, 50, false),
+                new ColumnDefinition("gpa", DataType.FLOAT, 4, false)), List.of("id"), List.of()),
+            new Statistic("students", 1000, 100, 40, 10, Map.of("id", 1000, "name", 900, "gpa", 40)));
+        QueryTree tree = new ShaylaParser(new ShaylaLexer("")).parseToTree("SELECT name FROM students "
+            + "WHERE students.name <> 'x' AND students.gpa = 3.5 AND students.id > 1 AND students.id = 7;");
+        BindingContext bindings = new QueryBinder(catalog).bind(tree);
+        OptimizationContext context = new OptimizationContext(bindings, catalog, catalog, null);
+
+        // V(name)=900 -> <> lolos ~99.9%, range 1/3, V(gpa)=40 -> 1/40, V(id)=1000 -> 1/1000
+        assertEquals(
+            "SELECT [conditions=[(students.name <> 'x')]]\n"
+                + "  SELECT [conditions=[(students.id > 1)]]\n"
+                + "    SELECT [conditions=[(students.gpa = 3.5)]]\n"
+                + "      SELECT [conditions=[(students.id = 7)]]\n"
+                + "        TABLE_SCAN [table=students]\n",
+            new QueryPlanPrinter().printPlan(rule.apply(findSelect(tree), context)));
     }
 
     @Test
