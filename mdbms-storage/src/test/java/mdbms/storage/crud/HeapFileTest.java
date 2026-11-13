@@ -226,4 +226,41 @@ class HeapFileTest {
         pool.unpin(heldPage, false, 0);
         for (Block block : others) pool.unpin(block, false, 0);
     }
+
+    // redo insertAt ke block yang belum ada di file bikin block nya dulu
+    @Test
+    void insertAtCreatesMissingBlocksForRedo(){
+        RowId target = new RowId("users", 2, 1);
+
+        assertTrue(heapFile.insertAt(target, List.of(7, "redo")));
+
+        assertEquals(3, heapFile.blockCount());
+        assertEquals(List.of(7, "redo"), heapFile.fetch(target).values());
+    }
+
+    // insertAt ulang dengan isi sama ga ngubah apa apa, isi beda di slot yang sama ditolak
+    @Test
+    void insertAtIsIdempotentForSameRow(){
+        RowId rowId = heapFile.insert(List.of(1, "alice"));
+
+        assertFalse(heapFile.insertAt(rowId, List.of(1, "alice")));
+        StorageException e = assertThrows(StorageException.class,
+                () -> heapFile.insertAt(rowId, List.of(2, "bob")));
+        assertEquals(StorageErrorCode.SLOT_UNAVAILABLE, e.getCode());
+        assertEquals(List.of(1, "alice"), heapFile.fetch(rowId).values());
+    }
+
+    // block nol dari append yang header nya belum ke flush tetap bisa di scan dan diisi
+    @Test
+    void blankBlockOnDiskIsTreatedAsEmptyPage(){
+        BlockManager blocks = new BlockManager(tempDir.toString());
+        blocks.appendBlock("users.tbl");
+
+        try (RowIterator rows = heapFile.scan()){
+            assertFalse(rows.hasNext());
+        }
+        RowId rowId = heapFile.insert(List.of(1, "alice"));
+        assertEquals(0, rowId.blockNumber());
+        assertEquals(List.of(1, "alice"), heapFile.fetch(rowId).values());
+    }
 }
