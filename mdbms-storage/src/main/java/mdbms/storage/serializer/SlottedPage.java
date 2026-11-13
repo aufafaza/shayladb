@@ -73,6 +73,40 @@ public final class SlottedPage {
         }
     }
 
+    // baca halaman dari data block, block yang isinya nol semua dianggap halaman kosong
+    // ini kejadian kalau appendBlock udah sampai disk tapi header halamannya belum sempat ke flush sebelum crash
+    public static SlottedPage of(byte[] bytes) {
+        if (bytes != null && bytes.length == PAGE_SIZE && isBlank(bytes)) {
+            return new SlottedPage();
+        }
+        return new SlottedPage(bytes);
+    }
+
+    // true kalau semua byte nya nol
+    private static boolean isBlank(byte[] bytes) {
+        for (byte b : bytes) {
+            if (b != 0) return false;
+        }
+        return true;
+    }
+
+    // panjangin direktori slot sampai slot ini ada, slot tambahan diisi status kosong
+    // dipakai redo yang mau naruh baris di slot yang belum sempat tercatat di disk
+    public void ensureSlot(int slot) {
+        if (slot < 0) {
+            throw new StorageException(StorageErrorCode.SLOT_UNAVAILABLE, "Invalid slot " + slot);
+        }
+        int missing = slot + 1 - records.size();
+        if (missing <= 0) return;
+        if (usedBytes() + (long) missing * SLOT_SIZE > PAGE_SIZE) {
+            throw new StorageException(StorageErrorCode.SLOT_UNAVAILABLE, "Page has no room for slot " + slot);
+        }
+        for (int i = 0; i < missing; i++) {
+            records.add(null);
+            reservations.add(0);
+        }
+    }
+
     public boolean hasSpace(int recordLength) {
         if (recordLength <= 0) {
             throw new StorageException(StorageErrorCode.SCHEMA_VIOLATION, "Record length must be positive");
@@ -87,6 +121,12 @@ public final class SlottedPage {
     public boolean isOccupied(int slot) {
         checkSlot(slot);
         return records.get(slot) != null;
+    }
+
+    // true kalau slot ini lagi dipesan tapi belum diisi record
+    public boolean isReserved(int slot) {
+        checkSlot(slot);
+        return records.get(slot) == null && reservations.get(slot) > 0;
     }
 
     // menyiapkan slot kosong buat record baru
