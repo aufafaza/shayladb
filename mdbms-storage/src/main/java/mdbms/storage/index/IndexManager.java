@@ -46,14 +46,17 @@ public final class IndexManager {
         this.maxDegreeOverride = maxDegreeOverride;
     }
 
-    // buka lagi semua index yang tercatat di katalog, dipanggil sekali pas DBMS nyala
+    // buka lagi semua index yang tercatat di katalog, dipanggil pas DBMS nyala dan setelah file data di restore
+    // index yang file nya hilang dibikin kosong, isinya nyusul lewat rebuild
     public void loadAll() {
         lock.writeLock().lock();
         try {
             indexes.clear();
             for (IndexInfo info : catalog.getAllIndexes()) {
                 TableSchema schema = catalog.getSchema(info.tableName());
-                indexes.put(info.indexName(), open(info, columnOf(schema, info.columnName())));
+                Index index = open(info, columnOf(schema, info.columnName()));
+                if (pool.blockCount(BPlusTreeIndex.fileNameOf(info)) == 0) index.create();
+                indexes.put(info.indexName(), index);
             }
         } finally {
             lock.writeLock().unlock();
@@ -194,6 +197,29 @@ public final class IndexManager {
             }
         } finally {
             lock.readLock().unlock();
+        }
+    }
+
+    // kosongin semua index satu tabel lalu isi lagi dari baris heap, dipakai setelah recovery biar index pasti sama dengan tabel
+    // kalau gagal di tengah index bisa setengah keisi, pemanggil cukup ulang rebuild nya
+    public void rebuild(TableSchema schema, RowIterator rows) {
+        Objects.requireNonNull(schema, "schema");
+        Objects.requireNonNull(rows, "rows");
+        lock.writeLock().lock();
+        try {
+            List<Index> targets = indexesOf(schema.tableName());
+            if (targets.isEmpty()) return;
+            for (Index index : targets) {
+                index.clear();
+            }
+            while (rows.hasNext()) {
+                Row row = rows.next();
+                for (Index index : targets) {
+                    index.insert(keyOf(row, schema, index.getInfo().columnName()), row.rowId());
+                }
+            }
+        } finally {
+            lock.writeLock().unlock();
         }
     }
 
