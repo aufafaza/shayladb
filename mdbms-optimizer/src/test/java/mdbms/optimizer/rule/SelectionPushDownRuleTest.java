@@ -108,4 +108,65 @@ class SelectionPushDownRuleTest {
                 + "    TABLE_SCAN [table=students]\n",
             optimizeSelection("SELECT name FROM students WHERE students.gpa * 2 > 6 AND students.id = 3;"));
     }
+
+    @Test
+    void pushesSingleTableConditionsBelowCartesian() {
+        assertEquals(
+            "SELECT [conditions=[(students.id = takes.nim)]]\n"
+                + "  CARTESIAN\n"
+                + "    SELECT [conditions=[(students.gpa > 3.0)]]\n"
+                + "      TABLE_SCAN [table=students]\n"
+                + "    SELECT [conditions=[(takes.grade = 'A')]]\n"
+                + "      TABLE_SCAN [table=takes]\n",
+            optimizeSelection("SELECT students.name FROM students, takes "
+                + "WHERE students.gpa > 3.0 AND takes.grade = 'A' AND students.id = takes.nim;"));
+    }
+
+    @Test
+    void stopsCrossTableConditionsAtTheJoinThatMeetsBothTables() {
+        assertEquals(
+            "SELECT [conditions=[(takes.code = courses.code)]]\n"
+                + "  CARTESIAN\n"
+                + "    SELECT [conditions=[(students.id = takes.nim)]]\n"
+                + "      CARTESIAN\n"
+                + "        TABLE_SCAN [table=students]\n"
+                + "        TABLE_SCAN [table=takes]\n"
+                + "    SELECT [conditions=[(courses.credits > 2)]]\n"
+                + "      TABLE_SCAN [table=courses]\n",
+            optimizeSelection("SELECT students.name FROM students, takes, courses "
+                + "WHERE courses.credits > 2 AND takes.code = courses.code AND students.id = takes.nim;"));
+    }
+
+    @Test
+    void pushesBelowConditionalJoinAndKeepsItsOnCondition() {
+        String plan = optimizeSelection("SELECT students.name FROM students JOIN takes "
+            + "ON students.id = takes.nim WHERE takes.grade = 'A';");
+        assertTrue(plan.startsWith("JOIN"), plan);
+        assertTrue(plan.contains("(students.id = takes.nim)"), plan);
+        assertTrue(plan.contains("  SELECT [conditions=[(takes.grade = 'A')]]\n"
+            + "    TABLE_SCAN [table=takes]\n"), plan);
+    }
+
+    @Test
+    void resolvesUnqualifiedColumnToItsTable() {
+        assertEquals(
+            "CARTESIAN\n"
+                + "  SELECT [conditions=[(gpa > 3.0)]]\n"
+                + "    TABLE_SCAN [table=students]\n"
+                + "  TABLE_SCAN [table=takes]\n",
+            optimizeSelection("SELECT name FROM students, takes WHERE gpa > 3.0;"));
+    }
+
+    @Test
+    void onlySplitsWhenBindingsAreMissing() {
+        QueryTree tree = new ShaylaParser(new ShaylaLexer("")).parseToTree(
+            "SELECT students.name FROM students, takes WHERE students.gpa > 3.0 AND takes.grade = 'A';");
+        assertEquals(
+            "SELECT [conditions=[(students.gpa > 3.0)]]\n"
+                + "  SELECT [conditions=[(takes.grade = 'A')]]\n"
+                + "    CARTESIAN\n"
+                + "      TABLE_SCAN [table=students]\n"
+                + "      TABLE_SCAN [table=takes]\n",
+            new QueryPlanPrinter().printPlan(rule.apply(findSelect(tree), null)));
+    }
 }
