@@ -42,7 +42,7 @@ public class HeapFileRowIterator implements RowIterator {
             Block block = pool.pin(fileName, currentBlock);
 
             try{
-                SlottedPage page = new SlottedPage(block.data);
+                SlottedPage page = SlottedPage.of(block.data);
 
                 while (currentSlot < page.slotCount()){
                 
