@@ -183,6 +183,96 @@ class SelectionPushDownRuleTest {
     }
 
     @Test
+    void pushesBelowNaturalJoinAndKeepsItNatural() {
+        String plan = optimizeSelection("SELECT * FROM takes NATURAL JOIN courses WHERE courses.credits > 2;");
+        assertTrue(plan.startsWith("JOIN [natural=true"), plan);
+        assertTrue(plan.contains("  SELECT [conditions=[(courses.credits > 2)]]\n"
+            + "    TABLE_SCAN [table=courses]\n"), plan);
+    }
+
+    @Test
+    void keepsConstantConditionOnTop() {
+        assertEquals(
+            "SELECT [conditions=[(1 = 1)]]\n"
+                + "  CARTESIAN\n"
+                + "    SELECT [conditions=[(students.id = 2)]]\n"
+                + "      TABLE_SCAN [table=students]\n"
+                + "    TABLE_SCAN [table=takes]\n",
+            optimizeSelection("SELECT name FROM students, takes WHERE 1 = 1 AND students.id = 2;"));
+    }
+
+    @Test
+    void matchesTableNamesCaseInsensitively() {
+        assertEquals(
+            "CARTESIAN\n"
+                + "  SELECT [conditions=[(Students.gpa > 3.0)]]\n"
+                + "    TABLE_SCAN [table=STUDENTS]\n"
+                + "  TABLE_SCAN [table=takes]\n",
+            optimizeSelection("SELECT name FROM STUDENTS, takes WHERE Students.gpa > 3.0;"));
+    }
+
+    @Test
+    void leavesOriginalTreeUntouched() {
+        Main.InMemorySchemaCatalog catalog = catalog();
+        QueryTree tree = new ShaylaParser(new ShaylaLexer("")).parseToTree(
+            "SELECT name FROM students, takes WHERE students.gpa > 3.0 AND takes.grade = 'A' ORDER BY name LIMIT 3;");
+        BindingContext bindings = new QueryBinder(catalog).bind(tree);
+        String before = new QueryPlanPrinter().printPlan(tree);
+        rule.apply(findSelect(tree), new OptimizationContext(bindings, catalog, catalog, null));
+        assertEquals(before, new QueryPlanPrinter().printPlan(tree));
+    }
+
+    @Test
+    void neverDropsOrDuplicatesConditionsOrTables() {
+        List<String> queries = List.of(
+            "SELECT name FROM students WHERE students.id > 1 AND students.gpa < 3.0;",
+            "SELECT students.name FROM students, takes, courses WHERE courses.credits > 2 "
+                + "AND takes.code = courses.code AND students.id = takes.nim AND students.gpa > 3.0 AND 1 = 1;",
+            "SELECT students.name FROM students JOIN takes ON students.id = takes.nim, courses "
+                + "WHERE takes.code = courses.code AND takes.grade = 'A';",
+            "SELECT * FROM takes NATURAL JOIN courses WHERE courses.credits > 2 AND takes.nim = 5;");
+        for (String sql : queries) {
+            Main.InMemorySchemaCatalog catalog = catalog();
+            QueryTree tree = new ShaylaParser(new ShaylaLexer("")).parseToTree(sql);
+            BindingContext bindings = new QueryBinder(catalog).bind(tree);
+            QueryTree select = findSelect(tree);
+            QueryTree result = rule.apply(select, new OptimizationContext(bindings, catalog, catalog, null));
+
+            assertEquals(sorted(conditionsOf(select)), sorted(conditionsOf(result)), sql);
+            assertEquals(sorted(tablesOf(select)), sorted(tablesOf(result)), sql);
+        }
+    }
+
+    // semua kondisi (sudah dipecah per AND) di subtree
+    private static List<String> conditionsOf(QueryTree node) {
+        List<String> out = new java.util.ArrayList<>();
+        for (ExpressionTree condition : node.getConditions()) {
+            for (ExpressionTree part : QueryTreeRewrites.splitConjuncts(condition)) {
+                out.add(part.formatTree());
+            }
+        }
+        for (QueryTree child : node.getChildren()) {
+            out.addAll(conditionsOf(child));
+        }
+        return out;
+    }
+
+    private static List<String> tablesOf(QueryTree node) {
+        List<String> out = new java.util.ArrayList<>();
+        if (node.getNodeType() == QueryNodeType.TABLE_SCAN) {
+            out.add(node.getTableName());
+        }
+        for (QueryTree child : node.getChildren()) {
+            out.addAll(tablesOf(child));
+        }
+        return out;
+    }
+
+    private static List<String> sorted(List<String> values) {
+        return values.stream().sorted().toList();
+    }
+
+    @Test
     void onlySplitsWhenBindingsAreMissing() {
         QueryTree tree = new ShaylaParser(new ShaylaLexer("")).parseToTree(
             "SELECT students.name FROM students, takes WHERE students.gpa > 3.0 AND takes.grade = 'A';");
