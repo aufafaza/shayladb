@@ -181,6 +181,8 @@ public final class StorageManager implements IDataAccess, ISchemaCatalog, IStati
         heapFile.releaseReservation(rowId);
     }
 
+    // taruh baris di RowId hasil reserveRowId atau dari redo FRM, kalau barisnya udah ada dengan isi sama dianggap beres
+    // heap cuma dibalikin kalau baris nya memang baru dimasukin di panggilan ini
     @Override
     public void insertAt(RowId rowId, List<Object> values){
         TableSchema schema = requireSchema(rowId.tableName());
@@ -188,14 +190,16 @@ public final class StorageManager implements IDataAccess, ISchemaCatalog, IStati
         validateRow(schema, values);
 
         HeapFile heapFile = heapFileOf(rowId.tableName());
-        heapFile.insertAt(rowId, values);
+        boolean inserted = heapFile.insertAt(rowId, values);
 
         Row newRow = new Row(rowId, new ArrayList<>(values));
 
         try{
             afterWrite(rowId.tableName(), null, newRow);
         } catch (RuntimeException e){
-            undo(e, () -> heapFile.delete(rowId));
+            if (inserted){
+                undo(e, () -> heapFile.delete(rowId));
+            }
             throw e;
         }
     }
@@ -309,6 +313,31 @@ public final class StorageManager implements IDataAccess, ISchemaCatalog, IStati
     @Override
     public BufferStats getBufferStats(){
         return bufferPool.getBufferStats();
+    }
+
+    // buang semua cache SM lalu baca ulang katalog dan index dari disk, dipakai FRM setelah file data diganti snapshot
+    // perubahan di buffer yang belum di flush sengaja dibuang karena isi disk yang jadi acuan
+    public void reloadFromDisk(){
+        bufferPool.discardAllFrames();
+        tables.clear();
+        for (String table : catalog.listTables()){
+            statistics.invalidate(table);
+        }
+        catalog.load();
+        indexManager.loadAll();
+    }
+
+    // bangun ulang semua index dari isi heap, dipanggil setelah recovery karena halaman heap dan index bisa ke flush ga barengan
+    public void rebuildIndexes(){
+        for (String table : catalog.listTables()){
+            if (catalog.getIndexes(table).isEmpty()){
+                continue;
+            }
+
+            try (RowIterator iterator = heapFileOf(table).scan()){
+                indexManager.rebuild(catalog.getSchema(table), iterator);
+            }
+        }
     }
 
     // ambil schema tabel, getSchema SM4 udah lempar TABLE_NOT_FOUND sendiri kalau tabelnya ga ada
