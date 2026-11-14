@@ -7,6 +7,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 
 import mdbms.api.IConcurrencyControl;
 import mdbms.api.IFailureRecoveryManager;
@@ -25,6 +26,7 @@ import mdbms.models.transaction.TransactionState;
  */
 public final class ConcurrencyControlManager implements IConcurrencyControl {
     private final AtomicInteger transactionCounter = new AtomicInteger(1);
+    private final AtomicLong timestampCounter = new AtomicLong(System.currentTimeMillis());
     private final Map<Integer, Transaction> activeTransactions = new ConcurrentHashMap<>();
     private final IFailureRecoveryManager frm;
     private final Object lifecycleMonitor = new Object();
@@ -117,6 +119,8 @@ public final class ConcurrencyControlManager implements IConcurrencyControl {
             throw new IllegalStateException("Failure recovery did not complete");
         }
         transactionCounter.updateAndGet(current -> Math.max(current, result.getMaxTxId() + 1));
+        long now = System.currentTimeMillis();
+        timestampCounter.updateAndGet(current -> Math.max(now, current + 1));
         synchronized (lifecycleMonitor) {
             isRecovered = true;
             lifecycleMonitor.notifyAll();
@@ -133,7 +137,9 @@ public final class ConcurrencyControlManager implements IConcurrencyControl {
             if (!isRecovered) throw new IllegalStateException("Recovery has not completed");
             if (!acceptingTransactions) throw new IllegalStateException("Transaction admission is paused");
             int id = transactionCounter.getAndIncrement();
-            Transaction tx = new Transaction(id, System.currentTimeMillis());
+            long now = System.currentTimeMillis();
+            long ts = timestampCounter.updateAndGet(prev -> Math.max(now, prev + 1));
+            Transaction tx = new Transaction(id, ts);
             if (frm != null) {
                 RecoveryResult result = frm.writeTransactionLog(id, LogType.BEGIN);
                 if (result == null || !result.isSuccess()) {
