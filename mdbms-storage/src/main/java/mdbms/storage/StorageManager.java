@@ -293,6 +293,17 @@ public final class StorageManager implements IDataAccess, ISchemaCatalog, IStati
         catalog.dropTable(table);
     }
 
+    // kosongin semua baris tabel tapi tabelnya tetap ada, index tabel ikut dikosongin dan statistik dihitung ulang
+    // balikin jumlah baris yang dihapus, ditolak kalau masih ada block tabel yang lagi di pin
+    public int clearTable(String table){
+        requireSchema(table);
+
+        int removed = heapFileOf(table).truncate();
+        indexManager.clear(table);
+        statistics.invalidate(table);
+        return removed;
+    }
+
     @Override
     public List<IndexInfo> getIndexes(String table){
         requireSchema(table);
@@ -513,18 +524,19 @@ public final class StorageManager implements IDataAccess, ISchemaCatalog, IStati
         }
     }
 
-    // samain semua index tabel dengan perubahan baris lalu buang cache statistik tabelnya
+    // samain semua index tabel dengan perubahan baris lalu catat perubahannya ke statistik secara eager
     private void afterWrite(String table, Row oldRow, Row newRow){
         TableSchema schema = requireSchema(table);
 
         if (oldRow == null){
             indexManager.onInsert(newRow, schema);
+            statistics.recordWrite(table, 1);
         } else if (newRow == null){
             indexManager.onDelete(oldRow, schema);
+            statistics.recordWrite(table, -1);
         } else{
             indexManager.onUpdate(oldRow, newRow, schema);
+            statistics.recordWrite(table, 0);
         }
-
-        statistics.invalidate(table);
     }
 }
