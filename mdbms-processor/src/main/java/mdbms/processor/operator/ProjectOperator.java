@@ -7,6 +7,7 @@ import mdbms.models.schema.ColumnDefinition;
 import mdbms.processor.IResultRow;
 import mdbms.processor.ResultRow;
 import mdbms.processor.ResultTableSchema;
+import mdbms.processor.exception.AmbiguousColumnException;
 
 public class ProjectOperator extends QueryUnaryOperator{
     private final List<ColumnReference> columns;
@@ -25,6 +26,9 @@ public class ProjectOperator extends QueryUnaryOperator{
         if (input == null) throw new IllegalStateException("Child operator tidak menghasilkan schema sesuai");
         outputSchema = new ResultTableSchema();
         for (ColumnReference ref : columns) {
+            if (ref.getTableName() == null && input.isColumnAmbiguous(ref.getColumnName())) {
+                throw new AmbiguousColumnException(ref.getColumnName());
+            }
             String origin = ref.getTableName() == null ? input.getColumnTableOrigin(ref.getColumnName()) : ref.getTableName();
             ColumnDefinition definition = null;
             for (int i=0; i<input.getColumns().size(); i++) {
