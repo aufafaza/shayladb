@@ -14,6 +14,7 @@ import mdbms.models.query.ParsedQuery;
 import mdbms.models.schema.ColumnDefinition;
 import mdbms.processor.exception.QueryExecutionException;
 import mdbms.processor.exception.TransactionAbortedException;
+import mdbms.processor.operator.IQueryMessage;
 import mdbms.processor.operator.IQueryOperator;
 import mdbms.processor.operator.IWriteOperator;
 
@@ -78,10 +79,14 @@ public class QueryProcessor implements IQueryProcessor {
         }
 
         int affectedRows = 0;
+        String message = "Query Executed";
         if (translatedQuery instanceof IWriteOperator) {
             affectedRows = ((IWriteOperator) translatedQuery).getAffectedRows();
         }
-        ExecutionResult executionResult = new ExecutionResult(true, columns, rows, affectedRows, "Query executed");
+        if (translatedQuery instanceof IQueryMessage) {
+            message = ((IQueryMessage) translatedQuery).getMessage();
+        }
+        ExecutionResult executionResult = new ExecutionResult(true, columns, rows, affectedRows, message);
         return executionResult;
     }
 
