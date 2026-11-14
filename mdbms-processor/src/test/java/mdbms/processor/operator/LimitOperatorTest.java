@@ -7,8 +7,6 @@ import java.util.List;
 
 import org.junit.jupiter.api.Test;
 
-import mdbms.processor.utility.IntegerRowUtility;
-
 class LimitOperatorTest {
     @Test
     void limitReturnsRequestedRows() {
