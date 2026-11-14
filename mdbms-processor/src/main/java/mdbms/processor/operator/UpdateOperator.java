@@ -64,7 +64,7 @@ public class UpdateOperator extends QueryUnaryOperator implements IWriteOperator
                 oldValues.add(row.get(name));
             }
             List<Object> newValues = new ArrayList<>(oldValues);
-            newValues.set(columnIndex, toColumnType(ExpressionEvaluator.evaluate(newValue, row), columnType));
+            newValues.set(columnIndex, ColumnTypes.toColumnType(ExpressionEvaluator.evaluate(newValue, row), columnType));
 
             DataItem item = new DataItem(tableName, row.getRowId());
             AccessPermission.write(concurrencyControlManager, transactionId, item, oldValues, newValues);
@@ -84,13 +84,5 @@ public class UpdateOperator extends QueryUnaryOperator implements IWriteOperator
 
     public int getAffectedRows() {
         return affectedRows;
-    }
-
-    private static Object toColumnType(Object value, DataType type) {
-        if (value instanceof Number number) {
-            if (type == DataType.INTEGER) return number.intValue();
-            if (type == DataType.FLOAT) return number.floatValue();
-        }
-        return value;
     }
 }
