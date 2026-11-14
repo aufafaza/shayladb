@@ -15,6 +15,11 @@ import mdbms.optimizer.lexer.TokenStream;
 import mdbms.optimizer.parser.ExpressionParser;
 import mdbms.optimizer.parser.SelectParser;
 import mdbms.optimizer.parser.StatementParser;
+import mdbms.models.data.ComparisonOperator;
+import mdbms.models.data.Condition;
+import mdbms.models.query.IndexScanSpec;
+import mdbms.models.schema.IndexInfo;
+import mdbms.models.schema.IndexType;
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -296,6 +301,17 @@ class QueryPlanPrinterTest {
         assertEquals("Total estimated cost: 4\nPROJECT [columns=[*]]\n  TABLE_SCAN [table=a]\n", text);
         assertEquals("SELECT * FROM a", query.rawQuery());
         assertEquals(List.of("a"), query.targetTables());
+    }
+
+    @Test
+    void printsTheIndexChosenForATableScan() {
+        QueryTree scan = scan("siswa", PhysicalAlgorithm.INDEX_SCAN, 0);
+        scan.setIndexScan(new IndexScanSpec(new IndexInfo("idx_siswa_id", "siswa", "id", IndexType.BPLUS_TREE),
+            new Condition("id", ComparisonOperator.EQ, 7)));
+
+        assertEquals("Total estimated cost: 3\n"
+                + "TABLE_SCAN [table=siswa, indexScan=idx_siswa_id id EQ 7, algorithm=INDEX_SCAN]\n",
+            printer.printPlan(scan, 3));
     }
 
     private static QueryTree scan(String table) {
