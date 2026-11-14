@@ -48,13 +48,16 @@ final class MockOperator implements IQueryOperator {
 
     @Override
     public void open() {
-        isDone = false;
+        currentRowIndex = 0;
+        isDone = resultRows.isEmpty();
     }
 
     @Override
     public IResultRow next() {
-        if (isDone)
+        if (isDone || currentRowIndex >= resultRows.size()) {
+            isDone = true;
             return null;
+        }
         IResultRow row = getRow(currentRowIndex++);
         if (currentRowIndex >= resultRows.size())
             isDone = true;
