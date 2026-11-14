@@ -136,6 +136,13 @@ public class BufferPool {
         frames.keySet().removeIf(id -> id.file().equals(path));
     }
 
+    // buang semua frame tanpa flush dan tanpa hapus file, dipakai pas file di disk diganti dari luar misalnya restore snapshot
+    // ditolak kalau masih ada frame yang di pin biar ga ada pemakai yang pegang data basi
+    public synchronized void discardAllFrames() {
+        for (Block block : frames.values()) requireUnpinned(block);
+        frames.clear();
+    }
+
     private void requireFileUnpinned(Path path) {
         for (Map.Entry<BlockId, Block> entry : frames.entrySet()) {
             if (entry.getKey().file().equals(path)) requireUnpinned(entry.getValue());
