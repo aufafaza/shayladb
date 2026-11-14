@@ -19,7 +19,7 @@ class CommitOperatorTest {
 
         assertEquals(1, concurrencyControl.commitCalls);
         assertEquals(42, concurrencyControl.committedTransactionId);
-        assertEquals("COMMIT transaction 42", result.get("message"));
+        assertEquals("COMMIT transaction 42", operator.getMessage());
         assertNull(operator.next());
     }
 
@@ -33,7 +33,7 @@ class CommitOperatorTest {
         IResultRow result = operator.next();
 
         assertEquals(1, concurrencyControl.commitCalls);
-        assertEquals("COMMIT rejected: transaction is closed", result.get("message"));
+        assertEquals("COMMIT rejected: transaction is closed", operator.getMessage());
         assertNull(operator.next());
     }
 }
