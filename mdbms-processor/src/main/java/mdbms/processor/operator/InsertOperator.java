@@ -38,7 +38,7 @@ public class InsertOperator implements IQueryOperator, IWriteOperator {
         List<ColumnDefinition> columns = schemaCatalog.getTableSchema(tableName).columns();
         rowValues = new ArrayList<>();
         for (int i = 0; i < values.size(); i++) {
-            Object value = ExpressionEvaluator.evaluate(values.get(i), null);
+            Object value = ExpressionEvaluator.evaluate(values.get(i));
             rowValues.add(toColumnType(value, columns.get(i).type()));
         }
     }

@@ -3,10 +3,13 @@ package mdbms.processor;
 import java.util.List;
 import mdbms.models.query.ExpressionNode;
 import mdbms.models.query.ExpressionTree;
+import mdbms.models.schema.ColumnDefinition;
+import mdbms.processor.exception.UnexpectedTypeException;
 
 public class ExpressionEvaluator {
-    public static Object evaluate(ExpressionTree expressionTree, IResultRow row) {
+    public static Object evaluate(ExpressionTree expressionTree, IResultRow... rows) {
         ExpressionNode root = expressionTree.getRoot();
+        IResultRow row = combineRow(rows);
         return ExpressionEvaluator.evaluate(root, row);
     }
 
@@ -40,12 +43,12 @@ public class ExpressionEvaluator {
     }
 
     public static boolean matches(
-        List<ExpressionTree> conditions,
-        IResultRow row
-    ) {
+            List<ExpressionTree> conditions,
+            IResultRow... rows) {
         if (conditions == null || conditions.isEmpty()) {
             return true;
         }
+        IResultRow row = combineRow(rows);
 
         for (ExpressionTree condition : conditions) {
             if (condition == null || condition.getRoot() == null) {
@@ -53,6 +56,15 @@ public class ExpressionEvaluator {
             }
 
             Object result = evaluate(condition, row);
+            if (result instanceof String) {
+                throw new UnexpectedTypeException("BOOLEAN", "STRING");
+            }
+            if (result instanceof Long) {
+                throw new UnexpectedTypeException("BOOLEAN", "INTEGER");
+            }
+            if (result instanceof Double) {
+                throw new UnexpectedTypeException("BOOLEAN", "REAL");
+            }
 
             if (!Boolean.TRUE.equals(result)) {
                 return false;
@@ -60,6 +72,32 @@ public class ExpressionEvaluator {
         }
 
         return true;
+    }
+
+    private static IResultRow combineRow(IResultRow... rows) {
+        if (rows.length == 0)
+            return ResultRow.EMPTY;
+        if (rows.length == 1)
+            return rows[0];
+
+        ResultTableSchema combinedSchema = new ResultTableSchema();
+
+        for (IResultRow row : rows) {
+            ResultTableSchema schema = row.getSchema();
+            for (ColumnDefinition columnDefinition : schema.getColumns()) {
+                combinedSchema.addColumn(columnDefinition);
+            }
+        }
+
+        ResultRow combinedRow = new ResultRow(combinedSchema);
+        for (IResultRow row : rows) {
+            for (ColumnDefinition columnDefinition : combinedSchema.getColumns()) {
+                String tableName = combinedSchema.getColumnTableOrigin(columnDefinition);
+                String columnName = columnDefinition.name();
+                combinedRow.set(tableName, columnName, row.get(tableName, columnName));
+            }
+        }
+        return combinedRow;
     }
 
     private static Object columnReference(ExpressionNode expressionNode, IResultRow row) {
@@ -190,9 +228,5 @@ public class ExpressionEvaluator {
             throw new RuntimeException(
                     "Failed to evaluate expression: cannot apply logical AND to non boolean value");
         }
-    }
-
-    public static Object evaluate(ExpressionTree expressionTree, IResultRow row1, IResultRow row2) {
-        return null;
     }
 }
