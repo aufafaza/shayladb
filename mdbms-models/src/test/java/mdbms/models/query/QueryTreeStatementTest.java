@@ -9,6 +9,10 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import mdbms.models.data.ComparisonOperator;
+import mdbms.models.data.Condition;
+import mdbms.models.schema.IndexInfo;
+import mdbms.models.schema.IndexType;
 import org.junit.jupiter.api.Test;
 
 class QueryTreeStatementTest {
@@ -78,6 +82,21 @@ class QueryTreeStatementTest {
     }
 
     @Test
+    void indexScanAttachesOnlyToTableScanOfTheSameTable() {
+        QueryTree scan = node(QueryNodeType.TABLE_SCAN);
+        IndexScanSpec spec = indexScan("A");
+
+        scan.setIndexScan(spec);
+
+        assertSame(spec, scan.getIndexScan());
+        assertNull(scan.getIndexName());
+        assertThrows(NullPointerException.class, () -> scan.setIndexScan(null));
+        assertThrows(IllegalArgumentException.class, () -> scan.setIndexScan(indexScan("other")));
+        assertSame(spec, scan.getIndexScan());
+        assertTrue(scan.formatTree().contains("indexScan=idx_a_id id EQ 7"));
+    }
+
+    @Test
     void statementSettersRejectEveryOtherNodeKind() {
         for (QueryNodeType type : QueryNodeType.values()) {
             QueryTree tree = node(type);
@@ -90,6 +109,9 @@ class QueryTreeStatementTest {
             }
             if (type != QueryNodeType.CREATE_INDEX) {
                 assertThrows(IllegalStateException.class, () -> tree.setIndexDefinition("idx", column));
+            }
+            if (type != QueryNodeType.TABLE_SCAN) {
+                assertThrows(IllegalStateException.class, () -> tree.setIndexScan(indexScan("a")));
             }
         }
     }
@@ -106,11 +128,17 @@ class QueryTreeStatementTest {
             assertTrue(tree.getInsertValues().isEmpty());
             assertNull(tree.getIndexName());
             assertNull(tree.getIndexColumn());
+            assertNull(tree.getIndexScan());
         }
     }
 
     private static QueryTree node(QueryNodeType type) {
         return new QueryTree(type, PhysicalAlgorithm.DEFAULT, "a", List.of(), List.of(), 0);
+    }
+
+    private static IndexScanSpec indexScan(String table) {
+        return new IndexScanSpec(new IndexInfo("idx_a_id", table, "id", IndexType.BPLUS_TREE),
+            new Condition("id", ComparisonOperator.EQ, 7));
     }
 
     private static ExpressionTree value(String text) {
