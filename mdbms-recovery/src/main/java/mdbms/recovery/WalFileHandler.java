@@ -249,7 +249,10 @@ public class WalFileHandler {
                 yield new DataChangeLogRecord(lsn, txId, type, timestamp, table, rid, beforeImg, afterImg);
             }
             case CHECKPOINT -> {
-                List<Integer> activeTxIds = (tokens.length >= 5) ? deserializeIntList(tokens[4].trim()) : List.of();
+                if (tokens.length < 5) {
+                    throw new IllegalArgumentException("Field CheckpointLogRecord tidak lengkap: " + line);
+                }
+                List<Integer> activeTxIds = deserializeIntList(tokens[4].trim());
                 yield new CheckpointLogRecord(lsn, timestamp, activeTxIds);
             }
         };

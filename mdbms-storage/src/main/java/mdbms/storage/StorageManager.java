@@ -181,6 +181,8 @@ public final class StorageManager implements IDataAccess, ISchemaCatalog, IStati
         heapFile.releaseReservation(rowId);
     }
 
+    // taruh baris di RowId hasil reserveRowId atau dari redo FRM, kalau barisnya udah ada dengan isi sama dianggap beres
+    // heap cuma dibalikin kalau baris nya memang baru dimasukin di panggilan ini
     @Override
     public void insertAt(RowId rowId, List<Object> values){
         TableSchema schema = requireSchema(rowId.tableName());
@@ -188,14 +190,16 @@ public final class StorageManager implements IDataAccess, ISchemaCatalog, IStati
         validateRow(schema, values);
 
         HeapFile heapFile = heapFileOf(rowId.tableName());
-        heapFile.insertAt(rowId, values);
+        boolean inserted = heapFile.insertAt(rowId, values);
 
         Row newRow = new Row(rowId, new ArrayList<>(values));
 
         try{
             afterWrite(rowId.tableName(), null, newRow);
         } catch (RuntimeException e){
-            undo(e, () -> heapFile.delete(rowId));
+            if (inserted){
+                undo(e, () -> heapFile.delete(rowId));
+            }
             throw e;
         }
     }
@@ -228,11 +232,16 @@ public final class StorageManager implements IDataAccess, ISchemaCatalog, IStati
         }
     }
 
+    // hapus baris lewat RowId lalu buang dari semua index, null kalau barisnya udah ga ada
+    // dibikin aman diulang biar redo DELETE dan undo INSERT dari FRM ga gagal walau perubahannya udah sampai disk
     @Override
     public Row deleteByRowId(RowId rowId){
         HeapFile heapFile = heapFileOf(rowId.tableName());
 
-        Row oldRow = heapFile.delete(rowId);
+        Row oldRow = heapFile.deleteIfPresent(rowId);
+        if (oldRow == null){
+            return null;
+        }
 
         try{
             afterWrite(rowId.tableName(), oldRow, null);
@@ -263,8 +272,13 @@ public final class StorageManager implements IDataAccess, ISchemaCatalog, IStati
         return catalog.listTables();
     }
 
+    // daftarin tabel baru ke katalog, nama yang udah ada ditolak biar schema ga ketimpa sementara file datanya masih format lama
     @Override
     public void updateTableSchema(TableSchema schema){
+        if (schema != null && catalog.tableExists(schema.tableName())){
+            throw new StorageException(StorageErrorCode.TABLE_ALREADY_EXISTS,
+                "Table already exists: " + schema.tableName());
+        }
         catalog.saveSchema(schema);
     }
 
@@ -277,6 +291,17 @@ public final class StorageManager implements IDataAccess, ISchemaCatalog, IStati
         tables.remove(table);
         statistics.invalidate(table);
         catalog.dropTable(table);
+    }
+
+    // kosongin semua baris tabel tapi tabelnya tetap ada, index tabel ikut dikosongin dan statistik dihitung ulang
+    // balikin jumlah baris yang dihapus, ditolak kalau masih ada block tabel yang lagi di pin
+    public int clearTable(String table){
+        requireSchema(table);
+
+        int removed = heapFileOf(table).truncate();
+        indexManager.clear(table);
+        statistics.invalidate(table);
+        return removed;
     }
 
     @Override
@@ -309,6 +334,31 @@ public final class StorageManager implements IDataAccess, ISchemaCatalog, IStati
     @Override
     public BufferStats getBufferStats(){
         return bufferPool.getBufferStats();
+    }
+
+    // buang semua cache SM lalu baca ulang katalog dan index dari disk, dipakai FRM setelah file data diganti snapshot
+    // perubahan di buffer yang belum di flush sengaja dibuang karena isi disk yang jadi acuan
+    public void reloadFromDisk(){
+        bufferPool.discardAllFrames();
+        tables.clear();
+        for (String table : catalog.listTables()){
+            statistics.invalidate(table);
+        }
+        catalog.load();
+        indexManager.loadAll();
+    }
+
+    // bangun ulang semua index dari isi heap, dipanggil setelah recovery karena halaman heap dan index bisa ke flush ga barengan
+    public void rebuildIndexes(){
+        for (String table : catalog.listTables()){
+            if (catalog.getIndexes(table).isEmpty()){
+                continue;
+            }
+
+            try (RowIterator iterator = heapFileOf(table).scan()){
+                indexManager.rebuild(catalog.getSchema(table), iterator);
+            }
+        }
     }
 
     // ambil schema tabel, getSchema SM4 udah lempar TABLE_NOT_FOUND sendiri kalau tabelnya ga ada
@@ -474,18 +524,19 @@ public final class StorageManager implements IDataAccess, ISchemaCatalog, IStati
         }
     }
 
-    // samain semua index tabel dengan perubahan baris lalu buang cache statistik tabelnya
+    // samain semua index tabel dengan perubahan baris lalu catat perubahannya ke statistik secara eager
     private void afterWrite(String table, Row oldRow, Row newRow){
         TableSchema schema = requireSchema(table);
 
         if (oldRow == null){
             indexManager.onInsert(newRow, schema);
+            statistics.recordWrite(table, 1);
         } else if (newRow == null){
             indexManager.onDelete(oldRow, schema);
+            statistics.recordWrite(table, -1);
         } else{
             indexManager.onUpdate(oldRow, newRow, schema);
+            statistics.recordWrite(table, 0);
         }
-
-        statistics.invalidate(table);
     }
 }

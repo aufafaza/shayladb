@@ -29,7 +29,12 @@ public final class CatalogManager {
     public void load(){
         lock.writeLock().lock();
         try {
-            if (!Files.exists(catalogFile)) return;
+            // file katalog ga ada artinya database kosong, isi lama dibuang biar reload setelah restore ga nyisain tabel basi
+            if (!Files.exists(catalogFile)) {
+                schemas.clear();
+                indexes.clear();
+                return;
+            }
             Map<String, TableSchema> newSchemas = new LinkedHashMap<>();
             Map<String, IndexInfo> newIndexes = new LinkedHashMap<>();
             try (DataInputStream in = new DataInputStream(new BufferedInputStream(Files.newInputStream(catalogFile)))){

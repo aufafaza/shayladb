@@ -147,11 +147,10 @@ public class RollbackManager {
             }
 
             TransactionLogRecord abortRecord = logManager.appendTransactionLog(txId, LogType.ABORT);
-            logManager.flushUpTo(abortRecord.getLsn());
             if (durableStorage != null) {
                 durableStorage.flushBuffer();
             }
-
+            logManager.flushUpTo(abortRecord.getLsn());
             completedRollbacks.add(txId);
 
             return new RecoveryResult(

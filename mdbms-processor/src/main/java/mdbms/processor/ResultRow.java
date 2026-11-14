@@ -11,9 +11,12 @@ import mdbms.processor.exception.AmbiguousColumnException;
 import mdbms.processor.exception.InvalidColumnReferenceException;
 
 public class ResultRow implements IResultRow {
+    public final static ResultRow EMPTY = new ResultRow(new ResultTableSchema());
+
     private final ResultTableSchema tableSchema;
     private final Map<String, Map<String, Object>> values = new HashMap<>();
     private RowId rowId;
+
 
     public ResultRow(ResultTableSchema schema) {
         Objects.requireNonNull(schema);

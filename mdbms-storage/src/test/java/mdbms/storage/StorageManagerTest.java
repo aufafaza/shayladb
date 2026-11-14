@@ -12,6 +12,7 @@ import java.lang.reflect.Field;
 import java.lang.reflect.Proxy;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.LinkedHashMap;
@@ -453,5 +454,191 @@ class StorageManagerTest {
 
         assertEquals(0, storage.getStatistics("users").nr());
         assertEquals(0, storage.getStatistics("users").br());
+    }
+
+    // salin semua file biasa dari satu folder ke folder lain, file dengan nama sama ditimpa
+    private static void copyFiles(Path from, Path to) throws Exception {
+        Files.createDirectories(to);
+        try (var files = Files.list(from)) {
+            for (Path file : files.filter(Files::isRegularFile).toList()) {
+                Files.copy(file, to.resolve(file.getFileName()), StandardCopyOption.REPLACE_EXISTING);
+            }
+        }
+    }
+
+    // file index lama yang dibalikin bikin index ketinggalan, rebuildIndexes nyamain lagi dengan isi heap
+    @Test
+    void rebuildIndexesFixesStaleIndexFile(@TempDir Path backup) throws Exception {
+        storage.attachRecoveryManager(acceptingFrm());
+        createUsers();
+        RowId alice = storage.writeBlock(new DataWrite("users", user(1, "alice", 3.5f), List.of())).get(0);
+        storage.createIndex("idx_users_id", "users", "id");
+        storage.flushBuffer();
+        Files.copy(directory.resolve("idx_users_id.idx"), backup.resolve("idx_users_id.idx"));
+
+        RowId bob = storage.writeBlock(new DataWrite("users", user(2, "bob", null), List.of())).get(0);
+        storage.flushBuffer();
+        Files.copy(backup.resolve("idx_users_id.idx"), directory.resolve("idx_users_id.idx"),
+                StandardCopyOption.REPLACE_EXISTING);
+
+        StorageManager restarted = new StorageManager(directory.toString(), 16, 4);
+        restarted.attachRecoveryManager(acceptingFrm());
+        assertTrue(restarted.searchIndex("idx_users_id", 2).isEmpty());
+
+        restarted.rebuildIndexes();
+
+        assertEquals(List.of(alice), restarted.searchIndex("idx_users_id", 1));
+        assertEquals(List.of(bob), restarted.searchIndex("idx_users_id", 2));
+        assertEquals(List.of(alice, bob), restarted.searchIndexRange("idx_users_id", null, null, true, true));
+    }
+
+    // file index yang hilang tapi masih tercatat di katalog dibikin kosong lalu diisi lagi lewat rebuild
+    @Test
+    void missingIndexFileIsRecreatedAndRebuilt() throws Exception {
+        storage.attachRecoveryManager(acceptingFrm());
+        createUsers();
+        RowId alice = storage.writeBlock(new DataWrite("users", user(1, "alice", 3.5f), List.of())).get(0);
+        storage.createIndex("idx_users_name", "users", "name");
+        storage.flushBuffer();
+        Files.delete(directory.resolve("idx_users_name.idx"));
+
+        StorageManager restarted = new StorageManager(directory.toString(), 16, 4);
+        restarted.attachRecoveryManager(acceptingFrm());
+        assertTrue(restarted.searchIndex("idx_users_name", "alice").isEmpty());
+
+        restarted.rebuildIndexes();
+
+        assertEquals(List.of(alice), restarted.searchIndex("idx_users_name", "alice"));
+    }
+
+    // setelah file data dibalikin ke snapshot, reloadFromDisk bikin heap, katalog, index, dan statistik ikut balik
+    @Test
+    void reloadFromDiskFollowsRestoredSnapshot(@TempDir Path snapshot) throws Exception {
+        storage.attachRecoveryManager(acceptingFrm());
+        createUsers();
+        RowId alice = storage.writeBlock(new DataWrite("users", user(1, "alice", 3.5f), List.of())).get(0);
+        storage.createIndex("idx_users_id", "users", "id");
+        storage.flushBuffer();
+        copyFiles(directory, snapshot);
+
+        storage.writeBlock(new DataWrite("users", user(2, "bob", null), List.of()));
+        storage.updateTableSchema(new TableSchema("logs", List.of(
+                new ColumnDefinition("id", DataType.INTEGER, 0, false)), List.of("id"), List.of()));
+        storage.flushBuffer();
+        assertEquals(2, storage.getStatistics("users").nr());
+
+        copyFiles(snapshot, directory);
+        storage.reloadFromDisk();
+
+        assertEquals(List.of(alice), readUsers().stream().map(Row::rowId).toList());
+        assertEquals(List.of(alice), storage.searchIndex("idx_users_id", 1));
+        assertTrue(storage.searchIndex("idx_users_id", 2).isEmpty());
+        assertEquals(1, storage.getStatistics("users").nr());
+        assertEquals(List.of("users"), storage.listTable());
+
+        RowId cici = storage.writeBlock(new DataWrite("users", user(3, "cici", 2.0f), List.of())).get(0);
+        assertEquals(List.of(cici), storage.searchIndex("idx_users_id", 3));
+    }
+
+    // reloadFromDisk buang perubahan di buffer yang belum di flush karena isi disk yang jadi acuan
+    @Test
+    void reloadFromDiskDropsUnflushedChanges() {
+        storage.attachRecoveryManager(acceptingFrm());
+        createUsers();
+        RowId alice = storage.writeBlock(new DataWrite("users", user(1, "alice", 3.5f), List.of())).get(0);
+        storage.createIndex("idx_users_id", "users", "id");
+        storage.flushBuffer();
+
+        storage.writeBlock(new DataWrite("users", user(2, "bob", null), List.of()));
+        storage.reloadFromDisk();
+
+        assertEquals(List.of(alice), readUsers().stream().map(Row::rowId).toList());
+        assertTrue(storage.searchIndex("idx_users_id", 2).isEmpty());
+        assertEquals(0, storage.getBufferStats().dirtyBlocks());
+    }
+
+    // deleteByRowId kedua kali di baris yang sama balikin null tanpa error, index dan data ga berubah lagi
+    @Test
+    void deleteByRowIdIsIdempotentForRedo() {
+        createUsers();
+        RowId alice = storage.writeBlock(new DataWrite("users", user(1, "alice", 3.5f), List.of())).get(0);
+        RowId bob = storage.writeBlock(new DataWrite("users", user(2, "bob", null), List.of())).get(0);
+        storage.createIndex("idx_users_id", "users", "id");
+
+        assertEquals(List.of(1, "alice", 3.5f), storage.deleteByRowId(alice).values());
+        assertNull(storage.deleteByRowId(alice));
+
+        assertEquals(List.of(bob), readUsers().stream().map(Row::rowId).toList());
+        assertTrue(storage.searchIndex("idx_users_id", 1).isEmpty());
+        assertEquals(List.of(bob), storage.searchIndex("idx_users_id", 2));
+    }
+
+    // deleteByRowId ke block atau slot yang belum pernah ada juga balikin null, misalnya undo INSERT yang ga sempat ke disk
+    @Test
+    void deleteByRowIdOnMissingBlockOrSlotReturnsNull() {
+        createUsers();
+        storage.writeBlock(new DataWrite("users", user(1, "alice", 3.5f), List.of()));
+
+        assertNull(storage.deleteByRowId(new RowId("users", 7, 0)));
+        assertNull(storage.deleteByRowId(new RowId("users", 0, 40)));
+        assertEquals(1, readUsers().size());
+        assertCode(StorageErrorCode.TABLE_NOT_FOUND, () -> storage.deleteByRowId(MISSING_ROW));
+    }
+
+    // bikin tabel dengan nama yang udah ada ditolak dan schema lama tetap utuh, setelah di drop namanya boleh dipakai lagi
+    @Test
+    void createExistingTableIsRejected() {
+        createUsers();
+        storage.writeBlock(new DataWrite("users", user(1, "alice", 3.5f), List.of()));
+        TableSchema other = new TableSchema("users", List.of(
+                new ColumnDefinition("code", DataType.CHAR, 4, false)), List.of("code"), List.of());
+
+        assertCode(StorageErrorCode.TABLE_ALREADY_EXISTS, () -> storage.updateTableSchema(other));
+        assertEquals(3, storage.getTableSchema("users").columns().size());
+        assertEquals(1, readUsers().size());
+
+        storage.dropTable("users");
+        storage.updateTableSchema(other);
+        assertEquals(other, storage.getTableSchema("users"));
+        assertTrue(readUsers().isEmpty());
+    }
+
+    // clearTable ngosongin baris, index, dan statistik tapi tabel dan index nya tetap ada dan bisa diisi lagi
+    @Test
+    void clearTableEmptiesRowsIndexesAndStatistics() {
+        createUsers();
+        storage.attachRecoveryManager(acceptingFrm());
+        storage.writeBlock(new DataWrite("users", user(1, "alice", 3.5f), List.of()));
+        storage.writeBlock(new DataWrite("users", user(2, "bob", null), List.of()));
+        storage.createIndex("idx_users_id", "users", "id");
+        assertEquals(2, storage.getStatistics("users").nr());
+
+        assertEquals(2, storage.clearTable("users"));
+
+        assertTrue(readUsers().isEmpty());
+        assertTrue(storage.searchIndex("idx_users_id", 1).isEmpty());
+        assertEquals(0, storage.getStatistics("users").nr());
+        assertEquals(0, storage.getStatistics("users").br());
+        assertEquals(1, storage.getIndexes("users").size());
+
+        RowId cici = storage.writeBlock(new DataWrite("users", user(3, "cici", 2.0f), List.of())).get(0);
+        assertEquals(List.of(cici), storage.searchIndex("idx_users_id", 3));
+        assertEquals(1, storage.getStatistics("users").nr());
+        assertCode(StorageErrorCode.TABLE_NOT_FOUND, () -> storage.clearTable("ghost"));
+    }
+
+    // nr di statistik langsung ikut insert dan delete lewat StorageManager
+    @Test
+    void statisticsRowCountFollowsWritesEagerly() {
+        createUsers();
+        storage.writeBlock(new DataWrite("users", user(1, "alice", 3.5f), List.of()));
+        assertEquals(1, storage.getStatistics("users").nr());
+
+        RowId bob = storage.writeBlock(new DataWrite("users", user(2, "bob", null), List.of())).get(0);
+        assertEquals(2, storage.getStatistics("users").nr());
+
+        storage.deleteByRowId(bob);
+        assertEquals(1, storage.getStatistics("users").nr());
+        assertEquals(1, storage.getStatistics("users").br());
     }
 }
