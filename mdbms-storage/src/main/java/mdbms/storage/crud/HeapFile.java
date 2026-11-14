@@ -1,5 +1,6 @@
 package mdbms.storage.crud;
 
+import java.util.Arrays;
 import java.util.List;
 import mdbms.models.schema.TableSchema;
 import mdbms.models.data.Row;
@@ -35,7 +36,7 @@ public class HeapFile{
         Block block = pool.pin(fileName, rowId.blockNumber());
 
         try{
-            SlottedPage page = new SlottedPage(block.data);
+            SlottedPage page = SlottedPage.of(block.data);
             byte[] record = page.readRecord(rowId.slot());
 
             if (record == null){
@@ -61,7 +62,7 @@ public class HeapFile{
 
         boolean dirty = false;
         try{
-            SlottedPage page = new SlottedPage(block.data);
+            SlottedPage page = SlottedPage.of(block.data);
             int slot = page.reserveSlot(bytes);
             writeBack(block, page);
             dirty = true;
@@ -78,7 +79,7 @@ public class HeapFile{
 
         boolean dirty = false;
         try{
-            SlottedPage page = new SlottedPage(block.data);
+            SlottedPage page = SlottedPage.of(block.data);
             page.releaseReservation(rowId.slot());
             writeBack(block, page);
             dirty = true;
@@ -94,7 +95,7 @@ public class HeapFile{
         Block block = pool.pin(fileName, findBlockWithSpace(bytes));
 
         try{
-            SlottedPage page = new SlottedPage(block.data);
+            SlottedPage page = SlottedPage.of(block.data);
             int slot = page.reserveSlot(bytes);
             page.writeSlot(slot, record);
             writeBack(block, page);
@@ -105,26 +106,43 @@ public class HeapFile{
         }
     }
 
-    public void insertAt(RowId rowId, List<Object> values){
+    // taruh baris di RowId tertentu, false kalau slot nya udah berisi baris yang persis sama jadi ga ada yang berubah
+    // block atau slot yang belum ada dibikin dulu biar redo setelah crash tetap jalan walau halamannya belum sempat ke disk
+    public boolean insertAt(RowId rowId, List<Object> values){
         byte[] record = serializer.serialize(values, schema);
         int bytes = record.length;
+        while (blockCount() <= rowId.blockNumber()){
+            appendEmptyPage();
+        }
         Block block = pool.pin(fileName, rowId.blockNumber());
         boolean dirty = false;
 
         try{
-            SlottedPage page = new SlottedPage(block.data);
+            SlottedPage page = SlottedPage.of(block.data);
             int slot = rowId.slot();
+            page.ensureSlot(slot);
 
-            if (!page.reserveSlotAt(slot, bytes) && page.isOccupied(slot)){
+            if (page.isOccupied(slot)){
+                if (Arrays.equals(page.readRecord(slot), record)){
+                    return false;
+                }
                 throw new StorageException(
                     StorageErrorCode.SLOT_UNAVAILABLE,
                     "Slot unavailable for row: " + rowId
                 );
             }
 
+            if (!page.reserveSlotAt(slot, bytes) && !page.isReserved(slot)){
+                throw new StorageException(
+                    StorageErrorCode.SLOT_UNAVAILABLE,
+                    "Page has no room for row: " + rowId
+                );
+            }
+
             page.writeSlot(slot, record);
             writeBack(block, page);
             dirty = true;
+            return true;
 
         } finally{
             pool.unpin(block, dirty, NO_LSN);
@@ -138,7 +156,7 @@ public class HeapFile{
         boolean dirty = false;
 
         try{
-            SlottedPage page = new SlottedPage(block.data);
+            SlottedPage page = SlottedPage.of(block.data);
             int slot = rowId.slot();
             boolean replaced = page.replaceRecord(slot, record);
 
@@ -172,7 +190,7 @@ public class HeapFile{
         boolean dirty = false;
 
         try{
-            SlottedPage page = new SlottedPage(block.data);
+            SlottedPage page = SlottedPage.of(block.data);
             byte[] record = page.readRecord(rowId.slot());
 
             if (record == null){
@@ -184,6 +202,34 @@ public class HeapFile{
 
             List<Object> values = serializer.deserialize(record, schema);
             page.deleteRecord(rowId.slot());
+            writeBack(block, page);
+            dirty = true;
+
+            return new Row(rowId, values);
+
+        } finally{
+            pool.unpin(block, dirty, NO_LSN);
+        }
+    }
+
+    // hapus baris kalau masih ada, null kalau block slot atau barisnya udah ga ada jadi aman diulang sama redo dan undo FRM
+    public Row deleteIfPresent(RowId rowId){
+        if (rowId.blockNumber() >= blockCount()){
+            return null;
+        }
+        Block block = pool.pin(fileName, rowId.blockNumber());
+        boolean dirty = false;
+
+        try{
+            SlottedPage page = SlottedPage.of(block.data);
+            int slot = rowId.slot();
+
+            if (slot < 0 || slot >= page.slotCount() || !page.isOccupied(slot)){
+                return null;
+            }
+
+            List<Object> values = serializer.deserialize(page.readRecord(slot), schema);
+            page.deleteRecord(slot);
             writeBack(block, page);
             dirty = true;
 
@@ -222,7 +268,7 @@ public class HeapFile{
         boolean hasSpace;
 
         try{
-            SlottedPage page = new SlottedPage(block.data);
+            SlottedPage page = SlottedPage.of(block.data);
             hasSpace = page.hasSpace(requiredBytes);
 
         } finally{
