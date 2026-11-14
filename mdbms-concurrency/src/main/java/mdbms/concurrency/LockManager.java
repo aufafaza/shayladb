@@ -4,6 +4,7 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.Iterator;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 
 import mdbms.models.data.DataItem;
 import mdbms.models.transaction.AccessStatus;
@@ -11,7 +12,7 @@ import mdbms.models.transaction.Transaction;
 import mdbms.models.transaction.TransactionState;
 
 public class LockManager {
-    private final Map<DataItem, ArrayList<Lock>> lockTable = new HashMap<>();
+    private final Map<DataItem, ArrayList<Lock>> lockTable = new ConcurrentHashMap<>();
     private final Map<Transaction, PendingLock> waitingRequests = new HashMap<>();
 
     public synchronized AccessStatus acquireLock(Transaction tx, DataItem data, Locktype type) {

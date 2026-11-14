@@ -7,7 +7,6 @@ import mdbms.processor.IResultRow;
 import mdbms.processor.ResultRow;
 import mdbms.processor.ResultTableSchema;
 
-// TODO BUTUH ClientHandler / QueryProcessor menjalankan CommitOperator setelah tiap query di luar BEGIN (auto-commit) dari QP1
 public class CommitOperator implements IQueryOperator {
     private final IConcurrencyControl concurrencyControlManager;
     private final int transactionId;
@@ -29,12 +28,10 @@ public class CommitOperator implements IQueryOperator {
         String message;
         try {
             concurrencyControlManager.commitTransaction(transactionId);
-            // TODO BUTUH commitTransaction yang mengembalikan status dari CCM. (sekarang kalau log COMMIT gagal, CCM abort tanpa info)
             message = "COMMIT transaction " + transactionId;
-        } catch (IllegalArgumentException | IllegalStateException e) {
+        } catch (RuntimeException e) {
             message = "COMMIT rejected: " + e.getMessage();
         }
-        // TODO BUTUH ClientSession.clearTransaction() setelah COMMIT dari QP1
 
         ResultTableSchema schema = new ResultTableSchema();
         schema.addColumn(new ColumnDefinition("message", DataType.VARCHAR, message.length(), false));

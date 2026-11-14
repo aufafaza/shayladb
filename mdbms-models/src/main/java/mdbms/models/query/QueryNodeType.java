@@ -11,5 +11,9 @@ public enum QueryNodeType{
     LIMIT, 
     UPDATE,
     INSERT,
-    DELETE
+    DELETE,
+    CREATE_INDEX,
+    BEGIN,
+    COMMIT,
+    ABORT
 }
