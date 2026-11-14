@@ -9,7 +9,6 @@ import mdbms.models.data.DataItem;
 import mdbms.models.data.RowId;
 import mdbms.models.query.ExpressionTree;
 import mdbms.models.schema.ColumnDefinition;
-import mdbms.models.schema.DataType;
 import mdbms.processor.ExpressionEvaluator;
 import mdbms.processor.IResultRow;
 
@@ -39,7 +38,7 @@ public class InsertOperator implements IQueryOperator, IWriteOperator {
         rowValues = new ArrayList<>();
         for (int i = 0; i < values.size(); i++) {
             Object value = ExpressionEvaluator.evaluate(values.get(i));
-            rowValues.add(toColumnType(value, columns.get(i).type()));
+            rowValues.add(ColumnTypes.toColumnType(value, columns.get(i).type()));
         }
     }
 
@@ -61,13 +60,5 @@ public class InsertOperator implements IQueryOperator, IWriteOperator {
 
     public int getAffectedRows() {
         return affectedRows;
-    }
-
-    private static Object toColumnType(Object value, DataType type) {
-        if (value instanceof Number number) {
-            if (type == DataType.INTEGER) return number.intValue();
-            if (type == DataType.FLOAT) return number.floatValue();
-        }
-        return value;
     }
 }

@@ -32,6 +32,15 @@ public class ClientHandler implements Runnable {
             String query;
             while ((query = cli.readQuery()) != null) {
                 String command = query.trim().split("[\\s;]+")[0].toUpperCase();
+                if ((command.equals("COMMIT") || command.equals("ABORT")) && !session.isTransacting()) {
+                    cli.printResult(new ExecutionResult(false, null, null, 0, "No active transaction"));
+                    continue;
+                }
+                if (command.equals("BEGIN") && session.isTransacting()) {
+                    cli.printResult(new ExecutionResult(false, null, null, 0,
+                            "Transaction " + session.getCurrentTxId() + " is already active"));
+                    continue;
+                }
                 boolean autoCommit = !session.isTransacting();
                 int txId;
                 try {
@@ -42,7 +51,10 @@ public class ClientHandler implements Runnable {
                 }
                 try {
                     ExecutionResult result = processor.executeQuery(query, txId);
-                    if (command.equals("BEGIN")) {
+                    if (!result.success()) {
+                        // QueryProcessor sudah membatalkan transaksinya
+                        session.clearTransaction();
+                    } else if (command.equals("BEGIN")) {
                         session.beginTransaction(txId);
                     } else if (command.equals("COMMIT") || command.equals("ABORT")) {
                         session.clearTransaction();
@@ -57,6 +69,7 @@ public class ClientHandler implements Runnable {
                         System.err.println("[ERROR] Could not abort transaction " + txId + ": " + e.getMessage());
                     }
                     session.clearTransaction();
+                    cli.printResult(new ExecutionResult(false, null, null, 0, e.getMessage()));
                 }
             }
         } catch (IOException e) {
