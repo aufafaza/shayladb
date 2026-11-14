@@ -602,4 +602,43 @@ class StorageManagerTest {
         assertEquals(other, storage.getTableSchema("users"));
         assertTrue(readUsers().isEmpty());
     }
+
+    // clearTable ngosongin baris, index, dan statistik tapi tabel dan index nya tetap ada dan bisa diisi lagi
+    @Test
+    void clearTableEmptiesRowsIndexesAndStatistics() {
+        createUsers();
+        storage.attachRecoveryManager(acceptingFrm());
+        storage.writeBlock(new DataWrite("users", user(1, "alice", 3.5f), List.of()));
+        storage.writeBlock(new DataWrite("users", user(2, "bob", null), List.of()));
+        storage.createIndex("idx_users_id", "users", "id");
+        assertEquals(2, storage.getStatistics("users").nr());
+
+        assertEquals(2, storage.clearTable("users"));
+
+        assertTrue(readUsers().isEmpty());
+        assertTrue(storage.searchIndex("idx_users_id", 1).isEmpty());
+        assertEquals(0, storage.getStatistics("users").nr());
+        assertEquals(0, storage.getStatistics("users").br());
+        assertEquals(1, storage.getIndexes("users").size());
+
+        RowId cici = storage.writeBlock(new DataWrite("users", user(3, "cici", 2.0f), List.of())).get(0);
+        assertEquals(List.of(cici), storage.searchIndex("idx_users_id", 3));
+        assertEquals(1, storage.getStatistics("users").nr());
+        assertCode(StorageErrorCode.TABLE_NOT_FOUND, () -> storage.clearTable("ghost"));
+    }
+
+    // nr di statistik langsung ikut insert dan delete lewat StorageManager
+    @Test
+    void statisticsRowCountFollowsWritesEagerly() {
+        createUsers();
+        storage.writeBlock(new DataWrite("users", user(1, "alice", 3.5f), List.of()));
+        assertEquals(1, storage.getStatistics("users").nr());
+
+        RowId bob = storage.writeBlock(new DataWrite("users", user(2, "bob", null), List.of())).get(0);
+        assertEquals(2, storage.getStatistics("users").nr());
+
+        storage.deleteByRowId(bob);
+        assertEquals(1, storage.getStatistics("users").nr());
+        assertEquals(1, storage.getStatistics("users").br());
+    }
 }

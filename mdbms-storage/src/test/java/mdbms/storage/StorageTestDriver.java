@@ -250,6 +250,19 @@ class StorageTestDriver {
                 return true;
             }
         });
+        check("clearTable mengosongkan tabel beserta index dan statistiknya", () -> {
+            catalog.updateTableSchema(new TableSchema("scratch", List.of(
+                    new ColumnDefinition("id", DataType.INTEGER, 0, false)), List.of("id"), List.of()));
+            for (int id = 1; id <= 20; id++) {
+                data.writeBlock(new DataWrite("scratch", new LinkedHashMap<>(Map.of("id", id)), List.of()));
+            }
+            catalog.createIndex("idx_scratch_id", "scratch", "id");
+            int removed = storage.clearTable("scratch");
+            boolean ok = removed == 20 && select(data, "scratch").isEmpty()
+                    && data.searchIndex("idx_scratch_id", 5).isEmpty() && stats.getStatistics("scratch").nr() == 0;
+            catalog.dropTable("scratch");
+            return ok;
+        });
         check("data yang melanggar schema ditolak dengan SCHEMA_VIOLATION", () -> {
             try {
                 Map<String, Object> wrongType = student(1, "x", "M", "x", 1f);
