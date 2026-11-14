@@ -3,8 +3,6 @@ package mdbms.processor.operator;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 
-import mdbms.processor.IResultRow;
-
 import org.junit.jupiter.api.Test;
 
 class CommitOperatorTest {
@@ -15,8 +13,8 @@ class CommitOperatorTest {
         CommitOperator operator = new CommitOperator(concurrencyControl, 42);
 
         operator.open();
-        IResultRow result = operator.next();
 
+        assertNull(operator.next());
         assertEquals(1, concurrencyControl.commitCalls);
         assertEquals(42, concurrencyControl.committedTransactionId);
         assertEquals("COMMIT transaction 42", operator.getMessage());
@@ -30,8 +28,8 @@ class CommitOperatorTest {
         CommitOperator operator = new CommitOperator(concurrencyControl, 42);
 
         operator.open();
-        IResultRow result = operator.next();
 
+        assertNull(operator.next());
         assertEquals(1, concurrencyControl.commitCalls);
         assertEquals("COMMIT rejected: transaction is closed", operator.getMessage());
         assertNull(operator.next());
