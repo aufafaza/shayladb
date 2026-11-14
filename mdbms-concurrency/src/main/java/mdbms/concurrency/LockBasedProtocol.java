@@ -9,7 +9,6 @@ import mdbms.models.transaction.AccessStatus;
 import mdbms.models.transaction.Transaction;
 import mdbms.models.transaction.TransactionState;
 
-/** Lock-based concurrency strategy used by the CC1 facade. */
 public class LockBasedProtocol implements ConcurrencyProtocol {
     private final LockManager lockManager;
     private final DeadlockHandler deadlockHandler;
@@ -21,12 +20,9 @@ public class LockBasedProtocol implements ConcurrencyProtocol {
     }
 
     public LockBasedProtocol(LockManager lockManager) {
-        this(lockManager, new DeadlockHandler(lockManager));
-    }
-
-    public LockBasedProtocol(LockManager lockManager, DeadlockHandler deadlockHandler) {
-        this.lockManager = java.util.Objects.requireNonNull(lockManager, "lockManager");
-        this.deadlockHandler = java.util.Objects.requireNonNull(deadlockHandler, "deadlockHandler");
+        if (lockManager == null) throw new IllegalArgumentException("Lock manager is required");
+        this.lockManager = lockManager;
+        this.deadlockHandler = new DeadlockHandler(lockManager);
     }
 
     void setAbortHandler(Consumer<Transaction> abortHandler) {
@@ -41,9 +37,9 @@ public class LockBasedProtocol implements ConcurrencyProtocol {
     @Override 
     public AccessStatus requestRead(Transaction tx, DataItem data) {
         return handleResult(tx, lockManager.acquireLock(tx, data, Locktype.SHARED));
-    }
-
-    @Override
+    } 
+    
+    @Override 
     public AccessStatus requestWrite(Transaction tx, DataItem data) {
         return handleResult(tx, lockManager.acquireLock(tx, data, Locktype.EXCLUSIVE));
     }
