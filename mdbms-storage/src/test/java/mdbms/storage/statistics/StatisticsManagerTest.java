@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotSame;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.nio.file.Path;
 import java.util.Arrays;
@@ -104,5 +105,68 @@ class StatisticsManagerTest {
                 assertThrows(StorageException.class, () -> statistics.getStatistics("ghost", heap)).getCode());
         assertEquals(StorageErrorCode.TABLE_NOT_FOUND,
                 assertThrows(StorageException.class, () -> statistics.invalidate(null)).getCode());
+    }
+
+    // nr berubah langsung tiap recordWrite tanpa scan ulang, buktinya V(id) masih nilai scan lama
+    @Test
+    void recordWriteUpdatesRowCountEagerly() {
+        heap.insert(List.of(1, "a", "x"));
+        Statistic first = statistics.getStatistics("users", heap);
+
+        heap.insert(List.of(2, "b", "y"));
+        statistics.recordWrite("users", 1);
+        heap.insert(List.of(3, "c", "z"));
+        statistics.recordWrite("users", 1);
+        Statistic after = statistics.getStatistics("users", heap);
+
+        assertEquals(3, after.nr());
+        assertEquals(1, after.distinctValues().get("id"));
+        assertEquals(first.lr(), after.lr());
+
+        statistics.recordWrite("users", -1);
+        statistics.recordWrite("users", 0);
+        assertEquals(2, statistics.getStatistics("users", heap).nr());
+    }
+
+    // br selalu ngikutin jumlah block file walau ga ada recordWrite
+    @Test
+    void blockCountFollowsHeapFile() {
+        heap.insert(List.of(1, "a", "x"));
+        assertEquals(1, statistics.getStatistics("users", heap).br());
+
+        for (int id = 2; id <= 400; id++) heap.insert(List.of(id, "name" + id, "kota"));
+
+        Statistic stat = statistics.getStatistics("users", heap);
+        assertEquals(heap.blockCount(), stat.br());
+        assertTrue(stat.br() > 1);
+        assertEquals(1, stat.nr());
+    }
+
+    // setelah perubahan sejak scan terakhir mencapai batas, V(A,r) dihitung ulang dari heap
+    @Test
+    void refreshesDistinctValuesAfterManyChanges() {
+        heap.insert(List.of(1, "a", "x"));
+        statistics.getStatistics("users", heap);
+
+        for (int id = 2; id <= 11; id++) {
+            heap.insert(List.of(id, "n" + id, "c" + id));
+            statistics.recordWrite("users", 1);
+        }
+        Statistic stat = statistics.getStatistics("users", heap);
+
+        assertEquals(11, stat.nr());
+        assertEquals(11, stat.distinctValues().get("id"));
+    }
+
+    // recordWrite sebelum statistik pernah dihitung diabaikan, nr ga pernah negatif
+    @Test
+    void recordWriteEdgeCases() {
+        statistics.recordWrite("users", 1);
+        assertEquals(0, statistics.getStatistics("users", heap).nr());
+
+        statistics.recordWrite("users", -1);
+        assertEquals(0, statistics.getStatistics("users", heap).nr());
+        assertEquals(StorageErrorCode.TABLE_NOT_FOUND,
+                assertThrows(StorageException.class, () -> statistics.recordWrite(" ", 1)).getCode());
     }
 }
