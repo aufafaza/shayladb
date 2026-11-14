@@ -86,7 +86,8 @@ public class SystemCostEstimator implements ICostEstimator {
                 // Index lookup: Tree height (typically 2-3) + data blocks read
                 double selectivity = 0.1;
                 if (!node.getConditions().isEmpty()) {
-                    PlanEstimate input = (left != null) ? left : estimateOutput(node);
+                    // selektivitas dihitung dari isi tabel sebelum disaring
+                    PlanEstimate input = tableEstimate(node);
                     PlanEstimate filtered = cardinalityEstimator.estimateSelection(input, node.getConditions().get(0));
                     if (input.getEstimatedRows() > 0) {
                         selectivity = (double) filtered.getEstimatedRows() / input.getEstimatedRows();
@@ -157,6 +158,27 @@ public class SystemCostEstimator implements ICostEstimator {
         };
     }
 
+    // isi tabel mentah dari statistik, belum disaring
+    private PlanEstimate tableEstimate(QueryTree node) {
+        Statistic stat = getTableStatistics(node.getTableName());
+        if (stat != null) {
+            Map<String, Long> dv = new LinkedHashMap<>();
+            if (stat.distinctValues() != null) {
+                for (Map.Entry<String, Integer> e : stat.distinctValues().entrySet()) {
+                    dv.put(e.getKey(), e.getValue().longValue());
+                }
+            }
+            long rows = stat.nr();
+            long blocks = stat.br();
+            if (blocks == 0 && rows > 0) {
+                int fr = stat.fr() > 0 ? stat.fr() : 10;
+                blocks = Math.max(1L, (long) Math.ceil((double) rows / fr));
+            }
+            return new PlanEstimate(rows, blocks, dv);
+        }
+        return new PlanEstimate(100L, 10L, Map.of());
+    }
+
     @Override
     public PlanEstimate estimateOutput(QueryTree node) {
         if (node == null) {
@@ -165,24 +187,12 @@ public class SystemCostEstimator implements ICostEstimator {
 
         switch (node.getNodeType()) {
             case TABLE_SCAN -> {
-                String tableName = node.getTableName();
-                Statistic stat = getTableStatistics(tableName);
-                if (stat != null) {
-                    Map<String, Long> dv = new LinkedHashMap<>();
-                    if (stat.distinctValues() != null) {
-                        for (Map.Entry<String, Integer> e : stat.distinctValues().entrySet()) {
-                            dv.put(e.getKey(), e.getValue().longValue());
-                        }
-                    }
-                    long rows = stat.nr();
-                    long blocks = stat.br();
-                    if (blocks == 0 && rows > 0) {
-                        int fr = stat.fr() > 0 ? stat.fr() : 10;
-                        blocks = Math.max(1L, (long) Math.ceil((double) rows / fr));
-                    }
-                    return new PlanEstimate(rows, blocks, dv);
+                // scan lewat index cuma ngeluarin baris yang lolos kondisinya
+                PlanEstimate current = tableEstimate(node);
+                for (ExpressionTree cond : node.getConditions()) {
+                    current = cardinalityEstimator.estimateSelection(current, cond);
                 }
-                return new PlanEstimate(100L, 10L, Map.of());
+                return current;
             }
             case SELECT -> {
                 List<QueryTree> children = node.getChildren();
