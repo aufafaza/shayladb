@@ -14,6 +14,14 @@ import mdbms.optimizer.binder.IQueryValidator;
 import mdbms.optimizer.cost.ICostEstimator;
 import mdbms.optimizer.parser.ShaylaParser;
 import mdbms.optimizer.rule.IOptimizationRule;
+import mdbms.optimizer.rule.JoinConversionRule;
+import mdbms.optimizer.rule.JoinOrderingRule;
+import mdbms.optimizer.rule.SelectionPushDownRule;
+import mdbms.optimizer.cost.CardinalityEstimator;
+import mdbms.optimizer.cost.SystemCostEstimator;
+import mdbms.optimizer.rule.OptimizationContext;
+import mdbms.optimizer.rule.RuleBasedOptimizer;
+import mdbms.api.IStatisticsProvider;
 
 public class QueryOptimizer implements IQueryOptimizer {
     private final ISchemaCatalog schemaCatalog;
@@ -23,7 +31,8 @@ public class QueryOptimizer implements IQueryOptimizer {
     private final ICostEstimator costEstimator;
 
     public QueryOptimizer(ISchemaCatalog schemaCatalog, ShaylaParser parser) {
-        this(schemaCatalog, parser, new QueryValidator(schemaCatalog), List.of(), null);
+        this(schemaCatalog, parser, new QueryValidator(schemaCatalog),
+            List.of(new SelectionPushDownRule(), new JoinConversionRule(), new JoinOrderingRule()), null);
     }
 
     public QueryOptimizer(
@@ -37,7 +46,8 @@ public class QueryOptimizer implements IQueryOptimizer {
         this.parser = parser;
         this.validator = validator;
         this.rules = rules;
-        this.costEstimator = costEstimator;
+        this.costEstimator = costEstimator != null ? costEstimator : new SystemCostEstimator(
+            schemaCatalog instanceof IStatisticsProvider provider ? provider : null, new CardinalityEstimator());
     }
 
     @Override
@@ -57,13 +67,18 @@ public class QueryOptimizer implements IQueryOptimizer {
 
     @Override
     public ParsedQuery optimizeQuery(ParsedQuery query) {
-        // TODO
-        return null;
+        Objects.requireNonNull(query, "query");
+        BindingContext bindings = new QueryBinder(schemaCatalog).bind(query.getQueryTree());
+        IStatisticsProvider statistics = schemaCatalog instanceof IStatisticsProvider provider ? provider : null;
+        OptimizationContext context = new OptimizationContext(bindings, schemaCatalog, statistics, costEstimator);
+        QueryTree result = new RuleBasedOptimizer(rules).optimize(query.getQueryTree(), context);
+        return new ParsedQuery(query.rawQuery(), result, query.targetTables());
     }
 
+    /** Estimates the complete supplied plan and refreshes each node's local cost. */
     @Override
     public int getCost(ParsedQuery query) {
-        // TODO
-        return 0;
+        Objects.requireNonNull(query, "query");
+        return costEstimator.calculateTotalCost(Objects.requireNonNull(query.getQueryTree(), "queryTree"));
     }
 }
