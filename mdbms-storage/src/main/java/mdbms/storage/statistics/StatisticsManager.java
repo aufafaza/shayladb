@@ -17,6 +17,10 @@ import mdbms.storage.exception.StorageException;
 public final class StatisticsManager {
     private final CatalogManager catalog;
     private final Map<String, Statistic> cache = new HashMap<>();
+    // jumlah perubahan baris sejak scan terakhir per tabel, dipakai buat nentuin kapan V lr fr dihitung ulang
+    private final Map<String, Integer> changes = new HashMap<>();
+    private static final int MIN_CHANGES_BEFORE_REFRESH = 10;
+    private static final int REFRESH_RATIO = 10;
     private static int estimateEncodedValSize(Object val, ColumnDefinition col){ //helper buat estimate size payload yang dipake record serializer
         if(val == null) return 0;
         return switch(col.type()){
@@ -40,19 +44,44 @@ public final class StatisticsManager {
         if(catalog == null) throw new StorageException(StorageErrorCode.SCHEMA_VIOLATION, "StatisticsManager needs a catalog");
         this.catalog = catalog;
     }
+    // ambil statistik tabel, nr dari counter eager dan br langsung dari jumlah block file
+    // V(A,r), lr, fr pakai hasil scan terakhir dan baru dihitung ulang kalau belum ada atau udah kebanyakan perubahan
     public synchronized Statistic getStatistics(String table, HeapFile file){
         if(table == null || table.isBlank()) throw new StorageException(StorageErrorCode.TABLE_NOT_FOUND, "Table name must not be null or blank");
         if(file == null) throw new StorageException(StorageErrorCode.TABLE_NOT_FOUND, "HeapFile is unavailable for table " + table);
         Statistic cached = cache.get(table);
-        if(cached != null ) return cached;
-        TableSchema schema = catalog.getSchema(table);
-        Statistic result = compute(file, schema);
-        cache.put(table, result);
-        return result;
+        if(cached == null){
+            TableSchema schema = catalog.getSchema(table);
+            cached = compute(file, schema);
+            cache.put(table, cached);
+            changes.put(table, 0);
+        }
+        int br = file.blockCount();
+        if(cached.br() != br){
+            cached = new Statistic(cached.tableName(), cached.nr(), br, cached.lr(), cached.fr(), cached.distinctValues());
+            cache.put(table, cached);
+        }
+        return cached;
     }
     public synchronized void invalidate(String table){
         if(table == null || table.isBlank()) throw new StorageException(StorageErrorCode.TABLE_NOT_FOUND, "Table name must not be null or blank");
         cache.remove(table);
+        changes.remove(table);
+    }
+    // catat satu perubahan baris, rowDelta 1 buat insert, minus 1 buat delete, 0 buat update
+    // nr langsung disesuaikan, kalau perubahan sejak scan terakhir udah lewat batas cache dibuang biar V lr fr dihitung ulang
+    public synchronized void recordWrite(String table, int rowDelta){
+        if(table == null || table.isBlank()) throw new StorageException(StorageErrorCode.TABLE_NOT_FOUND, "Table name must not be null or blank");
+        Statistic cached = cache.get(table);
+        if(cached == null) return;
+        int changed = changes.getOrDefault(table, 0) + 1;
+        if(changed >= Math.max(MIN_CHANGES_BEFORE_REFRESH, cached.nr() / REFRESH_RATIO)){
+            invalidate(table);
+            return;
+        }
+        int nr = Math.max(0, cached.nr() + rowDelta);
+        cache.put(table, new Statistic(cached.tableName(), nr, cached.br(), cached.lr(), cached.fr(), cached.distinctValues()));
+        changes.put(table, changed);
     }
     private synchronized Statistic compute(HeapFile file, TableSchema schema){
         if(file == null || schema == null) throw new StorageException(StorageErrorCode.SCHEMA_VIOLATION, "Can't compute stats without a heap file and/or table schema");

@@ -51,7 +51,7 @@ public final class BPlusTreeIndex implements Index {
         this.normalizer = Objects.requireNonNull(normalizer, "normalizer");
         this.nodeCodec = Objects.requireNonNull(codec, "codec");
         this.comparator = new KeyComparator(column.type());
-        this.fileName = info.indexName() + ".idx";
+        this.fileName = fileNameOf(info);
         int limit = computeMaxDegree(column);
         if (maxDegree < MIN_DEGREE || maxDegree > limit) {
             throw new StorageException(StorageErrorCode.SCHEMA_VIOLATION,
@@ -59,6 +59,11 @@ public final class BPlusTreeIndex implements Index {
         }
         this.maxDegree = maxDegree;
         if (pool.blockCount(fileName) > 0) readMeta();
+    }
+
+    // nama file tempat index ini disimpan di direktori data
+    public static String fileNameOf(IndexInfo info) {
+        return info.indexName() + ".idx";
     }
 
     // jumlah pointer maksimal per node biar node terbesar masih muat satu block
