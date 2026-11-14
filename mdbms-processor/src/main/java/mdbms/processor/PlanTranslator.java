@@ -93,7 +93,7 @@ public class PlanTranslator {
             case GROUP_BY:
                 // return new GroupByOperator(childOperators.get(0), queryTree.getValue(),
                 // false);
-                return null;
+                return new GroupByOperator(childOperators.get(0));
             case INSERT:
                 return new InsertOperator(dataAccess, schemaCatalog, concurrencyControl, txId,
                         queryTree.getTableName(), queryTree.getInsertValues());
