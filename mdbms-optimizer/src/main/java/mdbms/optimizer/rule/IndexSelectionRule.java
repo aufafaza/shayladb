@@ -15,6 +15,7 @@ import mdbms.models.schema.IndexInfo;
 import mdbms.models.schema.IndexType;
 import mdbms.optimizer.binder.BindingContext;
 import mdbms.optimizer.binder.ColumnBinding;
+import mdbms.optimizer.cost.ICostEstimator;
 
 // QO-13: pakai index buat seleksi yang langsung di atas tabel
 public class IndexSelectionRule implements IOptimizationRule {
@@ -43,7 +44,10 @@ public class IndexSelectionRule implements IOptimizationRule {
         if (candidates.isEmpty()) {
             return node;
         }
-        Candidate chosen = candidates.get(0);
+        Candidate chosen = choose(scan, candidates, context);
+        if (chosen == null) {
+            return node;
+        }
 
         QueryTree result = indexScan(scan, chosen);
         // sisa kondisi tetap jadi SELECT, urutan asli
@@ -56,6 +60,35 @@ public class IndexSelectionRule implements IOptimizationRule {
     }
 
     record Candidate(ExpressionTree expression, IndexScanSpec spec) {
+    }
+
+    // pilih index termurah, null kalau baca biasa lebih murah
+    static Candidate choose(QueryTree scan, List<Candidate> candidates, OptimizationContext context) {
+        ICostEstimator estimator = context.getCostEstimator();
+        if (estimator == null || context.getStatistics(scan.getTableName()) == null) {
+            return byHeuristic(candidates);
+        }
+        int best = estimator.calculateNodeCost(scan, PhysicalAlgorithm.LINEAR_SCAN, null, null);
+        Candidate chosen = null;
+        for (Candidate candidate : candidates) {
+            int cost = estimator.calculateNodeCost(indexScan(scan, candidate), PhysicalAlgorithm.INDEX_SCAN, null, null);
+            // kalau seri, ga usah repot pake index
+            if (cost < best) {
+                best = cost;
+                chosen = candidate;
+            }
+        }
+        return chosen;
+    }
+
+    // tanpa statistik: = biasanya paling selektif, range belakangan
+    private static Candidate byHeuristic(List<Candidate> candidates) {
+        for (Candidate candidate : candidates) {
+            if (candidate.spec().condition().operator() == ComparisonOperator.EQ) {
+                return candidate;
+            }
+        }
+        return candidates.get(0);
     }
 
     // semua kondisi yang bisa dibantu index di tabel ini
