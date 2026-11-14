@@ -1,14 +1,11 @@
 package mdbms.processor.operator;
 
-import mdbms.models.schema.ColumnDefinition;
-import mdbms.models.schema.DataType;
 import mdbms.processor.IResultRow;
-import mdbms.processor.ResultRow;
-import mdbms.processor.ResultTableSchema;
 
-public class BeginOperator implements IQueryOperator {
+public class BeginOperator implements IQueryOperator, IQueryMessage {
     private final int transactionId;
     private boolean isDone;
+    private String message;
 
     public BeginOperator(int transactionId) {
         this.transactionId = transactionId;
@@ -22,15 +19,15 @@ public class BeginOperator implements IQueryOperator {
         if (isDone) return null;
         isDone = true;
 
-        String message = "BEGIN TRANSACTION " + transactionId;
-
-        ResultTableSchema schema = new ResultTableSchema();
-        schema.addColumn(new ColumnDefinition("message", DataType.VARCHAR, message.length(), false));
-        ResultRow result = new ResultRow(schema);
-        result.set(schema.getTableName(), "message", message);
-        return result;
+        message = "BEGIN TRANSACTION " + transactionId;
+        return null;
     }
 
     public void close() {
+    }
+
+    @Override
+    public String getMessage() {
+        return message;
     }
 }

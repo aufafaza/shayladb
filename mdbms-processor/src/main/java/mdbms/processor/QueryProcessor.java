@@ -13,6 +13,8 @@ import mdbms.models.query.ExecutionResult;
 import mdbms.models.query.ParsedQuery;
 import mdbms.models.schema.ColumnDefinition;
 import mdbms.processor.exception.QueryExecutionException;
+import mdbms.processor.exception.TransactionAbortedException;
+import mdbms.processor.operator.IQueryMessage;
 import mdbms.processor.operator.IQueryOperator;
 import mdbms.processor.operator.IWriteOperator;
 
@@ -63,7 +65,10 @@ public class QueryProcessor implements IQueryProcessor {
                 rows.add(row);
             }
         } catch (QueryExecutionException e) {
-            concurrencyControl.abortTransaction(txId, "Query execution failed");
+            // transaksi yang dibatalkan CCM sudah dihapus CCM, abort lagi akan gagal
+            if (!(e instanceof TransactionAbortedException)) {
+                concurrencyControl.abortTransaction(txId, "Query execution failed");
+            }
             ExecutionResult executionResult = new ExecutionResult(false, null, null, 0, e.getMessage());
             return executionResult;
         } catch (Exception e) {
@@ -74,10 +79,14 @@ public class QueryProcessor implements IQueryProcessor {
         }
 
         int affectedRows = 0;
+        String message = "Query Executed";
         if (translatedQuery instanceof IWriteOperator) {
             affectedRows = ((IWriteOperator) translatedQuery).getAffectedRows();
         }
-        ExecutionResult executionResult = new ExecutionResult(true, columns, rows, affectedRows, "Query executed");
+        if (translatedQuery instanceof IQueryMessage) {
+            message = ((IQueryMessage) translatedQuery).getMessage();
+        }
+        ExecutionResult executionResult = new ExecutionResult(true, columns, rows, affectedRows, message);
         return executionResult;
     }
 

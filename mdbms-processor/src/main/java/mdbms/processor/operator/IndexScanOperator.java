@@ -7,6 +7,7 @@ import mdbms.api.ISchemaCatalog;
 import mdbms.models.data.DataItem;
 import mdbms.models.data.Row;
 import mdbms.models.data.RowId;
+import mdbms.models.query.IndexScanSpec;
 import mdbms.processor.IResultRow;
 import mdbms.processor.ResultRow;
 import mdbms.processor.ResultTableSchema;
@@ -17,30 +18,43 @@ public class IndexScanOperator implements IQueryOperator {
     private final IConcurrencyControl concurrencyControlManager;
     private final int transactionId;
     private final String tableName;
-    private final String indexName;
-    private final Object key;
+    private final IndexScanSpec spec;
     private ResultTableSchema schema;
     private List<RowId> rowIds;
     private int position;
 
     public IndexScanOperator(IDataAccess dataAccess, ISchemaCatalog schemaCatalog,
             IConcurrencyControl concurrencyControlManager, int transactionId, String tableName,
-            String indexName, Object key) {
+            IndexScanSpec spec) {
         this.dataAccess = dataAccess;
         this.schemaCatalog = schemaCatalog;
         this.concurrencyControlManager = concurrencyControlManager;
         this.transactionId = transactionId;
         this.tableName = tableName;
-        this.indexName = indexName;
-        this.key = key;
+        this.spec = spec;
     }
 
     @Override public void open() {
         if(schemaCatalog.getTableSchema(tableName)==null) throw new IllegalArgumentException("Tabel tidak ditemukan: "+tableName);
 
         schema = new ResultTableSchema(schemaCatalog.getTableSchema(tableName));
-        rowIds = dataAccess.searchIndex(indexName, key);
+        rowIds = lookup();
         position = 0;
+    }
+
+    // Menerjemahkan IndexScanSpec jadi pemanggilan ke Storage Manager.
+    private List<RowId> lookup() {
+        String indexName = spec.index().indexName();
+        Object value = spec.condition().value();
+
+        return switch (spec.condition().operator()) {
+            case EQ  -> dataAccess.searchIndex(indexName, value);
+            case GT  -> dataAccess.searchIndexRange(indexName, value, null, false, false);
+            case GTE -> dataAccess.searchIndexRange(indexName, value, null, true,  false);
+            case LT  -> dataAccess.searchIndexRange(indexName, null, value, false, false);
+            case LTE -> dataAccess.searchIndexRange(indexName, null, value, false, true);
+            case NEQ -> throw new IllegalStateException("<> tidak bisa memakai index");
+        };
     }
 
     @Override public IResultRow next() {

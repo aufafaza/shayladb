@@ -68,16 +68,12 @@ public class PlanTranslator {
                                 queryTree.getTableName());
                     case INDEX_SCAN:
                         return new IndexScanOperator(dataAccess, schemaCatalog, concurrencyControl, txId,
-                                queryTree.getTableName(),
-                                queryTree.getIndexName(), null);
-                    // TODO: figure out what should be the key
-                    // I think some how operator lain harus ngasih keynya dari condition...
+                                queryTree.getTableName(), queryTree.getIndexScan());
                     default:
                         throw new RuntimeException("Invalid algorithm for table scan: " + queryTree.getAlgorithm());
                 }
             case PROJECT:
-                return new ProjectOperator(childOperators.get(0), queryTree.getProjectionColumns().stream()
-                        .map(ColumnReference::toString).toList());
+                return new ProjectOperator(childOperators.get(0), queryTree.getProjectionColumns());
             case SELECT:
                 return new SelectOperator(childOperators.get(0), queryTree.getConditions());
             case LIMIT:
@@ -96,7 +92,7 @@ public class PlanTranslator {
             case GROUP_BY:
                 // return new GroupByOperator(childOperators.get(0), queryTree.getValue(),
                 // false);
-                return null;
+                return new GroupByOperator(childOperators.get(0));
             case INSERT:
                 return new InsertOperator(dataAccess, schemaCatalog, concurrencyControl, txId,
                         queryTree.getTableName(), queryTree.getInsertValues());
