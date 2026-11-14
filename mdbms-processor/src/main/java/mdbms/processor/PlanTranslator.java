@@ -73,8 +73,7 @@ public class PlanTranslator {
                         throw new RuntimeException("Invalid algorithm for table scan: " + queryTree.getAlgorithm());
                 }
             case PROJECT:
-                return new ProjectOperator(childOperators.get(0), queryTree.getProjectionColumns().stream()
-                        .map(ColumnReference::toString).toList());
+                return new ProjectOperator(childOperators.get(0), queryTree.getProjectionColumns());
             case SELECT:
                 return new SelectOperator(childOperators.get(0), queryTree.getConditions());
             case LIMIT:
