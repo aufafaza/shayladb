@@ -79,12 +79,27 @@ public class ProjectionPushDownRule implements IOptimizationRule {
             }
         }
         QueryTree pruned = prune(side, new LinkedHashSet<>(kept), bindings);
-        // kosong atau semua kolom kepakai, PROJECT ga ada gunanya
-        if (pruned == null || kept.isEmpty() || kept.size() == available.size()) {
+        // kosong atau output di bawah udah pas, PROJECT ga ada gunanya
+        if (pruned == null || kept.isEmpty() || outputOf(pruned, bindings).size() == kept.size()) {
             return pruned;
         }
         return new QueryTree(QueryNodeType.PROJECT, PhysicalAlgorithm.DEFAULT, null,
             List.of(), List.of(pruned), 0, kept, false);
+    }
+
+    // kolom yang beneran keluar dari node
+    private static List<ColumnReference> outputOf(QueryTree node, BindingContext bindings) {
+        if (node.getNodeType() == QueryNodeType.PROJECT) {
+            return node.getProjectionColumns();
+        }
+        if (node.getNodeType() == QueryNodeType.TABLE_SCAN) {
+            return columnsOf(node, bindings);
+        }
+        List<ColumnReference> result = new ArrayList<>();
+        for (QueryTree child : node.getChildren()) {
+            result.addAll(outputOf(child, bindings));
+        }
+        return result;
     }
 
     // semua kolom tabel di bawah node, urut sesuai skema
