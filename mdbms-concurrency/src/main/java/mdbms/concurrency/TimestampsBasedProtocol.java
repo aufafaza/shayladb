@@ -1,13 +1,9 @@
 package mdbms.concurrency;
 
-import mdbms.api.IFailureRecoveryManager;
 import mdbms.models.data.DataItem;
-import mdbms.models.log.LogType;
-import mdbms.models.log.RecordImage;
 import mdbms.models.transaction.AccessStatus;
 import mdbms.models.transaction.Transaction;
 
-import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
