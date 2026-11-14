@@ -130,6 +130,112 @@ class ProjectionPushDownRuleTest {
             usedColumns("SELECT grade, name FROM students, takes;", QueryNodeType.PROJECT));
     }
 
+    // parse + bind, opsional seleksi dulu, lalu proyeksi
+    private String optimize(String sql, boolean pushSelections) {
+        Main.InMemorySchemaCatalog catalog = catalog();
+        QueryTree tree = new ShaylaParser(new ShaylaLexer("")).parseToTree(sql);
+        BindingContext bindings = new QueryBinder(catalog).bind(tree);
+        OptimizationContext context = new OptimizationContext(bindings, catalog, catalog, null);
+        if (pushSelections) {
+            tree = applyBelow(tree, new SelectionPushDownRule(), context);
+        }
+        return new QueryPlanPrinter().printPlan(rule.apply(tree, context));
+    }
+
+    private static QueryTree applyBelow(QueryTree node, IOptimizationRule other, OptimizationContext context) {
+        if (other.matches(node)) {
+            return other.apply(node, context);
+        }
+        List<QueryTree> children = node.getChildren().stream()
+            .map(child -> applyBelow(child, other, context)).toList();
+        return children.isEmpty() ? node : QueryTreeRewrites.withChildren(node, children);
+    }
+
+    @Test
+    void pushesProjectionsBelowCartesianKeepingWhereColumns() {
+        assertEquals(
+            "PROJECT [columns=[students.name]]\n"
+                + "  SELECT [conditions=[((students.id = takes.nim) AND (takes.grade = 'A'))]]\n"
+                + "    CARTESIAN\n"
+                + "      PROJECT [columns=[students.id, students.name]]\n"
+                + "        TABLE_SCAN [table=students]\n"
+                + "      PROJECT [columns=[takes.nim, takes.grade]]\n"
+                + "        TABLE_SCAN [table=takes]\n",
+            optimize("SELECT students.name FROM students, takes "
+                + "WHERE students.id = takes.nim AND takes.grade = 'A';", false));
+    }
+
+    @Test
+    void dropsSelectionColumnsAboveTheirPushedSelection() {
+        assertEquals(
+            "PROJECT [columns=[students.name]]\n"
+                + "  SELECT [conditions=[(students.id = takes.nim)]]\n"
+                + "    CARTESIAN\n"
+                + "      PROJECT [columns=[students.id, students.name]]\n"
+                + "        SELECT [conditions=[(students.gpa > 3.0)]]\n"
+                + "          TABLE_SCAN [table=students]\n"
+                + "      PROJECT [columns=[takes.nim]]\n"
+                + "        SELECT [conditions=[(takes.grade = 'A')]]\n"
+                + "          TABLE_SCAN [table=takes]\n",
+            optimize("SELECT students.name FROM students, takes "
+                + "WHERE students.gpa > 3.0 AND takes.grade = 'A' AND students.id = takes.nim;", true));
+    }
+
+    @Test
+    void keepsJoinColumnsEvenWhenNotDisplayed() {
+        String plan = optimize("SELECT students.name FROM students JOIN takes ON students.id = takes.nim;", false);
+        assertTrue(plan.contains("PROJECT [columns=[students.id, students.name]]"), plan);
+        assertTrue(plan.contains("PROJECT [columns=[takes.nim]]"), plan);
+    }
+
+    @Test
+    void keepsOrderByColumns() {
+        String plan = optimize("SELECT students.name FROM students, takes ORDER BY takes.grade;", false);
+        assertTrue(plan.contains("PROJECT [columns=[takes.grade]]"), plan);
+        assertTrue(plan.contains("PROJECT [columns=[students.name]]\n        TABLE_SCAN [table=students]"), plan);
+    }
+
+    @Test
+    void keepsFinalColumnOrderFromSelectClause() {
+        assertTrue(optimize("SELECT takes.grade, students.name FROM students, takes;", false)
+            .startsWith("PROJECT [columns=[takes.grade, students.name]]\n"));
+    }
+
+    @Test
+    void skipsProjectionWhenSideNeedsAllOrNoColumns() {
+        assertEquals(1, countProjects(optimize("SELECT * FROM students, takes;", false)));
+        String plan = optimize("SELECT students.name FROM students, takes;", false);
+        assertTrue(plan.endsWith("    TABLE_SCAN [table=takes]\n"), plan);
+    }
+
+    @Test
+    void addsNoInnerProjectionForSingleTable() {
+        assertEquals(1, countProjects(optimize("SELECT name FROM students WHERE gpa > 3.0;", true)));
+    }
+
+    @Test
+    void isIdempotent() {
+        Main.InMemorySchemaCatalog catalog = catalog();
+        QueryTree tree = new ShaylaParser(new ShaylaLexer("")).parseToTree(
+            "SELECT students.name FROM students JOIN takes ON students.id = takes.nim;");
+        OptimizationContext context = new OptimizationContext(
+            new QueryBinder(catalog).bind(tree), catalog, catalog, null);
+        QueryTree once = rule.apply(tree, context);
+        QueryPlanPrinter printer = new QueryPlanPrinter();
+        assertEquals(printer.printPlan(once), printer.printPlan(rule.apply(once, context)));
+    }
+
+    @Test
+    void onlyCollapsesWithoutBindings() {
+        QueryTree tree = new ShaylaParser(new ShaylaLexer("")).parseToTree(
+            "SELECT students.name FROM students, takes;");
+        assertEquals(1, countProjects(new QueryPlanPrinter().printPlan(rule.apply(tree, null))));
+    }
+
+    private static int countProjects(String plan) {
+        return plan.split("PROJECT", -1).length - 1;
+    }
+
     @Test
     void returnsNullWhenColumnCannotBeResolved() {
         QueryTree tree = new ShaylaParser(new ShaylaLexer("")).parseToTree("SELECT name FROM students;");
