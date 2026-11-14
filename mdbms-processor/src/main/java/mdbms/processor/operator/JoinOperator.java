@@ -7,7 +7,6 @@ import java.util.function.BiPredicate;
 import mdbms.models.query.ExpressionTree;
 import mdbms.processor.ExpressionEvaluator;
 import mdbms.processor.IResultRow;
-import mdbms.processor.exception.UnexpectedTypeException;
 
 public class JoinOperator extends QueryBinaryOperator {
     private final BiPredicate<IResultRow, IResultRow> condition;
