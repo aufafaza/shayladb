@@ -9,6 +9,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import mdbms.models.data.ComparisonOperator;
 import mdbms.models.data.Condition;
 import mdbms.models.query.PhysicalAlgorithm;
@@ -18,10 +19,13 @@ import mdbms.models.schema.ColumnDefinition;
 import mdbms.models.schema.DataType;
 import mdbms.models.schema.IndexInfo;
 import mdbms.models.schema.IndexType;
+import mdbms.models.schema.Statistic;
 import mdbms.models.schema.TableSchema;
 import mdbms.optimizer.Main;
 import mdbms.optimizer.binder.BindingContext;
 import mdbms.optimizer.binder.QueryBinder;
+import mdbms.optimizer.cost.CardinalityEstimator;
+import mdbms.optimizer.cost.SystemCostEstimator;
 import mdbms.optimizer.lexer.ShaylaLexer;
 import mdbms.optimizer.parser.ShaylaParser;
 import org.junit.jupiter.api.Test;
@@ -64,6 +68,17 @@ class IndexSelectionRuleTest {
         QueryTree tree = new ShaylaParser(new ShaylaLexer("")).parseToTree(sql);
         BindingContext bindings = new QueryBinder(catalog).bind(tree);
         OptimizationContext context = new OptimizationContext(bindings, catalog, catalog, null);
+        return rule.apply(findSelect(tree), context);
+    }
+
+    // pakai cost model asli + statistik students
+    private QueryTree optimizeWithCost(String sql, int rows, int blocks, IndexedCatalog catalog) {
+        catalog.addTable(catalog.getTableSchema("students"), new Statistic("students", rows, blocks, 40, 10,
+            Map.of("id", rows, "name", 10, "gpa", 40)));
+        QueryTree tree = new ShaylaParser(new ShaylaLexer("")).parseToTree(sql);
+        BindingContext bindings = new QueryBinder(catalog).bind(tree);
+        OptimizationContext context = new OptimizationContext(bindings, catalog, catalog,
+            new SystemCostEstimator(catalog, new CardinalityEstimator()));
         return rule.apply(findSelect(tree), context);
     }
 
@@ -208,5 +223,66 @@ class IndexSelectionRuleTest {
 
         assertEquals(QueryNodeType.SELECT, result.getNodeType());
         assertFalse(rule.matches(result));
+    }
+
+    @Test
+    void indexBeatsFullScanOnLargeTable() {
+        QueryTree result = optimizeWithCost("SELECT * FROM students WHERE id = 7", 10_000, 1_000, catalog());
+
+        assertEquals(PhysicalAlgorithm.INDEX_SCAN, result.getAlgorithm());
+    }
+
+    @Test
+    void tinyTableKeepsFullScan() {
+        QueryTree result = optimizeWithCost("SELECT * FROM students WHERE id = 7", 10, 1, catalog());
+
+        assertEquals(QueryNodeType.SELECT, result.getNodeType());
+        assertNull(result.getChildren().get(0).getIndexScan());
+    }
+
+    @Test
+    void picksTheCheapestIndexNotTheFirstOne() {
+        IndexedCatalog catalog = catalog();
+        catalog.addIndex("idx_students_name", "students", "name");
+
+        QueryTree result = optimizeWithCost("SELECT * FROM students WHERE name = 'a' AND id = 7",
+            10_000, 1_000, catalog);
+
+        assertEquals("idx_students_id", bottomOf(result).getIndexScan().index().indexName());
+        assertEquals("name", columnOf(result));
+    }
+
+    @Test
+    void equalityPreferredOverRangeWithCost() {
+        QueryTree result = optimizeWithCost("SELECT * FROM students WHERE id > 5 AND id = 7",
+            10_000, 1_000, catalog());
+
+        assertEquals(ComparisonOperator.EQ, bottomOf(result).getIndexScan().condition().operator());
+    }
+
+    @Test
+    void equalityPreferredOverRangeWithoutStatistics() {
+        QueryTree result = optimize("SELECT * FROM students WHERE id > 5 AND id = 7");
+
+        assertEquals(ComparisonOperator.EQ, bottomOf(result).getIndexScan().condition().operator());
+    }
+
+    @Test
+    void indexScanIsCheaperForTheCostModel() {
+        IndexedCatalog catalog = catalog();
+        QueryTree result = optimizeWithCost("SELECT * FROM students WHERE id = 7", 10_000, 1_000, catalog);
+        SystemCostEstimator estimator = new SystemCostEstimator(catalog, new CardinalityEstimator());
+
+        assertTrue(estimator.calculateTotalCost(result) < estimator.calculateTotalCost(
+            new QueryTree(QueryNodeType.TABLE_SCAN, PhysicalAlgorithm.LINEAR_SCAN, "students",
+                List.of(), List.of(), 0)));
+    }
+
+    private static QueryTree bottomOf(QueryTree node) {
+        QueryTree current = node;
+        while (!current.getChildren().isEmpty()) {
+            current = current.getChildren().get(0);
+        }
+        return current;
     }
 }
