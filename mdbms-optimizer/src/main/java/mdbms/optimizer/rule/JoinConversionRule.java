@@ -89,7 +89,7 @@ public class JoinConversionRule implements IOptimizationRule {
                 || (node.getNodeType() == QueryNodeType.JOIN && !node.isNaturalJoin()));
     }
 
-    private void collect(QueryTree node, List<QueryTree> inputs, List<ExpressionTree> predicates) {
+    void collect(QueryTree node, List<QueryTree> inputs, List<ExpressionTree> predicates) {
         if (matches(node)) {
             for (ExpressionTree condition : node.getConditions()) {
                 if (condition.getRoot().getType() == ExpressionNode.Type.LOGICAL_AND) {
@@ -106,7 +106,7 @@ public class JoinConversionRule implements IOptimizationRule {
         }
     }
 
-    private static Set<String> tablesIn(QueryTree node, BindingContext bindings) {
+    static Set<String> tablesIn(QueryTree node, BindingContext bindings) {
         Set<String> result = new HashSet<>();
         if (node.getNodeType() == QueryNodeType.TABLE_SCAN) {
             result.add(tableKey(node.getTableName(), bindings));
@@ -117,7 +117,7 @@ public class JoinConversionRule implements IOptimizationRule {
         return result;
     }
 
-    private static Set<String> references(ExpressionTree predicate, BindingContext bindings) {
+    static Set<String> references(ExpressionTree predicate, BindingContext bindings) {
         Set<String> result = new HashSet<>();
         for (ColumnReference column : QueryTreeRewrites.columnsIn(predicate)) {
             String table = column.getTableName();
