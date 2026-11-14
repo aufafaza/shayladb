@@ -212,6 +212,34 @@ public class HeapFile{
         }
     }
 
+    // hapus baris kalau masih ada, null kalau block slot atau barisnya udah ga ada jadi aman diulang sama redo dan undo FRM
+    public Row deleteIfPresent(RowId rowId){
+        if (rowId.blockNumber() >= blockCount()){
+            return null;
+        }
+        Block block = pool.pin(fileName, rowId.blockNumber());
+        boolean dirty = false;
+
+        try{
+            SlottedPage page = SlottedPage.of(block.data);
+            int slot = rowId.slot();
+
+            if (slot < 0 || slot >= page.slotCount() || !page.isOccupied(slot)){
+                return null;
+            }
+
+            List<Object> values = serializer.deserialize(page.readRecord(slot), schema);
+            page.deleteRecord(slot);
+            writeBack(block, page);
+            dirty = true;
+
+            return new Row(rowId, values);
+
+        } finally{
+            pool.unpin(block, dirty, NO_LSN);
+        }
+    }
+
     public int truncate(){
         int rowCount = 0;
     
