@@ -29,10 +29,9 @@ public class AbortOperator implements IQueryOperator {
         try {
             concurrencyControlManager.abortTransaction(transactionId, "ABORT requested by client");
             message = "ABORT transaction " + transactionId;
-        } catch (IllegalArgumentException e) {
-            message = "Transaction " + transactionId + " is not active";
+        } catch (RuntimeException e) {
+            message = "ABORT failed: " + e.getMessage();
         }
-        // TODO BUTUH ClientSession.clearTransaction() setelah ABORT dari QP1
 
         ResultTableSchema schema = new ResultTableSchema();
         schema.addColumn(new ColumnDefinition("message", DataType.VARCHAR, message.length(), false));
