@@ -232,11 +232,16 @@ public final class StorageManager implements IDataAccess, ISchemaCatalog, IStati
         }
     }
 
+    // hapus baris lewat RowId lalu buang dari semua index, null kalau barisnya udah ga ada
+    // dibikin aman diulang biar redo DELETE dan undo INSERT dari FRM ga gagal walau perubahannya udah sampai disk
     @Override
     public Row deleteByRowId(RowId rowId){
         HeapFile heapFile = heapFileOf(rowId.tableName());
 
-        Row oldRow = heapFile.delete(rowId);
+        Row oldRow = heapFile.deleteIfPresent(rowId);
+        if (oldRow == null){
+            return null;
+        }
 
         try{
             afterWrite(rowId.tableName(), oldRow, null);
@@ -267,8 +272,13 @@ public final class StorageManager implements IDataAccess, ISchemaCatalog, IStati
         return catalog.listTables();
     }
 
+    // daftarin tabel baru ke katalog, nama yang udah ada ditolak biar schema ga ketimpa sementara file datanya masih format lama
     @Override
     public void updateTableSchema(TableSchema schema){
+        if (schema != null && catalog.tableExists(schema.tableName())){
+            throw new StorageException(StorageErrorCode.TABLE_ALREADY_EXISTS,
+                "Table already exists: " + schema.tableName());
+        }
         catalog.saveSchema(schema);
     }
 
