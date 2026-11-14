@@ -3,8 +3,10 @@ package mdbms.optimizer.rule;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
+import mdbms.models.query.ColumnReference;
 import mdbms.models.query.ExpressionNode;
 import mdbms.models.query.ExpressionTree;
+import mdbms.models.query.OrderByClause;
 import mdbms.models.query.PhysicalAlgorithm;
 import mdbms.models.query.QueryNodeType;
 import mdbms.models.query.QueryTree;
@@ -58,6 +60,43 @@ final class QueryTreeRewrites {
             collectConjuncts(condition.getRoot(), result);
         }
         return result;
+    }
+
+    // semua kolom yang muncul di ekspresi
+    static List<ColumnReference> columnsIn(ExpressionTree expression) {
+        List<ColumnReference> result = new ArrayList<>();
+        if (expression != null) {
+            collectColumns(expression.getRoot(), result);
+        }
+        return result;
+    }
+
+    // kolom yang dipakai node itu sendiri: kondisi, ORDER BY, daftar proyeksi
+    static List<ColumnReference> columnsUsedBy(QueryTree node) {
+        List<ColumnReference> result = new ArrayList<>();
+        for (ExpressionTree condition : node.getConditions()) {
+            result.addAll(columnsIn(condition));
+        }
+        for (OrderByClause clause : node.getOrderByClauses()) {
+            result.add(clause.getField());
+        }
+        for (ColumnReference column : node.getProjectionColumns()) {
+            if (!column.isWildcard()) {
+                result.add(column);
+            }
+        }
+        return result;
+    }
+
+    private static void collectColumns(ExpressionNode node, List<ColumnReference> out) {
+        if (node == null) {
+            return;
+        }
+        if (node.getType() == ExpressionNode.Type.COLUMN_REFERENCE) {
+            out.add(new ColumnReference(node.getTableName(), node.getValue()));
+        }
+        collectColumns(node.getLeft(), out);
+        collectColumns(node.getRight(), out);
     }
 
     private static void collectConjuncts(ExpressionNode node, List<ExpressionTree> out) {
