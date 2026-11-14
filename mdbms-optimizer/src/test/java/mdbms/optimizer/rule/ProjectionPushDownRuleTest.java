@@ -6,7 +6,10 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 import mdbms.models.query.ColumnReference;
 import mdbms.models.query.PhysicalAlgorithm;
 import mdbms.models.query.QueryNodeType;
@@ -18,6 +21,7 @@ import mdbms.optimizer.Main;
 import mdbms.optimizer.QueryPlanPrinter;
 import mdbms.optimizer.binder.BindingContext;
 import mdbms.optimizer.binder.QueryBinder;
+import mdbms.optimizer.binder.TableBinding;
 import mdbms.optimizer.lexer.ShaylaLexer;
 import mdbms.optimizer.parser.ShaylaParser;
 import org.junit.jupiter.api.Test;
@@ -82,6 +86,9 @@ class ProjectionPushDownRuleTest {
             new ColumnDefinition("nim", DataType.INTEGER, 4, false),
             new ColumnDefinition("code", DataType.VARCHAR, 10, false),
             new ColumnDefinition("grade", DataType.CHAR, 2, false)), List.of(), List.of()));
+        catalog.addTable(new TableSchema("courses", List.of(
+            new ColumnDefinition("code", DataType.VARCHAR, 10, false),
+            new ColumnDefinition("credits", DataType.INTEGER, 4, false)), List.of("code"), List.of()));
         return catalog;
     }
 
@@ -230,6 +237,115 @@ class ProjectionPushDownRuleTest {
         QueryTree tree = new ShaylaParser(new ShaylaLexer("")).parseToTree(
             "SELECT students.name FROM students, takes;");
         assertEquals(1, countProjects(new QueryPlanPrinter().printPlan(rule.apply(tree, null))));
+    }
+
+    @Test
+    void dropsInnerJoinColumnsAfterTheyAreUsed() {
+        assertEquals(
+            "PROJECT [columns=[students.name]]\n"
+                + "  SELECT [conditions=[(takes.code = courses.code)]]\n"
+                + "    CARTESIAN\n"
+                + "      PROJECT [columns=[students.name, takes.code]]\n"
+                + "        SELECT [conditions=[(students.id = takes.nim)]]\n"
+                + "          CARTESIAN\n"
+                + "            PROJECT [columns=[students.id, students.name]]\n"
+                + "              TABLE_SCAN [table=students]\n"
+                + "            PROJECT [columns=[takes.nim, takes.code]]\n"
+                + "              TABLE_SCAN [table=takes]\n"
+                + "      PROJECT [columns=[courses.code]]\n"
+                + "        TABLE_SCAN [table=courses]\n",
+            optimize("SELECT students.name FROM students, takes, courses "
+                + "WHERE students.id = takes.nim AND takes.code = courses.code;", true));
+    }
+
+    @Test
+    void skipsProjectionWhenChildOutputAlreadyMatches() {
+        assertEquals(
+            "PROJECT [columns=[students.name, takes.code]]\n"
+                + "  SELECT [conditions=[(takes.code = courses.code)]]\n"
+                + "    CARTESIAN\n"
+                + "      CARTESIAN\n"
+                + "        PROJECT [columns=[students.name]]\n"
+                + "          TABLE_SCAN [table=students]\n"
+                + "        PROJECT [columns=[takes.code]]\n"
+                + "          TABLE_SCAN [table=takes]\n"
+                + "      PROJECT [columns=[courses.code]]\n"
+                + "        TABLE_SCAN [table=courses]\n",
+            optimize("SELECT students.name, takes.code FROM students, takes, courses "
+                + "WHERE takes.code = courses.code;", true));
+    }
+
+    @Test
+    void keepsSharedColumnsOfNaturalJoin() {
+        String plan = optimize("SELECT takes.grade FROM takes NATURAL JOIN courses;", false);
+        assertTrue(plan.contains("JOIN [natural=true"), plan);
+        assertTrue(plan.contains("PROJECT [columns=[takes.code, takes.grade]]"), plan);
+        assertTrue(plan.contains("PROJECT [columns=[courses.code]]"), plan);
+    }
+
+    @Test
+    void keepsSortAndLimitAboveJoin() {
+        String plan = optimize("SELECT students.name FROM students JOIN takes ON students.id = takes.nim "
+            + "WHERE takes.grade = 'A' ORDER BY students.gpa DESC LIMIT 5;", true);
+        assertTrue(plan.startsWith("PROJECT [columns=[students.name]]\n"
+            + "  LIMIT [limit=5]\n"
+            + "    SORT [orderBy=[students.gpa DESC]]\n"
+            + "      JOIN"), plan);
+        // students butuh id, name, gpa = semua kolom, jadi ga perlu PROJECT
+        assertTrue(plan.contains("JOIN [conditions=[(students.id = takes.nim)]]\n"
+            + "        TABLE_SCAN [table=students]\n"), plan);
+        assertTrue(plan.contains("PROJECT [columns=[takes.nim]]"), plan);
+    }
+
+    @Test
+    void neverDropsAColumnThatIsUsedHigherUp() {
+        List<String> queries = List.of(
+            "SELECT students.name FROM students, takes, courses "
+                + "WHERE students.id = takes.nim AND takes.code = courses.code AND courses.credits > 2;",
+            "SELECT takes.grade, students.name FROM students JOIN takes ON students.id = takes.nim "
+                + "WHERE students.gpa > 3.0 ORDER BY takes.code;",
+            "SELECT * FROM takes NATURAL JOIN courses WHERE courses.credits > 2;",
+            "SELECT courses.credits FROM students, takes, courses WHERE takes.grade = 'A' "
+                + "ORDER BY students.name LIMIT 10;");
+        for (String sql : queries) {
+            Main.InMemorySchemaCatalog catalog = catalog();
+            QueryTree tree = new ShaylaParser(new ShaylaLexer("")).parseToTree(sql);
+            BindingContext bindings = new QueryBinder(catalog).bind(tree);
+            OptimizationContext context = new OptimizationContext(bindings, catalog, catalog, null);
+            QueryTree result = rule.apply(applyBelow(tree, new SelectionPushDownRule(), context), context);
+            assertColumnsAvailable(result, bindings, sql);
+        }
+    }
+
+    // tiap kolom yang dipakai node harus ada di output anak-anaknya
+    private static void assertColumnsAvailable(QueryTree node, BindingContext bindings, String sql) {
+        if (node.getChildren().isEmpty()) {
+            return;
+        }
+        Set<ColumnReference> available = new HashSet<>();
+        for (QueryTree child : node.getChildren()) {
+            available.addAll(outputOf(child, bindings));
+            assertColumnsAvailable(child, bindings, sql);
+        }
+        for (ColumnReference used : ProjectionPushDownRule.resolvedColumnsUsedBy(node, bindings)) {
+            assertTrue(available.contains(used), used + " hilang di bawah " + node.getNodeType() + " untuk " + sql);
+        }
+    }
+
+    private static List<ColumnReference> outputOf(QueryTree node, BindingContext bindings) {
+        if (node.getNodeType() == QueryNodeType.PROJECT) {
+            return node.getProjectionColumns();
+        }
+        if (node.getNodeType() == QueryNodeType.TABLE_SCAN) {
+            TableBinding table = bindings.getTableBinding(node.getTableName());
+            return table.getSchema().columns().stream()
+                .map(column -> new ColumnReference(table.getAlias(), column.name())).toList();
+        }
+        List<ColumnReference> out = new ArrayList<>();
+        for (QueryTree child : node.getChildren()) {
+            out.addAll(outputOf(child, bindings));
+        }
+        return out;
     }
 
     private static int countProjects(String plan) {
