@@ -68,10 +68,7 @@ public class PlanTranslator {
                                 queryTree.getTableName());
                     case INDEX_SCAN:
                         return new IndexScanOperator(dataAccess, schemaCatalog, concurrencyControl, txId,
-                                queryTree.getTableName(),
-                                queryTree.getIndexName(), null);
-                    // TODO: figure out what should be the key
-                    // I think some how operator lain harus ngasih keynya dari condition...
+                                queryTree.getIndexScan());
                     default:
                         throw new RuntimeException("Invalid algorithm for table scan: " + queryTree.getAlgorithm());
                 }
