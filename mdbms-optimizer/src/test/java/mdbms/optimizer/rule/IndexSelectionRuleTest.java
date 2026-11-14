@@ -12,6 +12,7 @@ import java.util.Locale;
 import java.util.Map;
 import mdbms.models.data.ComparisonOperator;
 import mdbms.models.data.Condition;
+import mdbms.models.query.ExpressionTree;
 import mdbms.models.query.PhysicalAlgorithm;
 import mdbms.models.query.QueryNodeType;
 import mdbms.models.query.QueryTree;
@@ -284,5 +285,115 @@ class IndexSelectionRuleTest {
             current = current.getChildren().get(0);
         }
         return current;
+    }
+
+    // selection pushdown dulu, baru index dipasang di tiap SELECT yang nempel ke tabel
+    private QueryTree pushThenIndex(String sql, IndexedCatalog catalog) {
+        QueryTree tree = new ShaylaParser(new ShaylaLexer("")).parseToTree(sql);
+        BindingContext bindings = new QueryBinder(catalog).bind(tree);
+        OptimizationContext context = new OptimizationContext(bindings, catalog, catalog, null);
+        QueryTree pushed = new SelectionPushDownRule().apply(findSelect(tree), context);
+        return applyIndex(pushed, context);
+    }
+
+    private QueryTree applyIndex(QueryTree node, OptimizationContext context) {
+        if (rule.matches(node)) {
+            return rule.apply(node, context);
+        }
+        if (node.getChildren().isEmpty()) {
+            return node;
+        }
+        List<QueryTree> children = new ArrayList<>();
+        for (QueryTree child : node.getChildren()) {
+            children.add(applyIndex(child, context));
+        }
+        return QueryTreeRewrites.withChildren(node, children);
+    }
+
+    private static List<QueryTree> scansIn(QueryTree node) {
+        List<QueryTree> result = new ArrayList<>();
+        if (node.getNodeType() == QueryNodeType.TABLE_SCAN) {
+            result.add(node);
+        }
+        for (QueryTree child : node.getChildren()) {
+            result.addAll(scansIn(child));
+        }
+        return result;
+    }
+
+    @Test
+    void worksTogetherWithSelectionPushDownOnJoins() {
+        QueryTree result = pushThenIndex(
+            "SELECT * FROM students, takes WHERE students.id = takes.nim AND students.id = 7 AND takes.grade = 'A'",
+            catalog());
+
+        List<QueryTree> scans = scansIn(result);
+        QueryTree students = scans.stream().filter(s -> s.getTableName().equals("students")).findFirst().orElseThrow();
+        QueryTree takes = scans.stream().filter(s -> s.getTableName().equals("takes")).findFirst().orElseThrow();
+        assertEquals(PhysicalAlgorithm.INDEX_SCAN, students.getAlgorithm());
+        assertEquals(new Condition("id", ComparisonOperator.EQ, 7L), students.getIndexScan().condition());
+        assertNull(takes.getIndexScan());
+        // kondisi join tetap di atas join
+        assertEquals(QueryNodeType.SELECT, result.getNodeType());
+    }
+
+    @Test
+    void tableAndColumnNamesAreCaseInsensitive() {
+        QueryTree result = optimize("SELECT * FROM STUDENTS WHERE Students.ID = 7");
+
+        assertEquals("idx_students_id", result.getIndexScan().index().indexName());
+    }
+
+    @Test
+    void realLiteralBecomesDouble() {
+        IndexedCatalog catalog = catalog();
+        catalog.addIndex("idx_students_gpa", "students", "gpa");
+
+        QueryTree result = optimize("SELECT * FROM students WHERE gpa <= 3.5", catalog);
+
+        assertEquals(new Condition("gpa", ComparisonOperator.LTE, 3.5), result.getIndexScan().condition());
+    }
+
+    @Test
+    void originalTreeIsNotModified() {
+        IndexedCatalog catalog = catalog();
+        QueryTree tree = new ShaylaParser(new ShaylaLexer(""))
+            .parseToTree("SELECT * FROM students WHERE id = 7 AND gpa > 3.0");
+        BindingContext bindings = new QueryBinder(catalog).bind(tree);
+        String before = tree.formatTree();
+
+        rule.apply(findSelect(tree), new OptimizationContext(bindings, catalog, catalog, null));
+
+        assertEquals(before, tree.formatTree());
+    }
+
+    @Test
+    void noConditionIsLostOrDuplicated() {
+        IndexedCatalog catalog = catalog();
+        catalog.addIndex("idx_students_name", "students", "name");
+        String[] queries = {
+            "SELECT * FROM students WHERE id = 7",
+            "SELECT * FROM students WHERE id = 7 AND name = 'a' AND gpa > 3.0",
+            "SELECT * FROM students WHERE gpa > 3.0 AND 1 = 1 AND id >= 2",
+            "SELECT * FROM students WHERE id <> 1 AND name <> 'b'",
+        };
+        for (String sql : queries) {
+            QueryTree select = findSelect(new ShaylaParser(new ShaylaLexer("")).parseToTree(sql));
+            int before = QueryTreeRewrites.splitConjuncts(select.getConditions().get(0)).size();
+
+            QueryTree result = optimize(sql, catalog);
+
+            int after = 0;
+            for (QueryTree current = result; ; current = current.getChildren().get(0)) {
+                for (ExpressionTree condition : current.getConditions()) {
+                    after += QueryTreeRewrites.splitConjuncts(condition).size();
+                }
+                if (current.getChildren().isEmpty()) {
+                    break;
+                }
+            }
+            assertEquals(before, after, sql);
+            assertEquals("students", bottomOf(result).getTableName(), sql);
+        }
     }
 }
