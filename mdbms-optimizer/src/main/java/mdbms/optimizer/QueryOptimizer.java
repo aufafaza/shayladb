@@ -17,6 +17,7 @@ import mdbms.optimizer.rule.IOptimizationRule;
 import mdbms.optimizer.rule.JoinConversionRule;
 import mdbms.optimizer.rule.JoinOrderingRule;
 import mdbms.optimizer.rule.SelectionPushDownRule;
+import mdbms.optimizer.rule.ProjectionPushDownRule;
 import mdbms.optimizer.cost.CardinalityEstimator;
 import mdbms.optimizer.cost.SystemCostEstimator;
 import mdbms.optimizer.rule.OptimizationContext;
@@ -32,7 +33,8 @@ public class QueryOptimizer implements IQueryOptimizer {
 
     public QueryOptimizer(ISchemaCatalog schemaCatalog, ShaylaParser parser) {
         this(schemaCatalog, parser, new QueryValidator(schemaCatalog),
-            List.of(new SelectionPushDownRule(), new JoinConversionRule(), new JoinOrderingRule()), null);
+            List.of(new SelectionPushDownRule(), new JoinConversionRule(), new JoinOrderingRule(),
+                new ProjectionPushDownRule()), null);
     }
 
     public QueryOptimizer(
