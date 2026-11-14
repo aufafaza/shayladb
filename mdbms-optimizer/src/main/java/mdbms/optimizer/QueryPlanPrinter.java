@@ -118,6 +118,12 @@ public final class QueryPlanPrinter {
         if (node.getIndexColumn() != null) {
             result.add("indexColumn=" + column(node.getIndexColumn()));
         }
+        if (node.getIndexScan() != null) {
+            result.add("indexScan=" + escape(node.getIndexScan().index().indexName())
+                + " " + escape(String.valueOf(node.getIndexScan().condition().column()))
+                + " " + node.getIndexScan().condition().operator()
+                + " " + escape(String.valueOf(node.getIndexScan().condition().value())));
+        }
         if (node.getAlgorithm() != null && node.getAlgorithm() != PhysicalAlgorithm.DEFAULT) {
             result.add("algorithm=" + node.getAlgorithm());
         }

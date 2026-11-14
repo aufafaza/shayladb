@@ -44,6 +44,9 @@ final class QueryTreeRewrites {
         if (node.getIndexName() != null) {
             copy.setIndexDefinition(node.getIndexName(), node.getIndexColumn());
         }
+        if (node.getIndexScan() != null) {
+            copy.setIndexScan(node.getIndexScan());
+        }
         return copy;
     }
 
