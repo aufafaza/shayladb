@@ -556,4 +556,50 @@ class StorageManagerTest {
         assertTrue(storage.searchIndex("idx_users_id", 2).isEmpty());
         assertEquals(0, storage.getBufferStats().dirtyBlocks());
     }
+
+    // deleteByRowId kedua kali di baris yang sama balikin null tanpa error, index dan data ga berubah lagi
+    @Test
+    void deleteByRowIdIsIdempotentForRedo() {
+        createUsers();
+        RowId alice = storage.writeBlock(new DataWrite("users", user(1, "alice", 3.5f), List.of())).get(0);
+        RowId bob = storage.writeBlock(new DataWrite("users", user(2, "bob", null), List.of())).get(0);
+        storage.createIndex("idx_users_id", "users", "id");
+
+        assertEquals(List.of(1, "alice", 3.5f), storage.deleteByRowId(alice).values());
+        assertNull(storage.deleteByRowId(alice));
+
+        assertEquals(List.of(bob), readUsers().stream().map(Row::rowId).toList());
+        assertTrue(storage.searchIndex("idx_users_id", 1).isEmpty());
+        assertEquals(List.of(bob), storage.searchIndex("idx_users_id", 2));
+    }
+
+    // deleteByRowId ke block atau slot yang belum pernah ada juga balikin null, misalnya undo INSERT yang ga sempat ke disk
+    @Test
+    void deleteByRowIdOnMissingBlockOrSlotReturnsNull() {
+        createUsers();
+        storage.writeBlock(new DataWrite("users", user(1, "alice", 3.5f), List.of()));
+
+        assertNull(storage.deleteByRowId(new RowId("users", 7, 0)));
+        assertNull(storage.deleteByRowId(new RowId("users", 0, 40)));
+        assertEquals(1, readUsers().size());
+        assertCode(StorageErrorCode.TABLE_NOT_FOUND, () -> storage.deleteByRowId(MISSING_ROW));
+    }
+
+    // bikin tabel dengan nama yang udah ada ditolak dan schema lama tetap utuh, setelah di drop namanya boleh dipakai lagi
+    @Test
+    void createExistingTableIsRejected() {
+        createUsers();
+        storage.writeBlock(new DataWrite("users", user(1, "alice", 3.5f), List.of()));
+        TableSchema other = new TableSchema("users", List.of(
+                new ColumnDefinition("code", DataType.CHAR, 4, false)), List.of("code"), List.of());
+
+        assertCode(StorageErrorCode.TABLE_ALREADY_EXISTS, () -> storage.updateTableSchema(other));
+        assertEquals(3, storage.getTableSchema("users").columns().size());
+        assertEquals(1, readUsers().size());
+
+        storage.dropTable("users");
+        storage.updateTableSchema(other);
+        assertEquals(other, storage.getTableSchema("users"));
+        assertTrue(readUsers().isEmpty());
+    }
 }

@@ -189,6 +189,16 @@ class StorageTestDriver {
                         .equals(List.of("nim", "name", "gender", "major", "gpa"))
                         && students.primaryKey().equals(List.of("nim")));
         check("tabel yang tidak ada dikembalikan null", () -> catalog.getTableSchema("ghost") == null);
+        check("membuat tabel dengan nama yang sudah ada ditolak dengan TABLE_ALREADY_EXISTS", () -> {
+            try {
+                catalog.updateTableSchema(new TableSchema("students", List.of(
+                        new ColumnDefinition("id", DataType.INTEGER, 0, false)), List.of("id"), List.of()));
+                return false;
+            } catch (StorageException e) {
+                return e.getCode() == StorageErrorCode.TABLE_ALREADY_EXISTS
+                        && catalog.getTableSchema("students").equals(students);
+            }
+        });
 
         section("SM-04 mengambil data");
         Condition goodGpa = new Condition("gpa", ComparisonOperator.GTE, 3.5f);
@@ -356,6 +366,13 @@ class StorageTestDriver {
             afterCrash.rebuildIndexes();
             return sorted(afterCrash.searchIndex(INDEX_NIM, 100001)).equals(rowIds(afterCrash, "takes",
                     new Condition("nim", ComparisonOperator.EQ, 100001)));
+        });
+        check("redo DELETE FRM dua kali aman, panggilan kedua balikin null tanpa error", () -> {
+            int before = select(afterCrash, "takes").size();
+            Row first = afterCrash.deleteByRowId(lostIds.get(2));
+            Row second = afterCrash.deleteByRowId(lostIds.get(2));
+            return first != null && second == null && select(afterCrash, "takes").size() == before - 1
+                    && !afterCrash.searchIndex(INDEX_NIM, 100001).contains(lostIds.get(2));
         });
         check("undo delete FRM lewat insertAt mengembalikan baris di RowId yang sama", () -> {
             Row victim = afterCrash.fetchByRowId(lostIds.get(0));

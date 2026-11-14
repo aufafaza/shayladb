@@ -3,6 +3,7 @@ package mdbms.storage.crud;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -262,5 +263,17 @@ class HeapFileTest {
         RowId rowId = heapFile.insert(List.of(1, "alice"));
         assertEquals(0, rowId.blockNumber());
         assertEquals(List.of(1, "alice"), heapFile.fetch(rowId).values());
+    }
+
+    // deleteIfPresent balikin baris yang dihapus, lalu null buat baris, slot, atau block yang udah ga ada
+    @Test
+    void deleteIfPresentIsSafeToRepeat(){
+        RowId rowId = heapFile.insert(List.of(1, "alice"));
+
+        assertEquals(List.of(1, "alice"), heapFile.deleteIfPresent(rowId).values());
+        assertNull(heapFile.deleteIfPresent(rowId));
+        assertNull(heapFile.deleteIfPresent(new RowId("users", 0, 9)));
+        assertNull(heapFile.deleteIfPresent(new RowId("users", 5, 0)));
+        assertEquals(1, heapFile.blockCount());
     }
 }
