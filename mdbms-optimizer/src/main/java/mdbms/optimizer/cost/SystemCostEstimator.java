@@ -6,6 +6,7 @@ import java.util.Map;
 import java.util.Objects;
 import mdbms.api.IStatisticsProvider;
 import mdbms.models.query.ExpressionTree;
+import mdbms.models.query.ExpressionNode;
 import mdbms.models.query.PhysicalAlgorithm;
 import mdbms.models.query.QueryNodeType;
 import mdbms.models.query.QueryTree;
@@ -212,7 +213,14 @@ public class SystemCostEstimator implements ICostEstimator {
                 }
                 PlanEstimate left = estimateOutput(children.get(0));
                 PlanEstimate right = estimateOutput(children.get(1));
-                ExpressionTree cond = !node.getConditions().isEmpty() ? node.getConditions().get(0) : null;
+                ExpressionNode root = null;
+                for (ExpressionTree condition : node.getConditions()) {
+                    if (condition != null && condition.getRoot() != null) {
+                        root = root == null ? condition.getRoot()
+                            : ExpressionNode.logicalAnd(root, condition.getRoot());
+                    }
+                }
+                ExpressionTree cond = root == null ? null : new ExpressionTree(root);
                 return cardinalityEstimator.estimateJoin(left, right, cond);
             }
             case PROJECT, SORT -> {
