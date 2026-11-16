@@ -7,7 +7,6 @@ import java.util.function.BiPredicate;
 import mdbms.models.query.ExpressionTree;
 import mdbms.processor.ExpressionEvaluator;
 import mdbms.processor.IResultRow;
-import mdbms.processor.exception.UnexpectedTypeException;
 
 public class JoinOperator extends QueryBinaryOperator {
     private final BiPredicate<IResultRow, IResultRow> condition;
@@ -24,20 +23,8 @@ public class JoinOperator extends QueryBinaryOperator {
         super(left, right);
         if (blockSize <= 0)
             throw new IllegalArgumentException("Ukuran blok harus positif");
-        this.condition = (row1, row2) -> conditions.stream()
-                .map(condition -> {
-                    Object result = ExpressionEvaluator.evaluate(condition, row1, row2);
-                    if (result instanceof String) {
-                        throw new UnexpectedTypeException("BOOLEAN", "STRING");
-                    }
-                    if (result instanceof Long) {
-                        throw new UnexpectedTypeException("BOOLEAN", "INTEGER");
-                    }
-                    if (result instanceof Double) {
-                        throw new UnexpectedTypeException("BOOLEAN", "REAL");
-                    }
-                    return (Boolean) result;
-                })
+            this.condition = (row1, row2) -> conditions.stream()
+                .map(condition ->  ExpressionEvaluator.matches(List.of(condition), row1, row2))
                 .reduce(true, (a, b) -> a && b);
         this.natural = natural;
         this.blockSize = blockSize;

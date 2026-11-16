@@ -73,18 +73,18 @@ public class QueryBinder {
                     resolveNaturalJoin(node, context);
                 }
                 for (ExpressionTree cond : node.getConditions()) {
-                    bindExpression(cond, context);
+                    bindExpression(cond, context, node);
                 }
             }
             case SELECT -> {
                 for (ExpressionTree cond : node.getConditions()) {
-                    bindExpression(cond, context);
+                    bindExpression(cond, context, node);
                 }
             }
             case SORT -> {
                 for (OrderByClause clause : node.getOrderByClauses()) {
                     if (clause.getField() != null) {
-                        ColumnBinding cb = resolveColumn(clause.getField(), context);
+                        ColumnBinding cb = resolveColumn(clause.getField(), context, node);
                         context.registerColumnBinding(clause.getField(), cb);
                     }
                 }
@@ -93,7 +93,7 @@ public class QueryBinder {
                 expandSelectStar(node, context);
                 for (ColumnReference col : node.getProjectionColumns()) {
                     if (!col.isWildcard()) {
-                        ColumnBinding cb = resolveColumn(col, context);
+                        ColumnBinding cb = resolveColumn(col, context, node);
                         context.registerColumnBinding(col, cb);
                     }
                 }
@@ -104,20 +104,20 @@ public class QueryBinder {
                     context.registerColumnBinding(node.getUpdateColumn(), cb);
                 }
                 if (node.getUpdateExpression() != null) {
-                    bindExpression(node.getUpdateExpression(), context);
+                    bindExpression(node.getUpdateExpression(), context, node);
                 }
                 for (ExpressionTree cond : node.getConditions()) {
-                    bindExpression(cond, context);
+                    bindExpression(cond, context, node);
                 }
             }
             case INSERT -> {
                 for (ExpressionTree val : node.getInsertValues()) {
-                    bindExpression(val, context);
+                    bindExpression(val, context, node);
                 }
             }
             case DELETE -> {
                 for (ExpressionTree cond : node.getConditions()) {
-                    bindExpression(cond, context);
+                    bindExpression(cond, context, node);
                 }
             }
             case CREATE_INDEX -> {
@@ -219,166 +219,128 @@ public class QueryBinder {
         }
     }
 
-    private void bindExpression(ExpressionTree expression, BindingContext context) {
-        if (expression == null || expression.getRoot() == null) {
-            return;
+    private ColumnBinding resolveColumn(ColumnReference reference, BindingContext context, QueryTree node) {
+        if (reference.getTableName() != null || node.getChildren().isEmpty()) {
+            return resolveColumn(reference, context);
         }
-        bindExpressionNode(expression.getRoot(), context);
+        QueryTree source = node.getChildren().size() == 1 ? node.getChildren().get(0) : node;
+        List<ColumnReference> matches = visibleColumns(source, context).stream()
+            .filter(column -> column.getColumnName().equalsIgnoreCase(reference.getColumnName())).toList();
+        if (matches.size() != 1) {
+            throw semanticError("Column '" + reference.getColumnName() + "' is "
+                + (matches.isEmpty() ? "not visible" : "ambiguous"), reference.getColumnName());
+        }
+        return resolveColumn(matches.get(0), context);
     }
 
-    private void bindExpressionNode(ExpressionNode node, BindingContext context) {
+    private void bindExpression(ExpressionTree expression, BindingContext context, QueryTree scope) {
+        if (expression != null && expression.getRoot() != null) {
+            bindExpressionNode(expression.getRoot(), context, scope);
+        }
+    }
+
+    private void bindExpressionNode(ExpressionNode node, BindingContext context, QueryTree scope) {
         if (node == null) {
             return;
         }
         if (node.getType() == ExpressionNode.Type.COLUMN_REFERENCE) {
             ColumnReference ref = new ColumnReference(node.getTableName(), node.getValue());
-            ColumnBinding cb = resolveColumn(ref, context);
+            ColumnBinding cb = resolveColumn(ref, context, scope);
             context.registerColumnBinding(ref, cb);
-            if (ref.getTableName() != null) {
-                ColumnReference unqual = new ColumnReference(null, ref.getColumnName());
-                if (context.getColumnBinding(unqual) == null) {
-                    context.registerColumnBinding(unqual, cb);
-                }
-            }
         }
-        bindExpressionNode(node.getLeft(), context);
-        bindExpressionNode(node.getRight(), context);
+        bindExpressionNode(node.getLeft(), context, scope);
+        bindExpressionNode(node.getRight(), context, scope);
     }
 
     private void expandSelectStar(QueryTree query, BindingContext context) {
-        if (query == null || query.getNodeType() != QueryNodeType.PROJECT) {
+        if (query.getProjectionColumns().stream().noneMatch(ColumnReference::isWildcard)) {
             return;
         }
-        List<ColumnReference> current = query.getProjectionColumns();
-        boolean hasWildcard = current.stream().anyMatch(ColumnReference::isWildcard);
-        if (!hasWildcard) {
-            return;
-        }
-
-        boolean isNatural = hasNaturalJoin(query);
-        Set<String> naturalCommonCols = isNatural ? findNaturalJoinCommonColumns(query, context) : Set.of();
-
         List<ColumnReference> expanded = new ArrayList<>();
-        List<String> tableOrder = collectTableNames(query);
-
-        if (isNatural && !naturalCommonCols.isEmpty()) {
-            // Common columns first without duplicate column
-            for (String commonCol : naturalCommonCols) {
-                boolean added = false;
-                for (String tbl : tableOrder) {
-                    TableBinding tb = context.getTableBinding(tbl);
-                    if (tb != null) {
-                        for (ColumnDefinition cd : tb.getSchema().columns()) {
-                            if (cd.name().equalsIgnoreCase(commonCol)) {
-                                ColumnReference ref = new ColumnReference(tb.getAlias(), cd.name());
-                                expanded.add(ref);
-                                context.registerColumnBinding(ref, new ColumnBinding(tb.getTableName(), tb.getAlias(), cd));
-                                added = true;
-                                break;
-                            }
-                        }
-                    }
-                    if (added) {
-                        break;
-                    }
+        for (ColumnReference column : query.getProjectionColumns()) {
+            if (!column.isWildcard()) {
+                expanded.add(column);
+            } else if (column.getTableName() != null) {
+                TableBinding table = context.getTableBinding(column.getTableName());
+                if (table == null) {
+                    throw semanticError("Table '" + column.getTableName() + "' is not referenced in the query");
                 }
-            }
-            // Followed by unshared columns of each table
-            for (String tbl : tableOrder) {
-                TableBinding tb = context.getTableBinding(tbl);
-                if (tb != null) {
-                    for (ColumnDefinition cd : tb.getSchema().columns()) {
-                        if (!naturalCommonCols.contains(cd.name().toLowerCase())) {
-                            ColumnReference ref = new ColumnReference(tb.getAlias(), cd.name());
-                            expanded.add(ref);
-                            context.registerColumnBinding(ref, new ColumnBinding(tb.getTableName(), tb.getAlias(), cd));
-                        }
-                    }
+                for (ColumnDefinition definition : table.getSchema().columns()) {
+                    expanded.add(new ColumnReference(table.getAlias(), definition.name()));
                 }
-            }
-        } else {
-            // Standard expansion: each table in written order, each column in schema order
-            for (String tbl : tableOrder) {
-                TableBinding tb = context.getTableBinding(tbl);
-                if (tb != null) {
-                    for (ColumnDefinition cd : tb.getSchema().columns()) {
-                        ColumnReference ref = new ColumnReference(tb.getAlias(), cd.name());
-                        expanded.add(ref);
-                        context.registerColumnBinding(ref, new ColumnBinding(tb.getTableName(), tb.getAlias(), cd));
-                    }
+            } else {
+                for (QueryTree child : query.getChildren()) {
+                    expanded.addAll(visibleColumns(child, context));
                 }
             }
         }
-
         query.setProjectionColumns(expanded);
     }
 
+    private List<ColumnReference> visibleColumns(QueryTree node, BindingContext context) {
+        if (node.getNodeType() == QueryNodeType.TABLE_SCAN) {
+            TableBinding table = context.getTableBinding(node.getTableName());
+            return table.getSchema().columns().stream()
+                .map(column -> new ColumnReference(table.getAlias(), column.name())).toList();
+        }
+        if (node.getNodeType() == QueryNodeType.PROJECT) {
+            return node.getProjectionColumns().stream()
+                .map(column -> {
+                    ColumnBinding binding = resolveColumn(column, context);
+                    return new ColumnReference(binding.getTableAlias(), binding.getColumnName());
+                }).toList();
+        }
+        if (node.isNaturalJoin() && node.getChildren().size() == 2) {
+            List<ColumnReference> left = visibleColumns(node.getChildren().get(0), context);
+            List<ColumnReference> right = visibleColumns(node.getChildren().get(1), context);
+            Set<String> common = new LinkedHashSet<>();
+            for (ColumnReference l : left) {
+                if (right.stream().anyMatch(r -> r.getColumnName().equalsIgnoreCase(l.getColumnName()))) {
+                    common.add(l.getColumnName().toLowerCase(java.util.Locale.ROOT));
+                }
+            }
+            List<ColumnReference> output = new ArrayList<>();
+            for (String name : common) {
+                output.add(left.stream().filter(c -> c.getColumnName().equalsIgnoreCase(name)).findFirst().orElseThrow());
+            }
+            for (ColumnReference column : left) {
+                if (!common.contains(column.getColumnName().toLowerCase(java.util.Locale.ROOT))) output.add(column);
+            }
+            for (ColumnReference column : right) {
+                if (!common.contains(column.getColumnName().toLowerCase(java.util.Locale.ROOT))) output.add(column);
+            }
+            return output;
+        }
+        List<ColumnReference> output = new ArrayList<>();
+        for (QueryTree child : node.getChildren()) {
+            output.addAll(visibleColumns(child, context));
+        }
+        return output;
+    }
+
     private void resolveNaturalJoin(QueryTree query, BindingContext context) {
-        if (query == null || query.getNodeType() != QueryNodeType.JOIN || !query.isNaturalJoin()) {
-            return;
+        if (query.getChildren().size() != 2) {
+            throw semanticError("NATURAL JOIN requires two inputs");
         }
-        List<QueryTree> children = query.getChildren();
-        if (children.size() < 2) {
-            return;
-        }
-        QueryTree leftChild = children.get(0);
-        QueryTree rightChild = children.get(1);
-
-        List<String> leftTables = collectTableNames(leftChild);
-        List<String> rightTables = collectTableNames(rightChild);
-
-        List<ColumnDefinition> commonColumns = new ArrayList<>();
-        List<String> commonColNames = new ArrayList<>();
-
-        for (String leftTbl : leftTables) {
-            TableBinding leftBinding = context.getTableBinding(leftTbl);
-            if (leftBinding == null) continue;
-            for (ColumnDefinition leftCol : leftBinding.getSchema().columns()) {
-                for (String rightTbl : rightTables) {
-                    TableBinding rightBinding = context.getTableBinding(rightTbl);
-                    if (rightBinding == null) continue;
-                    for (ColumnDefinition rightCol : rightBinding.getSchema().columns()) {
-                        if (leftCol.name().equalsIgnoreCase(rightCol.name())) {
-                            if (!commonColNames.contains(leftCol.name().toLowerCase())) {
-                                commonColNames.add(leftCol.name().toLowerCase());
-                                commonColumns.add(leftCol);
-                            }
-                        }
-                    }
-                }
+        List<ColumnReference> left = visibleColumns(query.getChildren().get(0), context);
+        List<ColumnReference> right = visibleColumns(query.getChildren().get(1), context);
+        ExpressionNode condition = null;
+        for (ColumnReference column : left) {
+            List<ColumnReference> matches = right.stream()
+                .filter(r -> r.getColumnName().equalsIgnoreCase(column.getColumnName())).toList();
+            if (matches.isEmpty()) continue;
+            long leftMatches = left.stream()
+                .filter(l -> l.getColumnName().equalsIgnoreCase(column.getColumnName())).count();
+            if (matches.size() != 1 || leftMatches != 1) {
+                throw semanticError("Ambiguous NATURAL JOIN column '" + column.getColumnName() + "'");
             }
+            ColumnReference r = matches.get(0);
+            ExpressionNode equality = ExpressionNode.comparison("=",
+                ExpressionNode.column(column.getTableName(), column.getColumnName()),
+                ExpressionNode.column(r.getTableName(), r.getColumnName()));
+            condition = condition == null ? equality : ExpressionNode.logicalAnd(condition, equality);
         }
-
-        if (!commonColumns.isEmpty()) {
-            ExpressionNode combinedCondition = null;
-            for (String leftTbl : leftTables) {
-                TableBinding leftBinding = context.getTableBinding(leftTbl);
-                if (leftBinding == null) continue;
-                for (String rightTbl : rightTables) {
-                    TableBinding rightBinding = context.getTableBinding(rightTbl);
-                    if (rightBinding == null) continue;
-                    for (ColumnDefinition col : commonColumns) {
-                        boolean inLeft = leftBinding.getSchema().columns().stream()
-                            .anyMatch(c -> c.name().equalsIgnoreCase(col.name()));
-                        boolean inRight = rightBinding.getSchema().columns().stream()
-                            .anyMatch(c -> c.name().equalsIgnoreCase(col.name()));
-                        if (inLeft && inRight) {
-                            ExpressionNode leftNode = ExpressionNode.column(leftBinding.getAlias(), col.name());
-                            ExpressionNode rightNode = ExpressionNode.column(rightBinding.getAlias(), col.name());
-                            ExpressionNode eq = ExpressionNode.comparison("=", leftNode, rightNode);
-                            if (combinedCondition == null) {
-                                combinedCondition = eq;
-                            } else {
-                                combinedCondition = ExpressionNode.logicalAnd(combinedCondition, eq);
-                            }
-                        }
-                    }
-                }
-            }
-            if (combinedCondition != null) {
-                query.setConditions(List.of(new ExpressionTree(combinedCondition)));
-            }
-        }
+        query.setConditions(condition == null ? List.of() : List.of(new ExpressionTree(condition)));
     }
 
     private void collectAndRegisterTables(QueryTree node, BindingContext context) {
@@ -414,74 +376,4 @@ public class QueryBinder {
         }
     }
 
-    private List<String> collectTableNames(QueryTree node) {
-        List<String> tables = new ArrayList<>();
-        collectTableNamesHelper(node, tables);
-        return tables;
-    }
-
-    private void collectTableNamesHelper(QueryTree node, List<String> tables) {
-        if (node == null) return;
-        if (node.getNodeType() == QueryNodeType.TABLE_SCAN && node.getTableName() != null) {
-            if (!tables.contains(node.getTableName())) {
-                tables.add(node.getTableName());
-            }
-        } else if (node.getTableName() != null && (
-            node.getNodeType() == QueryNodeType.UPDATE ||
-            node.getNodeType() == QueryNodeType.INSERT ||
-            node.getNodeType() == QueryNodeType.DELETE ||
-            node.getNodeType() == QueryNodeType.CREATE_INDEX)) {
-            if (!tables.contains(node.getTableName())) {
-                tables.add(node.getTableName());
-            }
-        }
-        for (QueryTree child : node.getChildren()) {
-            collectTableNamesHelper(child, tables);
-        }
-    }
-
-    private boolean hasNaturalJoin(QueryTree node) {
-        if (node == null) return false;
-        if (node.getNodeType() == QueryNodeType.JOIN && node.isNaturalJoin()) {
-            return true;
-        }
-        for (QueryTree child : node.getChildren()) {
-            if (hasNaturalJoin(child)) return true;
-        }
-        return false;
-    }
-
-    private Set<String> findNaturalJoinCommonColumns(QueryTree node, BindingContext context) {
-        Set<String> common = new LinkedHashSet<>();
-        findNaturalJoinCommonHelper(node, context, common);
-        return common;
-    }
-
-    private void findNaturalJoinCommonHelper(QueryTree node, BindingContext context, Set<String> common) {
-        if (node == null) return;
-        if (node.getNodeType() == QueryNodeType.JOIN && node.isNaturalJoin()) {
-            if (node.getChildren().size() >= 2) {
-                List<String> leftTables = collectTableNames(node.getChildren().get(0));
-                List<String> rightTables = collectTableNames(node.getChildren().get(1));
-                for (String l : leftTables) {
-                    TableBinding tbL = context.getTableBinding(l);
-                    if (tbL == null) continue;
-                    for (ColumnDefinition cdL : tbL.getSchema().columns()) {
-                        for (String r : rightTables) {
-                            TableBinding tbR = context.getTableBinding(r);
-                            if (tbR == null) continue;
-                            for (ColumnDefinition cdR : tbR.getSchema().columns()) {
-                                if (cdL.name().equalsIgnoreCase(cdR.name())) {
-                                    common.add(cdL.name().toLowerCase());
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        for (QueryTree child : node.getChildren()) {
-            findNaturalJoinCommonHelper(child, context, common);
-        }
-    }
 }

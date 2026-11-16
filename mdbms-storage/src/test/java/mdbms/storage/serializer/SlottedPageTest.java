@@ -230,4 +230,36 @@ class SlottedPageTest {
         assertThrows(StorageException.class,
                 () -> page.replaceRecord(changed, new byte[] {1}));
     }
+
+    // block yang isinya nol semua dibaca sebagai halaman kosong, block rusak lain tetap ditolak
+    @Test
+    void blankBlockReadsAsEmptyPage() {
+        SlottedPage blank = SlottedPage.of(new byte[SlottedPage.PAGE_SIZE]);
+        assertEquals(0, blank.slotCount());
+
+        byte[] garbage = new byte[SlottedPage.PAGE_SIZE];
+        garbage[0] = 1;
+        assertEquals(StorageErrorCode.INVALID_BLOCK,
+                assertThrows(StorageException.class, () -> SlottedPage.of(garbage)).getCode());
+    }
+
+    // ensureSlot nambah slot kosong sampai nomor yang diminta lalu slot itu bisa dipesan dan diisi
+    @Test
+    void ensureSlotExtendsDirectory() {
+        SlottedPage page = new SlottedPage();
+        page.ensureSlot(3);
+        assertEquals(4, page.slotCount());
+        assertFalse(page.isOccupied(2));
+
+        assertTrue(page.reserveSlotAt(3, 2));
+        assertTrue(page.isReserved(3));
+        page.writeSlot(3, new byte[] {1, 2});
+
+        SlottedPage restored = new SlottedPage(page.toBytes());
+        assertArrayEquals(new byte[] {1, 2}, restored.readRecord(3));
+        page.ensureSlot(1);
+        assertEquals(4, page.slotCount());
+        assertThrows(StorageException.class, () -> page.ensureSlot(-1));
+        assertThrows(StorageException.class, () -> page.ensureSlot(SlottedPage.PAGE_SIZE));
+    }
 }
