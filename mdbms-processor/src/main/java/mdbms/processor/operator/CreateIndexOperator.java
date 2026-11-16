@@ -1,17 +1,14 @@
 package mdbms.processor.operator;
 
 import mdbms.api.ISchemaCatalog;
-import mdbms.models.schema.ColumnDefinition;
-import mdbms.models.schema.DataType;
 import mdbms.models.schema.IndexInfo;
 import mdbms.processor.IResultRow;
-import mdbms.processor.ResultRow;
-import mdbms.processor.ResultTableSchema;
 
-public class CreateIndexOperator implements IQueryOperator {
+public class CreateIndexOperator implements IQueryOperator, IQueryMessage {
     private final ISchemaCatalog schemaCatalog;
     private final IndexInfo indexInfo;
     private boolean isDone;
+    private String message;
 
     public CreateIndexOperator(ISchemaCatalog schemaCatalog, IndexInfo indexInfo) {
         this.schemaCatalog = schemaCatalog;
@@ -27,16 +24,16 @@ public class CreateIndexOperator implements IQueryOperator {
         isDone = true;
 
         schemaCatalog.createIndex(indexInfo.indexName(), indexInfo.tableName(), indexInfo.columnName());
-        String message = "Index " + indexInfo.indexName() + " created on "
+        message = "Index " + indexInfo.indexName() + " created on "
                 + indexInfo.tableName() + "(" + indexInfo.columnName() + ")";
-
-        ResultTableSchema schema = new ResultTableSchema();
-        schema.addColumn(new ColumnDefinition("message", DataType.VARCHAR, message.length(), false));
-        ResultRow result = new ResultRow(schema);
-        result.set(schema.getTableName(), "message", message);
-        return result;
+        return null;
     }
 
     public void close() {
+    }
+
+    @Override 
+    public String getMessage() {
+        return message;
     }
 }
