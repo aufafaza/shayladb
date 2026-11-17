@@ -76,13 +76,12 @@ class RuleBasedOptimizerIntegrationTest {
 
         assertEquals("""
             PROJECT [columns=[students.name, takes.code]]
-              SELECT [conditions=[(students.id = takes.nim)]]
-                CARTESIAN
-                  PROJECT [columns=[students.id, students.name]]
-                    TABLE_SCAN [table=students, conditions=[(students.id = 7)], indexScan=idx_students_id id EQ 7, algorithm=INDEX_SCAN]
-                  PROJECT [columns=[takes.nim, takes.code]]
-                    SELECT [conditions=[(takes.grade = 'A')]]
-                      TABLE_SCAN [table=takes]
+              JOIN [conditions=[(students.id = takes.nim)]]
+                PROJECT [columns=[students.id, students.name]]
+                  TABLE_SCAN [table=students, conditions=[(students.id = 7)], indexScan=idx_students_id id EQ 7, algorithm=INDEX_SCAN]
+                PROJECT [columns=[takes.nim, takes.code]]
+                  SELECT [conditions=[(takes.grade = 'A')]]
+                    TABLE_SCAN [table=takes]
             """, print(run.optimized()));
     }
 
@@ -91,11 +90,11 @@ class RuleBasedOptimizerIntegrationTest {
         Run run = run("SELECT name FROM students WHERE gpa > 3.0 AND id >= 100 ORDER BY name LIMIT 5");
 
         assertEquals("""
-            PROJECT [columns=[name]]
+            PROJECT [columns=[students.name]]
               LIMIT [limit=5]
-                SORT [orderBy=[name ASC]]
-                  SELECT [conditions=[(gpa > 3.0)]]
-                    TABLE_SCAN [table=students, conditions=[(id >= 100)], indexScan=idx_students_id id GTE 100, algorithm=INDEX_SCAN]
+                SORT [orderBy=[students.name ASC]]
+                  SELECT [conditions=[(students.gpa > 3.0)]]
+                    TABLE_SCAN [table=students, conditions=[(students.id >= 100)], indexScan=idx_students_id id GTE 100, algorithm=INDEX_SCAN]
             """, print(run.optimized()));
     }
 
