@@ -31,23 +31,25 @@ class SortOperatorTest {
 
     @Test
     void sortMultipleColumns() {
-        IQueryOperator input = IntegerRowUtility.source(3, 1, 2);
+        // group = value % 3, jadi 1 dan 4 sama-sama group 1 dan diurutkan value DESC
+        IQueryOperator input = IntegerRowUtility.source(1, 4, 2);
 
         SortOperator operator = new SortOperator(input, List.of(
                 new SortOperator.SortKey(null, "group", true),
                 new SortOperator.SortKey(null, "value", false)));
 
-        assertEquals(List.of(2, 3, 1), IntegerRowUtility.collect(operator));
+        assertEquals(List.of(4, 1, 2), IntegerRowUtility.collect(operator));
     }
 
     @Test
     void sortMultipleColumnsAscending() {
+        // group: 9 -> 0, 2 -> 2, 5 -> 2
         IQueryOperator input = IntegerRowUtility.source(9, 2, 5);
 
         SortOperator operator = new SortOperator(input, List.of(
                 new SortOperator.SortKey(null, "group", true),
                 new SortOperator.SortKey(null, "value", true)));
 
-        assertEquals(List.of(2, 5, 9), IntegerRowUtility.collect(operator));
+        assertEquals(List.of(9, 2, 5), IntegerRowUtility.collect(operator));
     }
 }
