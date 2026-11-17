@@ -124,6 +124,49 @@ class SystemCostEstimatorTest {
     }
 
     @Test
+    void testEstimateOutputOfIndexScanAppliesItsCondition() {
+        ExpressionNode eq = ExpressionNode.comparison("=",
+            ExpressionNode.column(null, "id"),
+            ExpressionNode.literal(ExpressionNode.Type.INTEGER_LITERAL, "123"));
+        QueryTree scan = new QueryTree(QueryNodeType.TABLE_SCAN, PhysicalAlgorithm.INDEX_SCAN, "students",
+            List.of(new ExpressionTree(eq)), List.of(), 0);
+
+        PlanEstimate output = costEstimator.estimateOutput(scan);
+
+        assertEquals(1L, output.getEstimatedRows());
+        assertEquals(1L, output.getDistinctValues("id"));
+    }
+
+    @Test
+    void testParentOfIndexScanSeesFilteredRows() {
+        ExpressionNode eq = ExpressionNode.comparison("=",
+            ExpressionNode.column(null, "dept"),
+            ExpressionNode.literal(ExpressionNode.Type.STRING_LITERAL, "IF"));
+        QueryTree scan = new QueryTree(QueryNodeType.TABLE_SCAN, PhysicalAlgorithm.INDEX_SCAN, "students",
+            List.of(new ExpressionTree(eq)), List.of(), 0);
+        QueryTree project = new QueryTree(QueryNodeType.PROJECT, PhysicalAlgorithm.DEFAULT, null,
+            List.of(), List.of(scan), 0, List.of(new ColumnReference(null, "id")), false);
+
+        assertEquals(100L, costEstimator.estimateOutput(project).getEstimatedRows());
+    }
+
+    @Test
+    void testIndexScanCostDoesNotDependOnPassedEstimate() {
+        ExpressionNode eq = ExpressionNode.comparison("=",
+            ExpressionNode.column(null, "id"),
+            ExpressionNode.literal(ExpressionNode.Type.INTEGER_LITERAL, "123"));
+        QueryTree scan = new QueryTree(QueryNodeType.TABLE_SCAN, PhysicalAlgorithm.INDEX_SCAN, "students",
+            List.of(new ExpressionTree(eq)), List.of(), 0);
+
+        int withoutEstimate = costEstimator.calculateNodeCost(scan, PhysicalAlgorithm.INDEX_SCAN, null, null);
+        int withEstimate = costEstimator.calculateNodeCost(scan, PhysicalAlgorithm.INDEX_SCAN,
+            costEstimator.estimateOutput(scan), null);
+
+        assertEquals(withoutEstimate, withEstimate);
+        assertTrue(withoutEstimate < 50);
+    }
+
+    @Test
     void testCalculateTotalCostSingleTable() {
         // SELECT * FROM students
         QueryTree scan = new QueryTree(QueryNodeType.TABLE_SCAN, PhysicalAlgorithm.LINEAR_SCAN, "students", List.of(), List.of(), 0);

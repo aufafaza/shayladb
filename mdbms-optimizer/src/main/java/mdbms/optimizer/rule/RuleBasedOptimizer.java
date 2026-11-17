@@ -1,11 +1,16 @@
 package mdbms.optimizer.rule;
 
-import java.util.List;
 import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
 import java.util.Objects;
+
 import mdbms.models.query.QueryTree;
 
 public class RuleBasedOptimizer {
+    // jaga-jaga biar ga muter terus kalau ada rule yang bolak-balik
+    static final int MAX_PASSES = 10;
+
     private final List<IOptimizationRule> rules;
 
     public RuleBasedOptimizer(List<IOptimizationRule> rules) {
@@ -33,6 +38,6 @@ public class RuleBasedOptimizer {
     }
 
     public List<IOptimizationRule> getRules() {
-        return List.copyOf(rules);
+        return Collections.unmodifiableList(rules);
     }
 }
