@@ -1,14 +1,20 @@
 package mdbms.app;
 
 import mdbms.api.IConcurrencyControl;
+import mdbms.api.IDataAccess;
 import mdbms.api.IDurableStorage;
 import mdbms.api.IFailureRecoveryManager;
 import mdbms.api.IQueryProcessor;
+import mdbms.api.ISchemaCatalog;
 import mdbms.concurrency.ConcurrencyControlManager;
 import mdbms.concurrency.ConcurrencyProtocol;
 import mdbms.concurrency.LockBasedProtocol;
 import mdbms.concurrency.TimestampsBasedProtocol;
 import mdbms.models.log.RecoveryResult;
+import mdbms.optimizer.QueryOptimizer;
+import mdbms.optimizer.lexer.ShaylaLexer;
+import mdbms.optimizer.parser.ShaylaParser;
+import mdbms.processor.QueryProcessor;
 import mdbms.recovery.FailureRecoveryManager;
 import mdbms.storage.StorageManager;
 
@@ -42,7 +48,9 @@ public class DBMS {
         recoverOnStartup();
         concurrencyControl = new ConcurrencyControlManager(protocol, frm);
         System.out.println("Concurrency protocol: " + ((ConcurrencyControlManager) concurrencyControl).getActiveProtocolName());
-        // TODO: assign the real QueryProcessor here once it implements IQueryProcessor
+        processor = new QueryProcessor(
+            new QueryOptimizer((ISchemaCatalog) storage, new ShaylaParser(new ShaylaLexer(null))),
+            (IDataAccess) storage, (ISchemaCatalog) storage, frm, concurrencyControl);
         running = true;
     }
 
