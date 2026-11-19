@@ -44,6 +44,9 @@ public class ClientHandler implements Runnable {
                             "Transaction " + session.getCurrentTxId() + " is already active"));
                     continue;
                 }
+                if (command.equals("EXIT") || command.equals("QUIT")) {
+                    break;
+                }
                 boolean autoCommit = !session.isTransacting();
                 int txId;
                 try {
