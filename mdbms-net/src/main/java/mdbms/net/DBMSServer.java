@@ -30,11 +30,12 @@ public class DBMSServer {
     public void start() throws IOException {
         ExecutorService workerPool = Executors.newFixedThreadPool(DEFAULT_POOL_SIZE);
         SessionManager sessionManager = new SessionManager();
-
+        
         try (ServerSocket serverSocket = new ServerSocket(port)) {
             System.out.println("[INFO] DBMS Server successfully bind to port " + port);
             System.out.println("[INFO] Waiting for connection...");
 
+            isRunning = true;
             while (isRunning) {
                 Socket clientSocket = serverSocket.accept();
                 System.out.println("[INFO] Client connected from: " + clientSocket.getRemoteSocketAddress());
