@@ -41,6 +41,8 @@ public class CCMTestDriver {
         driver.testConcurrentReadWrite();
         driver.testLockUpgrade();
         driver.testDeadlockTwoTransactions();
+        driver.testDeadlockThreeTransactions();
+        driver.testWaitingWithoutCycle();
         driver.tearDown();
 
         driver.setUp(new TimestampsBasedProtocol());
@@ -162,22 +164,28 @@ public class CCMTestDriver {
         DataItem itemA = new DataItem("A", null);
 
         AccessStatus tx1Read = runInTxThread(() -> ccm.requestRead(tx1, itemA));
-        require(tx1Read == AccessStatus.GRANTED, "T1 R(A) granted lebih dulu");
+        AccessStatus tx2Read = runInTxThread(() -> ccm.requestRead(tx2, itemA));
+        require(tx1Read == AccessStatus.GRANTED && tx2Read == AccessStatus.GRANTED,
+                "Dua read bersamaan diizinkan (Shared Lock)");
 
-        AccessStatus waitingStatus = runInTxThread(() -> ccm.requestWrite(tx2, itemA));
+        int tx3 = ccm.beginTransaction();
+        Transaction t3Obj = ccm.getTransaction(tx3);
+        AccessStatus waitingStatus = runInTxThread(() -> ccm.requestWrite(tx3, itemA));
         assertStatus(AccessStatus.WAITING, waitingStatus);
-        require(ccm.getTransaction(tx2) != null,
-                "T2 tetap aktif ketika lock belum tersedia");
+        require(ccm.getTransaction(tx3) != null,
+                "T3 tetap aktif ketika lock belum tersedia");
 
         ccm.commitTransaction(tx1);
+        ccm.commitTransaction(tx2);
 
-        AccessStatus retryStatus = runInTxThread(() -> ccm.requestWrite(tx2, itemA));
+        AccessStatus retryStatus = runInTxThread(() -> ccm.requestWrite(tx3, itemA));
         assertStatus(AccessStatus.GRANTED, retryStatus);
 
-        ccm.commitTransaction(tx2);
+        ccm.commitTransaction(tx3);
         printScheduleAndVerify(List.of(
                 new Operation(t1Obj, OperationType.READ, itemA),
-                new Operation(t2Obj, OperationType.WRITE, itemA)
+                new Operation(t2Obj, OperationType.READ, itemA),
+                new Operation(t3Obj, OperationType.WRITE, itemA)
         ), true);
         assertCleanState();
     }
@@ -194,6 +202,10 @@ public class CCMTestDriver {
 
         AccessStatus writeStatus = runInTxThread(() -> ccm.requestWrite(tx1, itemA));
         assertStatus(AccessStatus.GRANTED, writeStatus);
+
+        AccessStatus weakerStatus = runInTxThread(() -> ccm.requestRead(tx1, itemA));
+        assertStatus(AccessStatus.GRANTED, weakerStatus);
+
         ccm.commitTransaction(tx1);
         printScheduleAndVerify(List.of(
                 new Operation(t1Obj, OperationType.READ, itemA),
@@ -225,9 +237,82 @@ public class CCMTestDriver {
         require(ccm.getTransaction(tx2) == null,
                 "Transaksi yang dipilih sebagai victim sudah di-abort");
 
+        assertStatus(AccessStatus.ABORTED, ccm.requestRead(tx2, itemA));
+        try {
+            ccm.commitTransaction(tx2);
+            require(false, "Commit setelah aborted harus ditolak");
+        } catch (IllegalArgumentException | IllegalStateException e) {
+            require(true, "Commit pada transaksi yang sudah aborted ditolak");
+        }
+
+        assertStatus(AccessStatus.GRANTED, runInTxThread(() -> ccm.requestWrite(tx1, itemB)));
         ccm.commitTransaction(tx1);
         printScheduleAndVerify(List.of(
-                new Operation(t1Obj, OperationType.WRITE, itemA)
+                new Operation(t1Obj, OperationType.WRITE, itemA),
+                new Operation(t1Obj, OperationType.WRITE, itemB)
+        ), true);
+        assertCleanState();
+    }
+
+    public void testDeadlockThreeTransactions() {
+        currentScenario = "Deadlock 3 Transaksi";
+        System.out.println("Skenario: " + currentScenario);
+        int tx1 = ccm.beginTransaction();
+        awaitTimestampAfter(ccm.getTransaction(tx1).getTimestamp());
+        int tx2 = ccm.beginTransaction();
+        awaitTimestampAfter(ccm.getTransaction(tx2).getTimestamp());
+        int tx3 = ccm.beginTransaction();
+        Transaction t1Obj = ccm.getTransaction(tx1);
+        Transaction t2Obj = ccm.getTransaction(tx2);
+
+        DataItem itemA = new DataItem("A", null);
+        DataItem itemB = new DataItem("B", null);
+        DataItem itemC = new DataItem("C", null);
+
+        assertStatus(AccessStatus.GRANTED, runInTxThread(() -> ccm.requestWrite(tx1, itemA)));
+        assertStatus(AccessStatus.GRANTED, runInTxThread(() -> ccm.requestWrite(tx2, itemB)));
+        assertStatus(AccessStatus.GRANTED, runInTxThread(() -> ccm.requestWrite(tx3, itemC)));
+
+        assertStatus(AccessStatus.WAITING, runInTxThread(() -> ccm.requestWrite(tx1, itemB)));
+        assertStatus(AccessStatus.WAITING, runInTxThread(() -> ccm.requestWrite(tx2, itemC)));
+        assertStatus(AccessStatus.ABORTED, runInTxThread(() -> ccm.requestWrite(tx3, itemA)));
+        require(ccm.getTransaction(tx3) == null, "Victim T3 di-abort pada deadlock 3 transaksi");
+
+        assertStatus(AccessStatus.GRANTED, runInTxThread(() -> ccm.requestWrite(tx2, itemC)));
+        ccm.commitTransaction(tx2);
+        assertStatus(AccessStatus.GRANTED, runInTxThread(() -> ccm.requestWrite(tx1, itemB)));
+        ccm.commitTransaction(tx1);
+
+        printScheduleAndVerify(List.of(
+                new Operation(t1Obj, OperationType.WRITE, itemA),
+                new Operation(t2Obj, OperationType.WRITE, itemB),
+                new Operation(t2Obj, OperationType.WRITE, itemC),
+                new Operation(t1Obj, OperationType.WRITE, itemB)
+        ), true);
+        assertCleanState();
+    }
+
+    public void testWaitingWithoutCycle() {
+        currentScenario = "Menunggu Tanpa Siklus (Tidak Di-abort)";
+        System.out.println("Skenario: " + currentScenario);
+        int tx1 = ccm.beginTransaction();
+        int tx2 = ccm.beginTransaction();
+        Transaction t1Obj = ccm.getTransaction(tx1);
+        Transaction t2Obj = ccm.getTransaction(tx2);
+        DataItem itemA = new DataItem("A", null);
+
+        assertStatus(AccessStatus.GRANTED, runInTxThread(() -> ccm.requestWrite(tx1, itemA)));
+        assertStatus(AccessStatus.WAITING, runInTxThread(() -> ccm.requestWrite(tx2, itemA)));
+        require(ccm.getTransaction(tx1) != null && ccm.getTransaction(tx2) != null,
+                "Transaksi yang menunggu tanpa membentuk siklus tidak dibatalkan");
+
+        ccm.commitTransaction(tx1);
+        assertStatus(AccessStatus.GRANTED, runInTxThread(() -> ccm.requestWrite(tx2, itemA)));
+        ccm.commitTransaction(tx2);
+
+        printScheduleAndVerify(List.of(
+                new Operation(t1Obj, OperationType.WRITE, itemA),
+                new Operation(t2Obj, OperationType.WRITE, itemA)
         ), true);
         assertCleanState();
     }
