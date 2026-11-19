@@ -104,9 +104,13 @@ public final class ConcurrencyControlManager implements IConcurrencyControl {
      * Completes crash recovery before accepting new transactions. Recovery is
      * deliberately explicit so the composition root can initialize FRM once.
      */
-    public void initAfterRecovery() {
+
+    public void initAfterRecovery(RecoveryResult result) {
         synchronized (lifecycleMonitor) {
             isRecovered = false;
+        }
+        if (result == null || !result.isSuccess()) {
+            throw new IllegalStateException("Failure recovery did not complete");
         }
         if (frm == null) {
             synchronized (lifecycleMonitor) {
@@ -114,10 +118,7 @@ public final class ConcurrencyControlManager implements IConcurrencyControl {
             }
             return;
         }
-        RecoveryResult result = frm.recoverOnStartup();
-        if (result == null || !result.isSuccess()) {
-            throw new IllegalStateException("Failure recovery did not complete");
-        }
+
         transactionCounter.updateAndGet(current -> Math.max(current, result.getMaxTxId() + 1));
         long now = System.currentTimeMillis();
         timestampCounter.updateAndGet(current -> Math.max(now, current + 1));

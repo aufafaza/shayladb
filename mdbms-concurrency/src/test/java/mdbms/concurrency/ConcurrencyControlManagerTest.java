@@ -11,14 +11,18 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.function.IntConsumer;
+
 import mdbms.api.IConcurrencyControl;
 import mdbms.api.IFailureRecoveryManager;
 import mdbms.models.data.DataItem;
 import mdbms.models.data.RowId;
+import mdbms.models.log.DataChangeLogRecord;
 import mdbms.models.log.LogRecord;
 import mdbms.models.log.LogType;
 import mdbms.models.log.RecordImage;
 import mdbms.models.log.RecoveryResult;
+import mdbms.models.log.TransactionLogRecord;
 import mdbms.models.transaction.AccessStatus;
 import mdbms.models.transaction.Transaction;
 import mdbms.models.transaction.TransactionState;
@@ -69,9 +73,33 @@ class ConcurrencyControlManagerTest {
         ccm.commitTransaction(txId);
 
         assertEquals(TransactionState.COMMITTED, tx.getState());
-        assertEquals(List.of(LogType.BEGIN, LogType.COMMIT), frm.transactionLogs);
+        assertEquals(List.of(LogType.BEGIN, LogType.COMMIT), frm.transactionLogsType);
         assertEquals(List.of(txId), protocol.released);
         assertNull(ccm.getTransaction(txId));
+    }
+
+    @Test 
+    void writeLogsContainsWriteSpecification() {
+        int txId = ccm.beginTransaction();
+        Transaction tx = ccm.getTransaction(txId);
+
+        ccm.requestWrite(txId, ITEM, null, 10);
+        ccm.requestWrite(txId, ITEM, 10, 12);
+        ccm.requestWrite(txId, ITEM, 12, null);
+
+        assertEquals(List.of(LogType.BEGIN, LogType.INSERT, LogType.UPDATE, LogType.DELETE), frm.transactionLogsType);
+        assertEquals(ITEM.getTableName(), ((DataChangeLogRecord)frm.transactionLog.get(1)).getTable());
+        assertEquals(ITEM.getRowId(), ((DataChangeLogRecord)frm.transactionLog.get(1)).getRowId());
+        assertEquals(tx.getId(), ((DataChangeLogRecord)frm.transactionLog.get(1)).getTxId());
+
+        assertEquals(null, ((DataChangeLogRecord)frm.transactionLog.get(1)).getBeforeImage());
+        assertEquals(new RecordImage(List.of(10)), ((DataChangeLogRecord)frm.transactionLog.get(1)).getAfterImage());
+        
+        assertEquals(new RecordImage(List.of(10)), ((DataChangeLogRecord)frm.transactionLog.get(2)).getBeforeImage());
+        assertEquals(new RecordImage(List.of(12)), ((DataChangeLogRecord)frm.transactionLog.get(2)).getAfterImage());
+        
+        assertEquals(new RecordImage(List.of(12)), ((DataChangeLogRecord)frm.transactionLog.get(3)).getBeforeImage());
+        assertEquals(null, ((DataChangeLogRecord)frm.transactionLog.get(3)).getAfterImage());
     }
 
     @Test
@@ -100,7 +128,7 @@ class ConcurrencyControlManagerTest {
         ccm.abortTransaction(txId, "test");
 
         assertEquals(TransactionState.ABORTED, tx.getState());
-        assertEquals(List.of(LogType.BEGIN, LogType.ABORT), frm.transactionLogs);
+        assertEquals(List.of(LogType.BEGIN, LogType.ABORT), frm.transactionLogsType);
         assertEquals(List.of(txId), frm.rolledBack);
         assertEquals(List.of(txId), protocol.released);
         assertNull(ccm.getTransaction(txId));
@@ -158,6 +186,22 @@ class ConcurrencyControlManagerTest {
     }
 
     @Test
+    void timestampViolationAbortsThroughRollback() {
+        ConcurrencyControlManager ccm = new ConcurrencyControlManager(new TimestampsBasedProtocol(), frm);
+        int older = ccm.beginTransaction();
+        int newer = ccm.beginTransaction();
+        Transaction olderTx = ccm.getTransaction(older);
+        assertEquals(AccessStatus.GRANTED, ccm.requestRead(newer, ITEM));
+
+        assertEquals(AccessStatus.ABORTED, ccm.requestWrite(older, ITEM));
+
+        assertEquals(TransactionState.ABORTED, olderTx.getState());
+        assertEquals(List.of(older), frm.rolledBack);
+        assertNull(ccm.getTransaction(older));
+        assertEquals(TransactionState.ACTIVE, ccm.getTransaction(newer).getState());
+    }
+
+    @Test
     void timestampUpdatesNeverMoveBackwards() {
         TimestampManager timestamps = new TimestampManager();
         timestamps.updateReadTS(ITEM, 20);
@@ -166,6 +210,83 @@ class ConcurrencyControlManagerTest {
         timestamps.updateWriteTS(ITEM, 15);
         assertEquals(20, timestamps.getReadTS(ITEM));
         assertEquals(30, timestamps.getWriteTS(ITEM));
+    }
+
+    @Test
+    void deadlockVictimIsRolledBackAndReleasesItsLocks() {
+        LockManager locks = new LockManager();
+        ConcurrencyControlManager lockCcm = new ConcurrencyControlManager(new LockBasedProtocol(locks), frm);
+        int first = lockCcm.beginTransaction();
+        int second = lockCcm.beginTransaction();
+        Transaction victim = lockCcm.getTransaction(second);
+        DataItem other = new DataItem("users", new RowId("users", 0, 1));
+        assertEquals(AccessStatus.GRANTED, lockCcm.requestWrite(first, ITEM));
+        assertEquals(AccessStatus.GRANTED, lockCcm.requestWrite(second, other));
+        assertEquals(AccessStatus.WAITING, lockCcm.requestWrite(second, ITEM));
+
+        lockCcm.requestWrite(first, other);
+
+        assertEquals(TransactionState.ABORTED, victim.getState());
+        assertEquals(List.of(second), frm.rolledBack);
+        assertNull(lockCcm.getTransaction(second));
+        assertTrue(locks.getLockTableSnapshot().values().stream()
+                .flatMap(List::stream)
+                .noneMatch(lock -> lock.getTransaction() == victim));
+        assertEquals(AccessStatus.GRANTED, lockCcm.requestWrite(first, other));
+    }
+
+    @Test
+    void dataStaysProtectedWhileFailedUntilRollbackFinishes() {
+        LockManager locks = new LockManager();
+        ConcurrencyControlManager lockCcm = new ConcurrencyControlManager(new LockBasedProtocol(locks), frm);
+        int writer = lockCcm.beginTransaction();
+        int reader = lockCcm.beginTransaction();
+        Transaction writerTx = lockCcm.getTransaction(writer);
+        assertEquals(AccessStatus.GRANTED, lockCcm.requestWrite(writer, ITEM));
+
+        TransactionState[] stateDuringRollback = new TransactionState[1];
+        AccessStatus[] readDuringRollback = new AccessStatus[1];
+        frm.onRollback = id -> {
+            stateDuringRollback[0] = writerTx.getState();
+            readDuringRollback[0] = lockCcm.requestRead(reader, ITEM);
+        };
+
+        lockCcm.abortTransaction(writer, "User Request");
+
+        assertEquals(TransactionState.FAILED, stateDuringRollback[0]);
+        assertEquals(AccessStatus.WAITING, readDuringRollback[0]);
+        assertEquals(TransactionState.ABORTED, writerTx.getState());
+        assertEquals(AccessStatus.GRANTED, lockCcm.requestRead(reader, ITEM));
+    }
+
+    @Test
+    void resourcesAreNotReleasedWhenRollbackFails() {
+        int txId = ccm.beginTransaction();
+        Transaction tx = ccm.getTransaction(txId);
+        frm.rollbackSucceeds = false;
+
+        assertThrows(IllegalStateException.class, () -> ccm.abortTransaction(txId, "permintaan pengguna"));
+
+        assertEquals(TransactionState.FAILED, tx.getState());
+        assertTrue(protocol.released.isEmpty());
+        assertNotNull(ccm.getTransaction(txId));
+        assertEquals(AccessStatus.ABORTED, ccm.requestWrite(txId, ITEM));
+    }
+
+    @Test
+    void otherTransactionSeesDataOnlyAfterRollbackOfWriter() {
+        LockManager locks = new LockManager();
+        ConcurrencyControlManager lockCcm = new ConcurrencyControlManager(new LockBasedProtocol(locks), frm);
+        int writer = lockCcm.beginTransaction();
+        int reader = lockCcm.beginTransaction();
+        assertEquals(AccessStatus.GRANTED, lockCcm.requestWrite(writer, ITEM, 10, 20));
+        assertEquals(AccessStatus.WAITING, lockCcm.requestRead(reader, ITEM));
+
+        lockCcm.abortTransaction(writer, "permintaan pengguna");
+        AccessStatus afterAbort = lockCcm.requestRead(reader, ITEM);
+
+
+        assertEquals(AccessStatus.GRANTED, afterAbort);
     }
 
     @Test
@@ -224,7 +345,11 @@ class ConcurrencyControlManagerTest {
 
     private static final class RecordingRecoveryManager implements IFailureRecoveryManager {
         private boolean logSucceeds = true;
-        private final List<LogType> transactionLogs = new ArrayList<>();
+        private boolean rollbackSucceeds = true;
+        private int recoverCalls;
+        private IntConsumer onRollback;
+        private final List<LogRecord> transactionLog = new ArrayList<>();
+        private final List<LogType> transactionLogsType = new ArrayList<>();
         private final List<Integer> rolledBack = new ArrayList<>();
 
         private RecoveryResult result(boolean success) {
@@ -233,7 +358,8 @@ class ConcurrencyControlManagerTest {
 
         @Override
         public RecoveryResult writeTransactionLog(int txId, LogType eventType) {
-            transactionLogs.add(eventType);
+            transactionLogsType.add(eventType);
+            transactionLog.add(new TransactionLogRecord(transactionLogsType.size() + 1, txId, eventType, Instant.now()));
             return result(logSucceeds);
         }
 
@@ -246,6 +372,15 @@ class ConcurrencyControlManagerTest {
             RecordImage beforeImg,
             RecordImage afterImg
         ) {
+            transactionLogsType.add(opType);
+            transactionLog.add(new DataChangeLogRecord(transactionLogsType.size() + 1, 
+                                                        txId, 
+                                                        opType, 
+                                                        Instant.now(), 
+                                                        table, 
+                                                        rid, 
+                                                        beforeImg, 
+                                                        afterImg));
             return result(true);
         }
 
@@ -257,8 +392,12 @@ class ConcurrencyControlManagerTest {
         @Override
         public RecoveryResult rollbackTransaction(int txId) {
             rolledBack.add(txId);
-            transactionLogs.add(LogType.ABORT);
-            return result(true);
+            if (onRollback != null) onRollback.accept(txId);
+            if (rollbackSucceeds) {
+                transactionLogsType.add(LogType.ABORT);
+                transactionLog.add(new TransactionLogRecord(transactionLogsType.size(), txId, LogType.ABORT, Instant.now()));
+            }
+            return result(rollbackSucceeds);
         }
 
         @Override
