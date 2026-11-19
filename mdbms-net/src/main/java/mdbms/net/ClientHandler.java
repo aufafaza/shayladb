@@ -31,7 +31,10 @@ public class ClientHandler implements Runnable {
             CommandLineInterface cli = new CommandLineInterface(clientSocket);
             String query;
             while ((query = cli.readQuery()) != null) {
-                String command = query.trim().split("[\\s;]+")[0].toUpperCase();
+                String[] splitedQuery = query.trim().split("[\\s;]+");
+                if (splitedQuery.length == 0) continue;
+
+                String command = splitedQuery[0].toUpperCase();
                 if ((command.equals("COMMIT") || command.equals("ABORT")) && !session.isTransacting()) {
                     cli.printResult(new ExecutionResult(false, null, null, 0, "No active transaction"));
                     continue;
