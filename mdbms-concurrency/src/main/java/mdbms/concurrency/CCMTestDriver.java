@@ -11,7 +11,9 @@ import java.util.List;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
+import java.util.stream.Collectors;
 
 public class CCMTestDriver {
     private ConcurrencyControlManager ccm;
@@ -64,6 +66,33 @@ public class CCMTestDriver {
     public void assertCleanState() {
         require(ccm.getActiveTransactions().isEmpty(),
                 "Tidak ada transaksi aktif tersisa");
+    }
+
+    private AccessStatus runInTxThread(java.util.concurrent.Callable<AccessStatus> task) {
+        try {
+            Future<AccessStatus> future = executor.submit(task);
+            return future.get(5, TimeUnit.SECONDS);
+        } catch (Exception e) {
+            require(false, "Eksekusi thread transaksi gagal: " + e.getMessage());
+            return AccessStatus.ABORTED;
+        }
+    }
+
+    private void printScheduleAndVerify(List<Operation> schedule, boolean expectedSerializable) {
+        String schedStr = schedule.stream()
+                .map(op -> "T" + op.getTransaction().getId() + ":" + op.getType()
+                        + (op.getDataItem() != null ? "(" + op.getDataItem().tableName() + ")" : ""))
+                .collect(Collectors.joining(", "));
+        ScheduleVerifier verifier = new ScheduleVerifier(schedule);
+        boolean isSer = verifier.isSerializable();
+        List<Transaction> serialOrder = verifier.getEquivalentSerialSchedule();
+        String orderStr = serialOrder == null ? "TIDAK ADA (Siklus)"
+                : serialOrder.stream().map(t -> "T" + t.getId()).collect(Collectors.joining(" -> "));
+
+        System.out.println("  Schedule Akhir: [" + schedStr + "]");
+        System.out.println("  Serializable: " + isSer + " | Urutan Serial: " + orderStr);
+        require(isSer == expectedSerializable,
+                "Verifikasi serializability schedule sesuai harapan (" + expectedSerializable + ")");
     }
 
     private void printReport(){
@@ -128,22 +157,28 @@ public class CCMTestDriver {
 
         int tx1 = ccm.beginTransaction();
         int tx2 = ccm.beginTransaction();
+        Transaction t1Obj = ccm.getTransaction(tx1);
+        Transaction t2Obj = ccm.getTransaction(tx2);
         DataItem itemA = new DataItem("A", null);
 
-        AccessStatus tx1Read = ccm.requestRead(tx1, itemA);
+        AccessStatus tx1Read = runInTxThread(() -> ccm.requestRead(tx1, itemA));
         require(tx1Read == AccessStatus.GRANTED, "T1 R(A) granted lebih dulu");
 
-        AccessStatus waitingStatus = ccm.requestWrite(tx2, itemA);
+        AccessStatus waitingStatus = runInTxThread(() -> ccm.requestWrite(tx2, itemA));
         assertStatus(AccessStatus.WAITING, waitingStatus);
         require(ccm.getTransaction(tx2) != null,
                 "T2 tetap aktif ketika lock belum tersedia");
 
         ccm.commitTransaction(tx1);
 
-        AccessStatus retryStatus = ccm.requestWrite(tx2, itemA);
+        AccessStatus retryStatus = runInTxThread(() -> ccm.requestWrite(tx2, itemA));
         assertStatus(AccessStatus.GRANTED, retryStatus);
 
-        ccm.abortTransaction(tx2, "test cleanup");
+        ccm.commitTransaction(tx2);
+        printScheduleAndVerify(List.of(
+                new Operation(t1Obj, OperationType.READ, itemA),
+                new Operation(t2Obj, OperationType.WRITE, itemA)
+        ), true);
         assertCleanState();
     }
 
@@ -151,14 +186,19 @@ public class CCMTestDriver {
         currentScenario = "Lock Upgrade";
         System.out.println("Skenario: " + currentScenario);
         int tx1 = ccm.beginTransaction();
+        Transaction t1Obj = ccm.getTransaction(tx1);
         DataItem itemA = new DataItem("users", null);
 
-        AccessStatus readStatus = ccm.requestRead(tx1, itemA);
+        AccessStatus readStatus = runInTxThread(() -> ccm.requestRead(tx1, itemA));
         assertStatus(AccessStatus.GRANTED, readStatus);
 
-        AccessStatus writeStatus = ccm.requestWrite(tx1, itemA);
+        AccessStatus writeStatus = runInTxThread(() -> ccm.requestWrite(tx1, itemA));
         assertStatus(AccessStatus.GRANTED, writeStatus);
         ccm.commitTransaction(tx1);
+        printScheduleAndVerify(List.of(
+                new Operation(t1Obj, OperationType.READ, itemA),
+                new Operation(t1Obj, OperationType.WRITE, itemA)
+        ), true);
         assertCleanState();
     }
 
@@ -173,18 +213,22 @@ public class CCMTestDriver {
             return;
         }
         int tx2 = ccm.beginTransaction();
+        Transaction t1Obj = ccm.getTransaction(tx1);
 
         DataItem itemA = new DataItem("A", null);
         DataItem itemB = new DataItem("B", null);
 
-        assertStatus(AccessStatus.GRANTED, ccm.requestWrite(tx1, itemA));
-        assertStatus(AccessStatus.GRANTED, ccm.requestWrite(tx2, itemB));
-        assertStatus(AccessStatus.WAITING, ccm.requestWrite(tx1, itemB));
-        assertStatus(AccessStatus.ABORTED, ccm.requestWrite(tx2, itemA));
+        assertStatus(AccessStatus.GRANTED, runInTxThread(() -> ccm.requestWrite(tx1, itemA)));
+        assertStatus(AccessStatus.GRANTED, runInTxThread(() -> ccm.requestWrite(tx2, itemB)));
+        assertStatus(AccessStatus.WAITING, runInTxThread(() -> ccm.requestWrite(tx1, itemB)));
+        assertStatus(AccessStatus.ABORTED, runInTxThread(() -> ccm.requestWrite(tx2, itemA)));
         require(ccm.getTransaction(tx2) == null,
                 "Transaksi yang dipilih sebagai victim sudah di-abort");
 
         ccm.commitTransaction(tx1);
+        printScheduleAndVerify(List.of(
+                new Operation(t1Obj, OperationType.WRITE, itemA)
+        ), true);
         assertCleanState();
     }
 
@@ -199,17 +243,21 @@ public class CCMTestDriver {
             return;
         }
         int tx2 = ccm.beginTransaction();
+        Transaction t2Obj = ccm.getTransaction(tx2);
 
         DataItem itemA = new DataItem("A", null);
 
-        assertStatus(AccessStatus.GRANTED, ccm.requestWrite(tx2, itemA));
+        assertStatus(AccessStatus.GRANTED, runInTxThread(() -> ccm.requestWrite(tx2, itemA)));
 
-        AccessStatus tx1Write = ccm.requestWrite(tx1, itemA);
+        AccessStatus tx1Write = runInTxThread(() -> ccm.requestWrite(tx1, itemA));
         assertStatus(AccessStatus.ABORTED, tx1Write);
         require(ccm.getTransaction(tx1) == null,
                 "Transaksi T1 di-abort setelah pelanggaran timestamp");
 
         ccm.commitTransaction(tx2);
+        printScheduleAndVerify(List.of(
+                new Operation(t2Obj, OperationType.WRITE, itemA)
+        ), true);
         assertCleanState();
     }
 
@@ -227,16 +275,14 @@ public class CCMTestDriver {
                 new Operation(tx1, OperationType.WRITE, itemA),
                 new Operation(tx2, OperationType.READ, itemA),
                 new Operation(tx2, OperationType.WRITE, itemB));
-        require(ccm.verifySchedule(serialSchedule),
-                "Jadwal tanpa siklus precedence dinyatakan serializable");
+        printScheduleAndVerify(serialSchedule, true);
 
         List<Operation> nonSerializableSchedule = List.of(
                 new Operation(tx1, OperationType.WRITE, itemA),
                 new Operation(tx2, OperationType.READ, itemA),
                 new Operation(tx2, OperationType.WRITE, itemB),
                 new Operation(tx1, OperationType.READ, itemB));
-        require(!ccm.verifySchedule(nonSerializableSchedule),
-                "Jadwal dengan siklus precedence dinyatakan non-serializable");
+        printScheduleAndVerify(nonSerializableSchedule, false);
 
         ccm.commitTransaction(tx1Id);
         ccm.commitTransaction(tx2Id);
