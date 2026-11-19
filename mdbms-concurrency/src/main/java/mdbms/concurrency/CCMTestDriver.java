@@ -1,11 +1,18 @@
 package mdbms.concurrency;
 
+import mdbms.api.IFailureRecoveryManager;
 import mdbms.models.data.DataItem;
+import mdbms.models.data.RowId;
+import mdbms.models.log.LogRecord;
+import mdbms.models.log.LogType;
+import mdbms.models.log.RecordImage;
+import mdbms.models.log.RecoveryResult;
 import mdbms.models.transaction.AccessStatus;
 import mdbms.models.transaction.Operation;
 import mdbms.models.transaction.OperationType;
 import mdbms.models.transaction.Transaction;
 
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CountDownLatch;
@@ -23,7 +30,7 @@ public class CCMTestDriver {
     private String currentScenario = "";
 
     public void setUp(ConcurrencyProtocol protocol) {
-        ccm = new ConcurrencyControlManager(protocol);
+        ccm = new ConcurrencyControlManager(protocol, new MockFRM());
         executor = Executors.newCachedThreadPool();
     }
 
@@ -37,6 +44,7 @@ public class CCMTestDriver {
         CCMTestDriver driver = new CCMTestDriver();
 
         driver.setUp(new LockBasedProtocol());
+        System.out.println("Protokol Aktif: " + driver.ccm.getActiveProtocolName());
         driver.testConcurrentBegin();
         driver.testConcurrentReadWrite();
         driver.testLockUpgrade();
@@ -46,6 +54,9 @@ public class CCMTestDriver {
         driver.tearDown();
 
         driver.setUp(new TimestampsBasedProtocol());
+        System.out.println("Protokol Aktif: " + driver.ccm.getActiveProtocolName());
+        driver.testConcurrentBegin();
+        driver.testConcurrentReadWriteTimestamp();
         driver.testTimestampViolation();
         driver.testSerializableSchedule();
         driver.tearDown();
@@ -339,8 +350,43 @@ public class CCMTestDriver {
         require(ccm.getTransaction(tx1) == null,
                 "Transaksi T1 di-abort setelah pelanggaran timestamp");
 
+        awaitTimestampAfter(t2Obj.getTimestamp());
+        int tx1Restart = ccm.beginTransaction();
+        Transaction t1RestartObj = ccm.getTransaction(tx1Restart);
+        require(t1RestartObj.getTimestamp() > t2Obj.getTimestamp(),
+                "Transaksi yang dijalankan ulang mendapat timestamp baru yang lebih besar");
+        assertStatus(AccessStatus.GRANTED, runInTxThread(() -> ccm.requestWrite(tx1Restart, itemA)));
+
         ccm.commitTransaction(tx2);
+        ccm.commitTransaction(tx1Restart);
         printScheduleAndVerify(List.of(
+                new Operation(t2Obj, OperationType.WRITE, itemA),
+                new Operation(t1RestartObj, OperationType.WRITE, itemA)
+        ), true);
+        assertCleanState();
+    }
+
+    public void testConcurrentReadWriteTimestamp() {
+        currentScenario = "Concurrent Read/Write Transactions (Timestamp)";
+        System.out.println("Skenario: " + currentScenario);
+
+        int tx1 = ccm.beginTransaction();
+        awaitTimestampAfter(ccm.getTransaction(tx1).getTimestamp());
+        int tx2 = ccm.beginTransaction();
+        Transaction t1Obj = ccm.getTransaction(tx1);
+        Transaction t2Obj = ccm.getTransaction(tx2);
+        DataItem itemA = new DataItem("A", null);
+
+        assertStatus(AccessStatus.GRANTED, runInTxThread(() -> ccm.requestRead(tx1, itemA)));
+        assertStatus(AccessStatus.GRANTED, runInTxThread(() -> ccm.requestRead(tx2, itemA)));
+        assertStatus(AccessStatus.GRANTED, runInTxThread(() -> ccm.requestWrite(tx2, itemA)));
+
+        ccm.commitTransaction(tx1);
+        ccm.commitTransaction(tx2);
+
+        printScheduleAndVerify(List.of(
+                new Operation(t1Obj, OperationType.READ, itemA),
+                new Operation(t2Obj, OperationType.READ, itemA),
                 new Operation(t2Obj, OperationType.WRITE, itemA)
         ), true);
         assertCleanState();
@@ -385,5 +431,18 @@ public class CCMTestDriver {
             }
         }
         return System.currentTimeMillis() > timestamp;
+    }
+
+    private static class MockFRM implements IFailureRecoveryManager {
+        private RecoveryResult ok() { return new RecoveryResult(true, 1L, 0, "mock"); }
+        @Override public RecoveryResult writeTransactionLog(int txId, LogType eventType) { return ok(); }
+        @Override public RecoveryResult writeDataLog(int txId, LogType opType, String table, RowId rid, RecordImage beforeImg, RecordImage afterImg) { return ok(); }
+        @Override public boolean flushLogUpTo(long lsn) { return true; }
+        @Override public RecoveryResult rollbackTransaction(int txId) { return ok(); }
+        @Override public RecoveryResult createCheckpoint() { return ok(); }
+        @Override public RecoveryResult recoverOnStartup() { return ok(); }
+        @Override public RecoveryResult recoverToPointInTime(Instant targetTime) { return ok(); }
+        @Override public RecoveryResult recoverToTransaction(int targetTxId) { return ok(); }
+        @Override public List<LogRecord> readLogs(Integer filterTxId) { return List.of(); }
     }
 }
