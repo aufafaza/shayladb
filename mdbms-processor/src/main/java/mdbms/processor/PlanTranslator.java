@@ -17,7 +17,6 @@ import mdbms.processor.operator.CartesianJoinOperator;
 import mdbms.processor.operator.CommitOperator;
 import mdbms.processor.operator.CreateIndexOperator;
 import mdbms.processor.operator.DeleteOperator;
-import mdbms.processor.operator.GroupByOperator;
 import mdbms.processor.operator.IQueryOperator;
 import mdbms.processor.operator.IndexScanOperator;
 import mdbms.processor.operator.InsertOperator;
@@ -88,7 +87,7 @@ public class PlanTranslator {
             case GROUP_BY:
                 // return new GroupByOperator(childOperators.get(0), queryTree.getValue(),
                 // false);
-                return new GroupByOperator(childOperators.get(0));
+                return emptyOperator();
             case INSERT:
                 return new InsertOperator(dataAccess, schemaCatalog, concurrencyControl, txId,
                         queryTree.getTableName(), queryTree.getInsertValues());
