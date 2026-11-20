@@ -1,8 +1,6 @@
 package mdbms.net;
 
-import java.io.BufferedReader;
 import java.io.IOException;
-import java.io.InputStreamReader;
 import java.io.PrintWriter;
 import java.net.Socket;
 import java.nio.charset.StandardCharsets;
@@ -28,25 +26,27 @@ public class CommandLineInterface {
     int stringDelimiter = '\'';
 
     public CommandLineInterface(Socket socket) throws IOException {
+        this(socket, new TelnetHandler(socket));
+    }
+
+    CommandLineInterface(Socket socket, TelnetHandler telnetHandler) throws IOException {
         this.writer = new PrintWriter(socket.getOutputStream(), false, StandardCharsets.UTF_8);
-        this.telnetHandler = new TelnetHandler(socket);
+        this.telnetHandler = telnetHandler;
     }
 
     public String readQuery() throws IOException {
         if (!queuedQuery.isEmpty()) {
             return queuedQuery.poll();
         }
-        if (telnetHandler.isTelnet()) {
-            return readFromTelnet();
-        } else {
-            return readFromRawTCP();
-        }
+        return readFromTelnet();
     }
 
     public void printResult(ExecutionResult result) {
         if (result.success()) {
-            if (!result.columns().isEmpty()) {
-                printTable(result.columns(), result.rows());
+            List<String> columns = result.columns() == null ? List.of() : result.columns();
+            List<List<Object>> rows = result.rows() == null ? List.of() : result.rows();
+            if (!columns.isEmpty()) {
+                printTable(columns, rows);
             }
             if (result.affectedRows() != -1) {
                 if (result.affectedRows() == 1) {
@@ -66,9 +66,9 @@ public class CommandLineInterface {
 
     public void printExecutionTime(long timeNanos) {
         if (timeNanos >= 1_000_000_000) {
-            writer.println("Time: " + (timeNanos / 1000000.0) + " sec");
+            writer.println("Time: " + (timeNanos / 1_000_000_000.0) + " sec");
         } else {
-            writer.println("Time: " + (timeNanos / 1000.0) + " ms");
+            writer.println("Time: " + (timeNanos / 1_000_000.0) + " ms");
         }
         writer.flush();
     }
@@ -78,11 +78,11 @@ public class CommandLineInterface {
         if (N == 0)
             return;
 
-        List<Integer> columnWidth = new ArrayList<>(columns.stream().map((c) -> c.length()).toList());
+        List<Integer> columnWidth = new ArrayList<>(columns.stream().map((c) -> String.valueOf(c).length()).toList());
         for (List<Object> row : rows) {
             for (int i = 0; i < N; i++) {
                 int currentWidth = columnWidth.get(i);
-                columnWidth.set(i, Math.max(currentWidth, String.valueOf(row.get(i)).length()));
+                columnWidth.set(i, Math.max(currentWidth, String.valueOf(valueAt(row, i)).length()));
             }
         }
 
@@ -95,7 +95,7 @@ public class CommandLineInterface {
         writer.println('+');
 
         for (int i = 0; i < N; i++) {
-            writer.printf("| %-" + columnWidth.get(i) + "s ", columns.get(i));
+            writer.printf("| %-" + columnWidth.get(i) + "s ", String.valueOf(columns.get(i)));
         }
         writer.println('|');
 
@@ -109,10 +109,11 @@ public class CommandLineInterface {
 
         for (List<Object> row : rows) {
             for (int i = 0; i < N; i++) {
-                if (row.get(i) instanceof Number) {
-                    writer.printf("| %" + columnWidth.get(i) + "s ", String.valueOf(row.get(i)));
+                Object value = valueAt(row, i);
+                if (value instanceof Number) {
+                    writer.printf("| %" + columnWidth.get(i) + "s ", String.valueOf(value));
                 } else {
-                    writer.printf("| %-" + columnWidth.get(i) + "s ", String.valueOf(row.get(i)));
+                    writer.printf("| %-" + columnWidth.get(i) + "s ", String.valueOf(value));
                 }
             }
             writer.println('|');
@@ -135,6 +136,10 @@ public class CommandLineInterface {
         }
     }
 
+    private Object valueAt(List<Object> row, int index) {
+        return row != null && index < row.size() ? row.get(index) : null;
+    }
+
     private void printPrompt() {
         if (queryBuffer.isEmpty()) {
             writer.print("ShaylaDB> ");
@@ -142,57 +147,6 @@ public class CommandLineInterface {
             writer.print("\t-> ");
         }
         writer.flush();
-    }
-
-    private String readFromRawTCP() throws IOException {
-        if (!queuedQuery.isEmpty()) {
-            return queuedQuery.poll();
-        }
-
-        int ch;
-        while ((ch = telnetHandler.read()) != -1) {
-            // Extra char after \r
-            if (lastWasCR && (ch == '\n' || ch == '\0')) {
-                lastWasCR = false;
-                continue;
-            }
-            lastWasCR = false;
-
-            // Endline
-            if (ch == '\r' || ch == '\n') {
-                if (ch == '\r')
-                    lastWasCR = true;
-                queryBuffer.append('\n');
-                continue;
-            }
-
-            // Backspace
-            if (ch == '\b' || ch == 127) {
-                deleteLastCodePoint(queryBuffer);
-                continue;
-            }
-
-            if (!Character.isISOControl(ch)) {
-                queryBuffer.appendCodePoint(ch);
-                if (isEscaped) {
-                    isEscaped = false;
-                    continue;
-                }
-                if (ch == '\\') {
-                    isEscaped = true;
-                } else if (isInsideString && ch == stringDelimiter) {
-                    isInsideString = false;
-                } else if (!isInsideString && (ch == '\'' || ch == '\"')) {
-                    isInsideString = true;
-                    stringDelimiter = ch;
-                } else if (!isInsideString && ch == ';') {
-                    queuedQuery.add(queryBuffer.toString());
-                    queryBuffer.setLength(0);
-                    return queuedQuery.poll();
-                }
-            }
-        }
-        return null;
     }
 
     private String readFromTelnet() throws IOException {
