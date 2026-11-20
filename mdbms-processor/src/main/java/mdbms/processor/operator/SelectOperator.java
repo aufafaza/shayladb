@@ -5,8 +5,9 @@ import java.util.List;
 import mdbms.models.query.ExpressionTree;
 import mdbms.processor.ExpressionEvaluator;
 import mdbms.processor.IResultRow;
+import mdbms.processor.ResultTableSchema;
 
-public class SelectOperator extends QueryUnaryOperator {
+public class SelectOperator extends QueryUnaryOperator implements IRowProducingOperator {
     private final List<ExpressionTree> conditions;
 
     public SelectOperator(
@@ -18,6 +19,14 @@ public class SelectOperator extends QueryUnaryOperator {
         this.conditions = conditions == null
             ? List.of()
             : List.copyOf(conditions);
+    }
+
+    @Override
+    public ResultTableSchema getSchema() {
+        if (childOperator instanceof IRowProducingOperator) {
+            return ((IRowProducingOperator) childOperator).getSchema();
+        }
+        return null;
     }
 
     @Override
