@@ -22,6 +22,11 @@ public class CommandLineInterface {
     StringBuilder queryBuffer = new StringBuilder();
     Queue<String> queuedQuery = new ArrayDeque<>();
 
+    // Queue string state
+    boolean isInsideString = false;
+    boolean isEscaped = false;
+    char stringDelimiter = '\'';
+
     public CommandLineInterface(Socket socket) throws IOException {
         this.reader = new BufferedReader(new InputStreamReader(socket.getInputStream()));
         this.writer = new PrintWriter(socket.getOutputStream(), false);
@@ -47,6 +52,7 @@ public class CommandLineInterface {
                     lastWasCR = true;
 
                 writeToTelnet('\n');
+                inputBuffer.append('\n');
 
                 flushBuffer();
                 if (!queuedQuery.isEmpty()) {
@@ -80,11 +86,25 @@ public class CommandLineInterface {
                 printTable(result.columns(), result.rows());
             }
             writer.println(result.message());
-            if (result.affectedRows() != 0) {
-                writer.println("Affected rows: " + result.affectedRows());
+            if (result.affectedRows() != -1) {
+                if (result.affectedRows() == 1) {
+                    writer.println("(" + result.affectedRows() + " row affected)");
+                } else {
+                    writer.println("(" + result.affectedRows() + " rows affected)");
+                }
             }
         } else {
             writer.println(result.message());
+        }
+        writer.println();
+        writer.flush();
+    }
+
+    public void printExecutionTime(long timeNanos) {
+        if (timeNanos >= 1_000_000_000) {
+            writer.println("Time: " + (timeNanos / 1000000.0) + " sec");
+        } else {
+            writer.println("Time: " + (timeNanos / 1000.0) + " ms");
         }
         writer.flush();
     }
@@ -133,6 +153,12 @@ public class CommandLineInterface {
                 }
             }
             writer.println('+');
+        }
+
+        if (rows.size() == 1) {
+            writer.println("(" + rows.size() + " row)");
+        } else {
+            writer.println("(" + rows.size() + " rows)");
         }
     }
 
