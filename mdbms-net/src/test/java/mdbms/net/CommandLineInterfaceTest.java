@@ -72,21 +72,55 @@ class CommandLineInterfaceTest {
     void printResultWritesResponseToSocket() throws IOException {
         TestSocket socket = new TestSocket(new byte[0]);
         CommandLineInterface cli = new CommandLineInterface(socket);
+        String newline = System.lineSeparator();
 
+        cli.printResult(new ExecutionResult(
+                true,
+                List.of("id", "name"),
+                List.of(),
+                -1,
+                "Query Executed"));
+        assertEquals(String.join(newline,
+                "+----+------+",
+                "| id | name |",
+                "+----+------+",
+                "(0 rows)",
+                "Query Executed") + newline, socket.outputAsString());
+
+        socket.clearOutput();
         cli.printResult(new ExecutionResult(
                 true,
                 List.of("id", "name"),
                 List.of(List.of(1, "Nafis")),
                 -1,
                 "Query Executed"));
-
-        String newline = System.lineSeparator();
         assertEquals(String.join(newline,
                 "+----+-------+",
-                "| id |  name |",
+                "| id | name  |",
                 "+----+-------+",
                 "|  1 | Nafis |",
                 "+----+-------+",
+                "(1 row)",
+                "Query Executed") + newline, socket.outputAsString());
+
+        socket.clearOutput();
+        cli.printResult(new ExecutionResult(
+                true,
+                List.of("id", "name"),
+                List.of(List.of(1, "Muhammad"),
+                        List.of(2, "Nafis"),
+                        List.of(3, "Habibi")),
+                -1,
+                "Query Executed"));
+        assertEquals(String.join(newline,
+                "+----+----------+",
+                "| id | name     |",
+                "+----+----------+",
+                "|  1 | Muhammad |",
+                "|  2 | Nafis    |",
+                "|  3 | Habibi   |",
+                "+----+----------+",
+                "(3 rows)",
                 "Query Executed") + newline, socket.outputAsString());
     }
 
@@ -94,17 +128,7 @@ class CommandLineInterfaceTest {
     void printResultWritesTheAffectedRows() throws IOException {
         TestSocket socket = new TestSocket(new byte[0]);
         CommandLineInterface cli = new CommandLineInterface(socket);
-
-        // Print more than one rows
-        cli.printResult(new ExecutionResult(
-                true,
-                List.of(),
-                List.of(),
-                5,
-                ""));
-
         String newline = System.lineSeparator();
-        assertEquals(String.join(newline, "(5 rows affected)", "") + newline, socket.outputAsString());
 
         // Print zero row
         cli.printResult(new ExecutionResult(
@@ -113,18 +137,27 @@ class CommandLineInterfaceTest {
                 List.of(),
                 0,
                 ""));
-
         assertEquals(String.join(newline, "(0 rows affected)", "") + newline, socket.outputAsString());
+        socket.clearOutput();
 
         // Print one row
         cli.printResult(new ExecutionResult(
                 true,
                 List.of(),
                 List.of(),
-                0,
+                1,
                 null));
-
         assertEquals(String.join(newline, "(1 row affected)", "") + newline, socket.outputAsString());
+        socket.clearOutput();
+
+        // Print more than one rows
+        cli.printResult(new ExecutionResult(
+                true,
+                List.of(),
+                List.of(),
+                5,
+                ""));
+        assertEquals(String.join(newline, "(5 rows affected)", "") + newline, socket.outputAsString());
     }
 
     @Test
@@ -137,14 +170,16 @@ class CommandLineInterfaceTest {
         assertEquals(String.join(newline, "Time: " + (10001000 / 1000.0) + " ms") + newline, socket.outputAsString());
     }
 
-    
-
     private static final class TestSocket extends Socket {
         private final InputStream input;
         private final ByteArrayOutputStream output = new ByteArrayOutputStream();
 
         private TestSocket(byte[] input) {
             this.input = new ByteArrayInputStream(input);
+        }
+
+        private void clearOutput() {
+            output.reset();
         }
 
         private String outputAsString() {
