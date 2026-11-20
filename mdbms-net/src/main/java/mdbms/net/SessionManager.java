@@ -1,11 +1,11 @@
 package mdbms.net;
 
-import java.util.HashMap;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 
 public class SessionManager {
-    private Map<String, ClientSession> activeSession = new HashMap<>();
+    private Map<String, ClientSession> activeSession = new ConcurrentHashMap<>();
 
     public String generateSessionId() {
         String newId = UUID.randomUUID().toString().replace("-", "");
