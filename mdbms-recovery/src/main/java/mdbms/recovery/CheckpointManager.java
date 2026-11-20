@@ -244,15 +244,6 @@ public class CheckpointManager {
                 for (String fileName : restoredFiles) {
                     discardMethod.invoke(bufferPool, fileName);
                 }
-
-                Field tablesField = smClass.getDeclaredField("tables");
-                tablesField.setAccessible(true);
-                if (tablesField.get(storageManager) instanceof Map<?, ?> tablesMap) {
-                    for (Object tableName : new ArrayList<>(tablesMap.keySet())) {
-                        discardMethod.invoke(bufferPool, tableName + ".tbl");
-                    }
-                    tablesMap.clear();
-                }
             }
         } catch (Exception e) {
             throw new RuntimeException("Gagal melakukan restore snapshot", e);
