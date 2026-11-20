@@ -60,9 +60,5 @@ class CommandLineInterfaceTest {
         public OutputStream getOutputStream() {
             return output;
         }
-
-        private String outputAsString() {
-            return output.toString(StandardCharsets.UTF_8);
-        }
     }
 }

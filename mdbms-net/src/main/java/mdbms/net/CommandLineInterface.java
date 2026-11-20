@@ -15,6 +15,7 @@ import mdbms.models.query.ExecutionResult;
 public class CommandLineInterface {
     private BufferedReader reader;
     private PrintWriter writer;
+    private TelnetHandler telnetHandler;
 
     private boolean lastWasCR = false;
     StringBuilder inputBuffer = new StringBuilder();
@@ -24,15 +25,7 @@ public class CommandLineInterface {
     public CommandLineInterface(Socket socket) throws IOException {
         this.reader = new BufferedReader(new InputStreamReader(socket.getInputStream()));
         this.writer = new PrintWriter(socket.getOutputStream(), false);
-        var output = socket.getOutputStream();
-
-        // Biar print manual
-        // IAC WILL ECHO
-        // IAC WILL SUPPRESS-GO-AHEAD
-        output.write(new byte[] {
-                (byte) 255, (byte) 251, 1,
-                (byte) 255, (byte) 251, 3
-        });
+        this.telnetHandler = new TelnetHandler(socket);
     }
 
     public String readQuery() throws IOException {
@@ -42,12 +35,7 @@ public class CommandLineInterface {
 
         printPrompt();
         int ch;
-        while ((ch = reader.read()) != -1) {
-            if (ch == 255) {
-                handleTelnetIAC();
-                continue;
-            }
-
+        while ((ch = telnetHandler.read()) != -1) {
             if (lastWasCR && (ch == '\n' || ch == 0)) {
                 lastWasCR = false;
                 continue;
@@ -58,8 +46,7 @@ public class CommandLineInterface {
                 if (ch == '\r')
                     lastWasCR = true;
 
-                writer.println();
-                writer.flush();
+                writeToTelnet('\n');
 
                 flushBuffer();
                 if (!queuedQuery.isEmpty()) {
@@ -76,9 +63,13 @@ public class CommandLineInterface {
 
             if (ch >= 32 && ch <= 126) {
                 inputBuffer.append((char) ch);
-                writer.write(ch);
-                writer.flush();
+                writeToTelnet(ch);
             }
+        }
+
+        flushBuffer();
+        if (!queuedQuery.isEmpty()) {
+            return queuedQuery.poll();
         }
         return null;
     }
@@ -154,29 +145,16 @@ public class CommandLineInterface {
         writer.flush();
     }
 
-    // Handle Telnet IAC (255) commands safely
-    private void handleTelnetIAC() throws IOException {
-        int cmd = reader.read();
-        if (cmd == 250) { // IAC SB (Subnegotiation): skip until IAC SE (255, 240)
-            int ch;
-            while ((ch = reader.read()) != -1) {
-                if (ch == 255 && reader.read() == 240)
-                    break;
-            }
-        } else if (cmd >= 251 && cmd <= 254) {
-            reader.read(); // Read option byte for WILL/WONT/DO/DONT
-        }
-    }
-
     private void handleBackspace() {
         if (inputBuffer.length() > 0) {
             inputBuffer.deleteCharAt(inputBuffer.length() - 1);
-            writer.write("\b \b");
-            writer.flush();
+            writeToTelnet("\b \b");
         }
     }
 
     private void flushBuffer() {
+        if (!queryBuffer.isEmpty())
+            queryBuffer.append(' ');
         for (int i = 0; i < inputBuffer.length(); i++) {
             char ch = inputBuffer.charAt(i);
             queryBuffer.append(ch);
@@ -186,5 +164,19 @@ public class CommandLineInterface {
             }
         }
         inputBuffer.setLength(0);
+    }
+
+    private void writeToTelnet(int charCode) {
+        if (telnetHandler.isTelnet()) {
+            writer.write(charCode);
+            writer.flush();
+        }
+    }
+
+    private void writeToTelnet(String string) {
+        if (telnetHandler.isTelnet()) {
+            writer.write(string);
+            writer.flush();
+        }
     }
 }
