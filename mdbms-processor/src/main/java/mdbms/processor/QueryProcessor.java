@@ -78,7 +78,7 @@ public class QueryProcessor implements IQueryProcessor {
             translatedQuery.close();
         }
 
-        int affectedRows = 0;
+        int affectedRows = -1;
         String message = "Query Executed";
         if (translatedQuery instanceof IWriteOperator) {
             affectedRows = ((IWriteOperator) translatedQuery).getAffectedRows();

@@ -32,7 +32,8 @@ public class ClientHandler implements Runnable {
             String query;
             while ((query = cli.readQuery()) != null) {
                 String[] splitedQuery = query.trim().split("[\\s;]+");
-                if (splitedQuery.length == 0) continue;
+                if (splitedQuery.length == 0)
+                    continue;
 
                 String command = splitedQuery[0].toUpperCase();
                 if ((command.equals("COMMIT") || command.equals("ABORT")) && !session.isTransacting()) {
@@ -55,6 +56,7 @@ public class ClientHandler implements Runnable {
                     System.err.println("[ERROR] Could not begin transaction: " + e.getMessage());
                     continue;
                 }
+                long startTime = System.nanoTime();
                 try {
                     ExecutionResult result = processor.executeQuery(query, txId);
                     if (!result.success()) {
@@ -67,6 +69,8 @@ public class ClientHandler implements Runnable {
                     } else if (autoCommit) {
                         concurrencyControl.commitTransaction(txId);
                     }
+                    long endTime = System.nanoTime();
+                    cli.printExecutionTime((endTime - startTime) / 1000000);
                     cli.printResult(result);
                 } catch (Exception e) {
                     try {
