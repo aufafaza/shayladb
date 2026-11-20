@@ -86,7 +86,6 @@ public class CommandLineInterface {
             if (!result.columns().isEmpty()) {
                 printTable(result.columns(), result.rows());
             }
-            writer.println(result.message());
             if (result.affectedRows() != -1) {
                 if (result.affectedRows() == 1) {
                     writer.println("(" + result.affectedRows() + " row affected)");
@@ -94,10 +93,12 @@ public class CommandLineInterface {
                     writer.println("(" + result.affectedRows() + " rows affected)");
                 }
             }
+        }
+        if (result.message() == null) {
+            writer.println();
         } else {
             writer.println(result.message());
         }
-        writer.println();
         writer.flush();
     }
 
@@ -112,6 +113,9 @@ public class CommandLineInterface {
 
     private void printTable(List<String> columns, List<List<Object>> rows) {
         int N = columns.size();
+        if (N == 0)
+            return;
+
         List<Integer> columnWidth = new ArrayList<>(columns.stream().map((c) -> c.length()).toList());
         for (List<Object> row : rows) {
             for (int i = 0; i < N; i++) {
@@ -129,7 +133,7 @@ public class CommandLineInterface {
         writer.println('+');
 
         for (int i = 0; i < N; i++) {
-            writer.printf("| %" + columnWidth.get(i) + "s ", columns.get(i));
+            writer.printf("| %-" + columnWidth.get(i) + "s ", columns.get(i));
         }
         writer.println('|');
 
@@ -143,10 +147,16 @@ public class CommandLineInterface {
 
         for (List<Object> row : rows) {
             for (int i = 0; i < N; i++) {
-                writer.printf("| %" + columnWidth.get(i) + "s ", String.valueOf(row.get(i)));
+                if (row.get(i) instanceof Number) {
+                    writer.printf("| %" + columnWidth.get(i) + "s ", String.valueOf(row.get(i)));
+                } else {
+                    writer.printf("| %-" + columnWidth.get(i) + "s ", String.valueOf(row.get(i)));
+                }
             }
             writer.println('|');
+        }
 
+        if (rows.size() > 0) {
             for (int i = 0; i < N; i++) {
                 writer.print('+');
                 for (int j = 0; j < columnWidth.get(i) + 2; j++) {
