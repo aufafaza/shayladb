@@ -69,17 +69,17 @@ public class QueryProcessor implements IQueryProcessor {
             if (!(e instanceof TransactionAbortedException)) {
                 concurrencyControl.abortTransaction(txId, "Query execution failed");
             }
-            ExecutionResult executionResult = new ExecutionResult(false, null, null, 0, e.getMessage());
+            ExecutionResult executionResult = new ExecutionResult(false, null, null, 0, "Error: " + e.getMessage());
             return executionResult;
         } catch (Exception e) {
             concurrencyControl.abortTransaction(txId, "Query execution failed");
-            return new ExecutionResult(false, columns, rows, 0, e.getMessage());
+            return new ExecutionResult(false, columns, rows, 0, "Error: " + e.getMessage());
         } finally {
             translatedQuery.close();
         }
 
         int affectedRows = -1;
-        String message = "Query Executed";
+        String message = "";
         if (translatedQuery instanceof IWriteOperator) {
             affectedRows = ((IWriteOperator) translatedQuery).getAffectedRows();
         }
