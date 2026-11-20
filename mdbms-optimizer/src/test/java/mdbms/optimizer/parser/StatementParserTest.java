@@ -372,6 +372,24 @@ class StatementParserTest {
         assertEquals(1, missingIndexColumn.getColumn());
     }
 
+    // DDL yang ga didukung dari klien ditolak dengan pesan yang nyebut statement nya
+    @Test
+    void rejectsUnsupportedDdlExplicitly() {
+        QuerySyntaxException createTable = assertThrows(QuerySyntaxException.class,
+            () -> parse("CREATE TABLE t (id INTEGER);"));
+        assertTrue(createTable.getMessage().contains("Unsupported statement 'CREATE TABLE'"), createTable.getMessage());
+
+        QuerySyntaxException createView = assertThrows(QuerySyntaxException.class,
+            () -> parse("CREATE VIEW v;"));
+        assertTrue(createView.getMessage().contains("Unsupported statement 'CREATE VIEW'"), createView.getMessage());
+
+        QuerySyntaxException drop = assertThrows(QuerySyntaxException.class, () -> parse("DROP TABLE t;"));
+        assertTrue(drop.getMessage().contains("Unsupported statement 'DROP'"), drop.getMessage());
+
+        QuerySyntaxException alter = assertThrows(QuerySyntaxException.class, () -> parse("ALTER TABLE t;"));
+        assertTrue(alter.getMessage().contains("Unsupported statement 'ALTER'"), alter.getMessage());
+    }
+
     private QueryTree parse(String sql) {
         QueryTree tree = parser.parseStatement(stream(sql));
         System.out.println("=== QueryTree for: " + sql + " ===");
