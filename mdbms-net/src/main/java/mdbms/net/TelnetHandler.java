@@ -1,12 +1,37 @@
 package mdbms.net;
 
 import java.io.IOException;
+import java.io.InputStream;
+import java.io.InputStreamReader;
 import java.io.OutputStream;
 import java.io.PushbackInputStream;
+import java.io.Reader;
 import java.net.Socket;
 import java.net.SocketTimeoutException;
+import java.nio.charset.StandardCharsets;
 
 public class TelnetHandler {
+    private final class TelnetDataInputStream extends InputStream {
+        @Override
+        public int read() throws IOException {
+            return readDataByte();
+        }
+
+        @Override
+        public int read(byte[] bytes, int offset, int length) throws IOException {
+            if (length == 0) {
+                return 0;
+            }
+
+            int value = readDataByte();
+            if (value == -1) {
+                return -1;
+            }
+            bytes[offset] = (byte) value;
+            return 1;
+        }
+    }
+
     private static final int IAC = 255;
 
     private static final int WILL = 251;
@@ -22,8 +47,10 @@ public class TelnetHandler {
 
     private final PushbackInputStream input;
     private final OutputStream output;
+    private final Reader characterReader;
 
     private boolean telnet;
+    private int pendingCodeUnit = -1;
 
     public TelnetHandler(Socket socket) throws IOException {
         this.input = new PushbackInputStream(
@@ -31,6 +58,7 @@ public class TelnetHandler {
         this.output = socket.getOutputStream();
 
         detectTelnet(socket);
+        this.characterReader = new InputStreamReader(new TelnetDataInputStream(), StandardCharsets.UTF_8);
     }
 
     public boolean isTelnet() {
@@ -38,6 +66,31 @@ public class TelnetHandler {
     }
 
     public int read() throws IOException {
+        int first = readCodeUnit();
+        if (first == -1 || !Character.isHighSurrogate((char) first)) {
+            return first;
+        }
+
+        int second = readCodeUnit();
+        if (second != -1 && Character.isLowSurrogate((char) second)) {
+            return Character.toCodePoint((char) first, (char) second);
+        }
+        if (second != -1) {
+            pendingCodeUnit = second;
+        }
+        return first;
+    }
+
+    private int readCodeUnit() throws IOException {
+        if (pendingCodeUnit != -1) {
+            int codeUnit = pendingCodeUnit;
+            pendingCodeUnit = -1;
+            return codeUnit;
+        }
+        return characterReader.read();
+    }
+
+    private int readDataByte() throws IOException {
         if (!telnet) {
             return input.read();
         }
