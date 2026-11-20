@@ -321,6 +321,11 @@ public final class StorageManager implements IDataAccess, ISchemaCatalog, IStati
         }
     }
 
+    // hapus satu index dari katalog dan file nya, dipakai bootstrap schema buat batalin index yang baru dibuat
+    public void dropIndex(String name){
+        indexManager.dropIndex(name);
+    }
+
     @Override
     public Statistic getStatistics(String table){
         return statistics.getStatistics(table, heapFileOf(table));
