@@ -14,7 +14,6 @@ import java.util.Queue;
 import mdbms.models.query.ExecutionResult;
 
 public class CommandLineInterface {
-    private BufferedReader reader;
     private PrintWriter writer;
     private TelnetHandler telnetHandler;
 
@@ -26,10 +25,9 @@ public class CommandLineInterface {
     // Queue string state
     boolean isInsideString = false;
     boolean isEscaped = false;
-    char stringDelimiter = '\'';
+    int stringDelimiter = '\'';
 
     public CommandLineInterface(Socket socket) throws IOException {
-        this.reader = new BufferedReader(new InputStreamReader(socket.getInputStream()));
         this.writer = new PrintWriter(socket.getOutputStream(), false, StandardCharsets.UTF_8);
         this.telnetHandler = new TelnetHandler(socket);
     }
@@ -38,47 +36,11 @@ public class CommandLineInterface {
         if (!queuedQuery.isEmpty()) {
             return queuedQuery.poll();
         }
-
-        printPrompt();
-        int ch;
-        while ((ch = telnetHandler.read()) != -1) {
-            if (lastWasCR && (ch == '\n' || ch == 0)) {
-                lastWasCR = false;
-                continue;
-            }
-            lastWasCR = false;
-
-            if (ch == '\r' || ch == '\n') {
-                if (ch == '\r')
-                    lastWasCR = true;
-
-                writeToTelnet('\n');
-                inputBuffer.append('\n');
-
-                flushBuffer();
-                if (!queuedQuery.isEmpty()) {
-                    return queuedQuery.poll();
-                }
-                printPrompt();
-                continue;
-            }
-
-            if (ch == '\b' || ch == 127) {
-                handleBackspace();
-                continue;
-            }
-
-            if (ch >= 32 && ch <= 126) {
-                inputBuffer.append((char) ch);
-                writeToTelnet(ch);
-            }
+        if (telnetHandler.isTelnet()) {
+            return readFromTelnet();
+        } else {
+            return readFromRawTCP();
         }
-
-        flushBuffer();
-        if (!queuedQuery.isEmpty()) {
-            return queuedQuery.poll();
-        }
-        return null;
     }
 
     public void printResult(ExecutionResult result) {
@@ -182,11 +144,112 @@ public class CommandLineInterface {
         writer.flush();
     }
 
-    private void handleBackspace() {
-        if (inputBuffer.length() > 0) {
-            inputBuffer.deleteCharAt(inputBuffer.length() - 1);
-            writeToTelnet("\b \b");
+    private String readFromRawTCP() throws IOException {
+        if (!queuedQuery.isEmpty()) {
+            return queuedQuery.poll();
         }
+
+        int ch;
+        while ((ch = telnetHandler.read()) != -1) {
+            // Extra char after \r
+            if (lastWasCR && (ch == '\n' || ch == '\0')) {
+                lastWasCR = false;
+                continue;
+            }
+            lastWasCR = false;
+
+            // Endline
+            if (ch == '\r' || ch == '\n') {
+                if (ch == '\r')
+                    lastWasCR = true;
+                queryBuffer.append('\n');
+                continue;
+            }
+
+            // Backspace
+            if (ch == '\b' || ch == 127) {
+                if (queryBuffer.length() > 0) {
+                    queryBuffer.deleteCharAt(queryBuffer.length() - 1);
+                }
+                continue;
+            }
+
+            // Printable char
+            if (ch >= 32 && ch <= 126) {
+                queryBuffer.append((char) ch);
+                if (isEscaped) {
+                    isEscaped = false;
+                    continue;
+                }
+                if (ch == '\\') {
+                    isEscaped = true;
+                } else if (isInsideString && ch == stringDelimiter) {
+                    isInsideString = false;
+                } else if (!isInsideString && (ch == '\'' || ch == '\"')) {
+                    isInsideString = true;
+                    stringDelimiter = ch;
+                } else if (!isInsideString && ch == ';') {
+                    queuedQuery.add(queryBuffer.toString());
+                    queryBuffer.setLength(0);
+                    return queuedQuery.poll();
+                }
+            }
+        }
+        return null;
+    }
+
+    private String readFromTelnet() throws IOException {
+        if (!queuedQuery.isEmpty()) {
+            return queuedQuery.poll();
+        }
+
+        printPrompt();
+        int ch;
+        while ((ch = telnetHandler.read()) != -1) {
+            // Extra char after \r
+            if (lastWasCR && (ch == '\n' || ch == 0)) {
+                lastWasCR = false;
+                continue;
+            }
+            lastWasCR = false;
+
+            // Endline
+            if (ch == '\r' || ch == '\n') {
+                if (ch == '\r')
+                    lastWasCR = true;
+
+                writeToTelnet('\n');
+                inputBuffer.append('\n');
+
+                flushBuffer();
+                if (!queuedQuery.isEmpty()) {
+                    return queuedQuery.poll();
+                }
+                printPrompt();
+                continue;
+            }
+
+            // Backspace
+            if (ch == '\b' || ch == 127) {
+                if (inputBuffer.length() > 0) {
+                    inputBuffer.deleteCharAt(inputBuffer.length() - 1);
+                    writeToTelnet("\b \b");
+                }
+                continue;
+            }
+
+            // Printable character
+            if (ch >= 32 && ch <= 126) {
+                inputBuffer.append((char) ch);
+                writeToTelnet(ch);
+            }
+        }
+
+        flushBuffer();
+        if (!queuedQuery.isEmpty()) {
+            return queuedQuery.poll();
+        }
+        return null;
     }
 
     private void flushBuffer() {

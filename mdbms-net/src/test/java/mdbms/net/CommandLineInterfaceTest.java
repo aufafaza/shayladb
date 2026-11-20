@@ -34,6 +34,20 @@ class CommandLineInterfaceTest {
     }
 
     @Test
+    void readQueryEchoesInputForTelnetClients() throws IOException {
+        ByteArrayOutputStream input = new ByteArrayOutputStream();
+        input.write(new byte[] {(byte) 255, (byte) 253, 1});
+        input.write("SELECT 1;\r\n".getBytes(StandardCharsets.UTF_8));
+
+        TestSocket socket = new TestSocket(input.toByteArray());
+        CommandLineInterface cli = new CommandLineInterface(socket);
+        socket.clearOutput();
+
+        assertEquals("SELECT 1;", cli.readQuery());
+        assertEquals("ShaylaDB> SELECT 1;\n", socket.outputAsString());
+    }
+
+    @Test
     void readQueryKeepsEscapedSingleQuoteAndSemicolonInsideString() throws IOException {
         CommandLineInterface cli = new CommandLineInterface(
                 new TestSocket("SELECT 'escaped \\' quote; still inside';SELECT 2;"
