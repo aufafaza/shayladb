@@ -1,15 +1,18 @@
 package mdbms.app;
 
 import mdbms.api.IConcurrencyControl;
+import mdbms.api.IDataAccess;
 import mdbms.api.IDurableStorage;
 import mdbms.api.IFailureRecoveryManager;
 import mdbms.api.IQueryProcessor;
+import mdbms.api.ISchemaCatalog;
 import mdbms.concurrency.ConcurrencyControlManager;
 import mdbms.concurrency.ConcurrencyProtocol;
 import mdbms.concurrency.LockBasedProtocol;
 import mdbms.concurrency.TimestampsBasedProtocol;
 import mdbms.models.log.RecoveryResult;
 import mdbms.recovery.FailureRecoveryManager;
+import mdbms.storage.SampleDataLoader;
 import mdbms.storage.StorageManager;
 
 public class DBMS {
@@ -40,6 +43,7 @@ public class DBMS {
         if (running) return;
         ConcurrencyProtocol protocol = createProtocol(cfg.getConcurrencyAlgorithm());
         recoverOnStartup();
+        loadSampleData();
         concurrencyControl = new ConcurrencyControlManager(protocol, frm);
         System.out.println("Concurrency protocol: " + ((ConcurrencyControlManager) concurrencyControl).getActiveProtocolName());
         // TODO: assign the real QueryProcessor here once it implements IQueryProcessor
@@ -70,6 +74,15 @@ public class DBMS {
         if (!result.isSuccess()) {
             throw new IllegalStateException("Recovery failed: " + result.getMessage());
         }
+    }
+
+    // isi database contoh SM14 kalau katalog masih kosong, dijalanin setelah recovery dan sebelum transaksi diterima
+    // langsung di flush biar data contoh udah aman di disk walau server mati sebelum shutdown
+    private void loadSampleData(){
+        if (!(storage instanceof IDataAccess data) || !(storage instanceof ISchemaCatalog catalog)) return;
+        if (!catalog.listTable().isEmpty()) return;
+        new SampleDataLoader(data, catalog).loadIfEmpty();
+        storage.flushBuffer();
     }
 
     private static IDurableStorage createStorage(DBMSConfig cfg, IFailureRecoveryManager frm){
