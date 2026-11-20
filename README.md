@@ -43,3 +43,20 @@ mvn -pl mdbms-storage -am test       # run one module's tests
 ```bash
 java -jar mdbms-app/target/mdbms.jar
 ```
+
+## Transactions
+
+`ConcurrencyControlManager` owns the transaction lifecycle. The WAL is written through the recovery manager, and the query processor only asks the CCM to commit or abort.
+
+| Situation | What happens |
+|---|---|
+| `COMMIT` | The `COMMIT` record is appended and forced to disk first. Locks are released only after that, and only then does the client get success. |
+| `ABORT` | All writes are undone, the `ABORT` record is forced, and only then are locks released. |
+| A statement fails (parse, type, missing table, storage error, lock conflict) | The whole transaction is aborted, including writes from earlier statements. A later `COMMIT` on it fails with `Unknown transaction`. |
+| Appending the `COMMIT` record fails | `COMMIT` fails and the transaction is rolled back. The engine keeps running. |
+| Forcing the `COMMIT` record fails | The outcome is uncertain, so the transaction is neither reported as committed nor rolled back. The engine moves to its failed state. |
+| Rollback fails | `ABORT` fails, and the engine moves to its failed state. |
+
+In the **failed state**, the transaction that caused it keeps its locks, so no other transaction can read or overwrite its rows. New transactions are rejected with `Engine is in failed state, restart required`, and the checkpoint barrier (`awaitNoActiveTransactions`) fails with the same error instead of waiting forever. Restart the server: crash recovery replays the WAL and decides whether the transaction committed.
+
+Known limitation: undoing an `UPDATE` that moved a row to another page is not supported yet (#55). Aborting such a transaction moves the engine to the failed state.
