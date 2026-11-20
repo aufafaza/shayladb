@@ -43,3 +43,9 @@ mvn -pl mdbms-storage -am test       # run one module's tests
 ```bash
 java -jar mdbms-app/target/mdbms.jar
 ```
+
+## Network protocol
+
+Programmatic clients use the framed raw-TCP protocol documented in
+[`mdbms-net/PROTOCOL.md`](mdbms-net/PROTOCOL.md). Interactive telnet remains
+available on the same listener.

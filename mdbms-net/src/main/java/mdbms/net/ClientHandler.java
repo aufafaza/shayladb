@@ -2,17 +2,19 @@ package mdbms.net;
 
 import java.io.IOException;
 import java.net.Socket;
+import java.net.SocketTimeoutException;
 
 import mdbms.api.IConcurrencyControl;
 import mdbms.api.IQueryProcessor;
 import mdbms.models.query.ExecutionResult;
 
+/** Executes one connection using either the interactive telnet or framed raw protocol. */
 public class ClientHandler implements Runnable {
-    private Socket clientSocket;
-    private IQueryProcessor processor;
-    private SessionManager sessionManager;
-    private ClientSession session;
-    private IConcurrencyControl concurrencyControl;
+    private final Socket clientSocket;
+    private final IQueryProcessor processor;
+    private final SessionManager sessionManager;
+    private final ClientSession session;
+    private final IConcurrencyControl concurrencyControl;
 
     public ClientHandler(
             Socket clientSocket,
@@ -26,82 +28,173 @@ public class ClientHandler implements Runnable {
         this.concurrencyControl = concurrencyControl;
     }
 
+    @Override
     public void run() {
         try {
-            CommandLineInterface cli = new CommandLineInterface(clientSocket);
-            String query;
-            while ((query = cli.readQuery()) != null) {
-                String[] splitedQuery = query.trim().split("[\\s;]+");
-                if (splitedQuery.length == 0)
-                    continue;
-
-                String command = splitedQuery[0].toUpperCase();
-                if ((command.equals("COMMIT") || command.equals("ABORT")) && !session.isTransacting()) {
-                    cli.printResult(new ExecutionResult(false, null, null, 0, "No active transaction"));
-                    continue;
-                }
-                if (command.equals("BEGIN") && session.isTransacting()) {
-                    cli.printResult(new ExecutionResult(false, null, null, 0,
-                            "Transaction " + session.getCurrentTxId() + " is already active"));
-                    continue;
-                }
-                if (command.equals("EXIT") || command.equals("QUIT")) {
-                    break;
-                }
-                boolean autoCommit = !session.isTransacting();
-                int txId;
-                try {
-                    txId = autoCommit ? concurrencyControl.beginTransaction() : session.getCurrentTxId();
-                } catch (IllegalStateException e) {
-                    System.err.println("[ERROR] Could not begin transaction: " + e.getMessage());
-                    continue;
-                }
-                long startTime = System.nanoTime();
-                try {
-                    ExecutionResult result = processor.executeQuery(query, txId);
-                    if (!result.success()) {
-                        // QueryProcessor sudah membatalkan transaksinya
-                        session.clearTransaction();
-                    } else if (command.equals("BEGIN")) {
-                        session.beginTransaction(txId);
-                    } else if (command.equals("COMMIT") || command.equals("ABORT")) {
-                        session.clearTransaction();
-                    } else if (autoCommit) {
-                        concurrencyControl.commitTransaction(txId);
-                    }
-                    long endTime = System.nanoTime();
-                    cli.printExecutionTime((endTime - startTime) / 1000000);
-                    cli.printResult(result);
-                } catch (Exception e) {
-                    try {
-                        concurrencyControl.abortTransaction(txId, "Failed to execute query: " + e.getMessage());
-                    } catch (Exception e2) {
-                        System.err.println("[ERROR] Could not abort transaction " + txId + ": " + e.getMessage());
-                    }
-                    session.clearTransaction();
-                    cli.printResult(new ExecutionResult(false, null, null, 0, e.getMessage()));
-                }
+            TelnetHandler transport = new TelnetHandler(clientSocket);
+            if (transport.isTelnet()) {
+                runTelnet(new CommandLineInterface(clientSocket, transport));
+            } else {
+                runFramed(new FramedJsonProtocol(clientSocket, transport.rawInput()));
             }
         } catch (IOException e) {
             System.out.println("[ERROR] Client disconnected");
         } finally {
-            if (session.isTransacting()) {
-                int txId = session.getCurrentTxId();
-                try {
-                    concurrencyControl.abortTransaction(txId, "Client disconnected");
-                } catch (Exception e) {
-                    System.err.println("[ERROR] Could not abort transaction " + txId + ": " + e.getMessage());
+            closeSession();
+        }
+    }
+
+    private void runTelnet(CommandLineInterface cli) throws IOException {
+        clientSocket.setSoTimeout(FramedJsonProtocol.REQUEST_TIMEOUT_MILLIS);
+        try {
+            String query;
+            while ((query = cli.readQuery()) != null) {
+                if (!executeTelnetQuery(cli, query)) {
+                    return;
                 }
-                session.clearTransaction();
             }
+        } catch (SocketTimeoutException e) {
+            cli.printResult(new ExecutionResult(false, null, null, 0,
+                    "Error: request timed out after 30 seconds"));
+        }
+    }
 
-            sessionManager.removeSession(session.getSessionId());
-
+    private void runFramed(FramedJsonProtocol protocol) throws IOException {
+        while (true) {
+            String query;
             try {
-                clientSocket.close();
-            } catch (IOException e) {
-                System.err.println("[ERROR] Could not close client socket: " + e.getMessage());
+                query = protocol.readSql();
+            } catch (ProtocolException e) {
+                protocol.writeResponse(FramedJsonProtocol.Response.error(e.code(),
+                        FramedJsonProtocol.messageOrDefault(e.getMessage(), "Invalid request"), 0));
+                if (e.closeConnection()) {
+                    return;
+                }
+                continue;
             }
+            if (query == null || !executeFramedQuery(protocol, query)) {
+                return;
+            }
+        }
+    }
+
+    private boolean executeTelnetQuery(CommandLineInterface cli, String query) {
+        String command = commandOf(query);
+        if (command.isEmpty()) {
+            return true;
+        }
+        if ((command.equals("COMMIT") || command.equals("ABORT")) && !session.isTransacting()) {
+            cli.printResult(new ExecutionResult(false, null, null, -1, "No active transaction"));
+            return true;
+        }
+        if (command.equals("BEGIN") && session.isTransacting()) {
+            cli.printResult(new ExecutionResult(false, null, null, -1,
+                    "Transaction " + session.getCurrentTxId() + " is already active"));
+            return true;
+        }
+        if (command.equals("EXIT") || command.equals("QUIT")) {
+            cli.printResult(new ExecutionResult(true, null, null, -1, "Goodbye"));
+            return false;
+        }
+
+        long started = System.nanoTime();
+        ExecutionResult result = executeQuery(query, command);
+        cli.printExecutionTime(System.nanoTime() - started);
+        cli.printResult(result);
+        return true;
+    }
+
+    private boolean executeFramedQuery(FramedJsonProtocol protocol, String query) throws IOException {
+        String command = commandOf(query);
+        if (command.isEmpty()) {
+            protocol.writeResponse(FramedJsonProtocol.Response.error("INVALID_REQUEST", "SQL must not be blank", 0));
+            return true;
+        }
+        if ((command.equals("COMMIT") || command.equals("ABORT")) && !session.isTransacting()) {
+            protocol.writeResponse(FramedJsonProtocol.Response.error("TRANSACTION_STATE", "No active transaction", 0));
+            return true;
+        }
+        if (command.equals("BEGIN") && session.isTransacting()) {
+            protocol.writeResponse(FramedJsonProtocol.Response.error("TRANSACTION_STATE",
+                    "Transaction " + session.getCurrentTxId() + " is already active", 0));
+            return true;
+        }
+        if (command.equals("EXIT") || command.equals("QUIT")) {
+            protocol.writeResponse(FramedJsonProtocol.Response.ok("Connection closed", 0));
+            return false;
+        }
+
+        long started = System.nanoTime();
+        ExecutionResult result = executeQuery(query, command);
+        long elapsedMs = (System.nanoTime() - started) / 1_000_000;
+        protocol.writeResponse(FramedJsonProtocol.fromExecutionResult(result, elapsedMs));
+        return true;
+    }
+
+    private ExecutionResult executeQuery(String query, String command) {
+        boolean autoCommit = !session.isTransacting();
+        int txId;
+        try {
+            txId = autoCommit ? concurrencyControl.beginTransaction() : session.getCurrentTxId();
+        } catch (IllegalStateException e) {
+            return new ExecutionResult(false, null, null, 0,
+                    "Transaction admission rejected: " + FramedJsonProtocol.messageOrDefault(e.getMessage(), "unavailable"));
+        }
+
+        try {
+            ExecutionResult result = processor.executeQuery(query, txId);
+            if (result == null || !result.success()) {
+                abortIfActive(txId, "Query execution failed");
+                session.clearTransaction();
+            } else if (command.equals("BEGIN")) {
+                session.beginTransaction(txId);
+            } else if (command.equals("COMMIT") || command.equals("ABORT")) {
+                session.clearTransaction();
+            } else if (autoCommit) {
+                concurrencyControl.commitTransaction(txId);
+            }
+            return result == null ? new ExecutionResult(false, null, null, 0, "Query processor returned no result") : result;
+        } catch (Exception e) {
+            abortIfActive(txId, "Failed to execute query: " + e.getMessage());
+            session.clearTransaction();
+            return new ExecutionResult(false, null, null, 0,
+                    FramedJsonProtocol.messageOrDefault(e.getMessage(), "Query execution failed"));
+        }
+    }
+
+    private String commandOf(String query) {
+        String trimmed = query == null ? "" : query.trim();
+        if (trimmed.isEmpty()) {
+            return "";
+        }
+        String[] parts = trimmed.split("[\\s;]+", 2);
+        return parts[0].toUpperCase();
+    }
+
+    private void abortIfActive(int txId, String reason) {
+        try {
+            concurrencyControl.abortTransaction(txId, reason);
+        } catch (Exception ignored) {
+            // QueryProcessor may already have aborted and removed the transaction.
+        }
+    }
+
+    private void closeSession() {
+        if (session.isTransacting()) {
+            int txId = session.getCurrentTxId();
+            try {
+                concurrencyControl.abortTransaction(txId, "Client disconnected");
+            } catch (Exception e) {
+                System.err.println("[ERROR] Could not abort transaction " + txId + ": " + e.getMessage());
+            }
+            session.clearTransaction();
+        }
+
+        sessionManager.removeSession(session.getSessionId());
+        try {
+            clientSocket.close();
+        } catch (IOException e) {
+            System.err.println("[ERROR] Could not close client socket: " + e.getMessage());
         }
     }
 }
