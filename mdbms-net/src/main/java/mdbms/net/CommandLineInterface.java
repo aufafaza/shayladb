@@ -5,6 +5,7 @@ import java.io.IOException;
 import java.io.InputStreamReader;
 import java.io.PrintWriter;
 import java.net.Socket;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.List;
@@ -29,7 +30,7 @@ public class CommandLineInterface {
 
     public CommandLineInterface(Socket socket) throws IOException {
         this.reader = new BufferedReader(new InputStreamReader(socket.getInputStream()));
-        this.writer = new PrintWriter(socket.getOutputStream(), false);
+        this.writer = new PrintWriter(socket.getOutputStream(), false, StandardCharsets.UTF_8);
         this.telnetHandler = new TelnetHandler(socket);
     }
 
@@ -179,12 +180,21 @@ public class CommandLineInterface {
     }
 
     private void flushBuffer() {
-        if (!queryBuffer.isEmpty())
-            queryBuffer.append(' ');
         for (int i = 0; i < inputBuffer.length(); i++) {
             char ch = inputBuffer.charAt(i);
             queryBuffer.append(ch);
-            if (ch == ';') {
+            if (isEscaped) {
+                isEscaped = false;
+                continue;
+            }
+            if (ch == '\\') {
+                isEscaped = true;
+            } else if (isInsideString && ch == stringDelimiter) {
+                isInsideString = false;
+            } else if (!isInsideString && (ch == '\'' || ch == '\"')) {
+                isInsideString = true;
+                stringDelimiter = ch;
+            } else if (!isInsideString && ch == ';') {
                 queuedQuery.add(queryBuffer.toString());
                 queryBuffer.setLength(0);
             }
