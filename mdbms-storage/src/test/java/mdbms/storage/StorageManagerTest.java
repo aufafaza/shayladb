@@ -18,6 +18,7 @@ import java.util.Arrays;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import mdbms.api.IFailureRecoveryManager;
 import mdbms.models.access.BufferStats;
 import mdbms.models.access.DataDeletion;
@@ -538,6 +539,80 @@ class StorageManagerTest {
 
         RowId cici = storage.writeBlock(new DataWrite("users", user(3, "cici", 2.0f), List.of())).get(0);
         assertEquals(List.of(cici), storage.searchIndex("idx_users_id", 3));
+    }
+
+    // cuma file yang diganti snapshot yang cache nya dibuang, perubahan tabel lain yang belum di flush tetap ada
+    @Test
+    void invalidateAndReloadKeepsUnaffectedDirtyFrames(@TempDir Path snapshot) throws Exception {
+        storage.attachRecoveryManager(acceptingFrm());
+        createUsers();
+        storage.updateTableSchema(new TableSchema("logs", List.of(
+                new ColumnDefinition("id", DataType.INTEGER, 0, false)), List.of("id"), List.of()));
+        RowId alice = storage.writeBlock(new DataWrite("users", user(1, "alice", 3.5f), List.of())).get(0);
+        storage.createIndex("idx_users_id", "users", "id");
+        storage.flushBuffer();
+        Files.copy(directory.resolve("users.tbl"), snapshot.resolve("users.tbl"));
+        Files.copy(directory.resolve("idx_users_id.idx"), snapshot.resolve("idx_users_id.idx"));
+
+        storage.writeBlock(new DataWrite("users", user(2, "bob", null), List.of()));
+        storage.flushBuffer();
+        Map<String, Object> log = new LinkedHashMap<>();
+        log.put("id", 7);
+        RowId logRow = storage.writeBlock(new DataWrite("logs", log, List.of())).get(0);
+
+        Files.copy(snapshot.resolve("users.tbl"), directory.resolve("users.tbl"), StandardCopyOption.REPLACE_EXISTING);
+        Files.copy(snapshot.resolve("idx_users_id.idx"), directory.resolve("idx_users_id.idx"),
+                StandardCopyOption.REPLACE_EXISTING);
+        storage.invalidateAndReload(Set.of("users.tbl", "idx_users_id.idx"));
+
+        assertEquals(List.of(alice), readUsers().stream().map(Row::rowId).toList());
+        assertTrue(storage.searchIndex("idx_users_id", 2).isEmpty());
+        assertEquals(1, storage.getStatistics("users").nr());
+        assertEquals(List.of(7), storage.fetchByRowId(logRow).values());
+        assertTrue(Files.exists(directory.resolve("users.tbl")));
+    }
+
+    // set kosong berarti semua cache dibuang sama kayak reloadFromDisk
+    @Test
+    void invalidateAndReloadWithoutFilesDropsAllCaches() {
+        storage.attachRecoveryManager(acceptingFrm());
+        createUsers();
+        RowId alice = storage.writeBlock(new DataWrite("users", user(1, "alice", 3.5f), List.of())).get(0);
+        storage.flushBuffer();
+        storage.writeBlock(new DataWrite("users", user(2, "bob", null), List.of()));
+
+        storage.invalidateAndReload(Set.of());
+
+        assertEquals(List.of(alice), readUsers().stream().map(Row::rowId).toList());
+        assertEquals(0, storage.getBufferStats().dirtyBlocks());
+    }
+
+    // hasil redo yang belum ke flush tetap dipakai, index lama dari disk disamain lagi dengan heap
+    @Test
+    void rebuildIndexesAndReloadCatalogKeepsRecoveredChanges(@TempDir Path backup) throws Exception {
+        storage.attachRecoveryManager(acceptingFrm());
+        createUsers();
+        RowId alice = storage.writeBlock(new DataWrite("users", user(1, "alice", 3.5f), List.of())).get(0);
+        storage.createIndex("idx_users_id", "users", "id");
+        storage.flushBuffer();
+        Files.copy(directory.resolve("idx_users_id.idx"), backup.resolve("idx_users_id.idx"));
+        RowId bob = storage.writeBlock(new DataWrite("users", user(2, "bob", null), List.of())).get(0);
+        storage.flushBuffer();
+        Files.copy(backup.resolve("idx_users_id.idx"), directory.resolve("idx_users_id.idx"),
+                StandardCopyOption.REPLACE_EXISTING);
+
+        StorageManager restarted = new StorageManager(directory.toString(), 16, 4);
+        restarted.attachRecoveryManager(acceptingFrm());
+        RowId cici = new RowId("users", bob.blockNumber(), bob.slot() + 1);
+        restarted.insertAt(cici, List.of(3, "cici", 2.0f));
+        assertTrue(restarted.getBufferStats().dirtyBlocks() > 0);
+
+        restarted.rebuildIndexesAndReloadCatalog();
+
+        assertEquals(List.of(alice), restarted.searchIndex("idx_users_id", 1));
+        assertEquals(List.of(bob), restarted.searchIndex("idx_users_id", 2));
+        assertEquals(List.of(cici), restarted.searchIndex("idx_users_id", 3));
+        assertEquals(List.of(3, "cici", 2.0f), restarted.fetchByRowId(cici).values());
     }
 
     // reloadFromDisk buang perubahan di buffer yang belum di flush karena isi disk yang jadi acuan
