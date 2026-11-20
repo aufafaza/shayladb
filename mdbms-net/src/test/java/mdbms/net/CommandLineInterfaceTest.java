@@ -34,17 +34,26 @@ class CommandLineInterfaceTest {
     }
 
     @Test
-    void readQueryEchoesInputForTelnetClients() throws IOException {
+    void readQueryPreservesUnicodeAndMultipleRawTcpQueries() throws IOException {
+        CommandLineInterface cli = new CommandLineInterface(
+                new TestSocket("SELECT 'café 😀';SELECT '東京';".getBytes(StandardCharsets.UTF_8)));
+
+        assertEquals("SELECT 'café 😀';", cli.readQuery());
+        assertEquals("SELECT '東京';", cli.readQuery());
+    }
+
+    @Test
+    void readQueryEchoesUnicodeInputForTelnetClients() throws IOException {
         ByteArrayOutputStream input = new ByteArrayOutputStream();
         input.write(new byte[] {(byte) 255, (byte) 253, 1});
-        input.write("SELECT 1;\r\n".getBytes(StandardCharsets.UTF_8));
+        input.write("SELECT 'café 😀';\r\n".getBytes(StandardCharsets.UTF_8));
 
         TestSocket socket = new TestSocket(input.toByteArray());
         CommandLineInterface cli = new CommandLineInterface(socket);
         socket.clearOutput();
 
-        assertEquals("SELECT 1;", cli.readQuery());
-        assertEquals("ShaylaDB> SELECT 1;\n", socket.outputAsString());
+        assertEquals("SELECT 'café 😀';", cli.readQuery());
+        assertEquals("ShaylaDB> SELECT 'café 😀';\n", socket.outputAsString());
     }
 
     @Test

@@ -168,15 +168,12 @@ public class CommandLineInterface {
 
             // Backspace
             if (ch == '\b' || ch == 127) {
-                if (queryBuffer.length() > 0) {
-                    queryBuffer.deleteCharAt(queryBuffer.length() - 1);
-                }
+                deleteLastCodePoint(queryBuffer);
                 continue;
             }
 
-            // Printable char
-            if (ch >= 32 && ch <= 126) {
-                queryBuffer.append((char) ch);
+            if (!Character.isISOControl(ch)) {
+                queryBuffer.appendCodePoint(ch);
                 if (isEscaped) {
                     isEscaped = false;
                     continue;
@@ -232,15 +229,14 @@ public class CommandLineInterface {
             // Backspace
             if (ch == '\b' || ch == 127) {
                 if (inputBuffer.length() > 0) {
-                    inputBuffer.deleteCharAt(inputBuffer.length() - 1);
+                    deleteLastCodePoint(inputBuffer);
                     writeToTelnet("\b \b");
                 }
                 continue;
             }
 
-            // Printable character
-            if (ch >= 32 && ch <= 126) {
-                inputBuffer.append((char) ch);
+            if (!Character.isISOControl(ch)) {
+                inputBuffer.appendCodePoint(ch);
                 writeToTelnet(ch);
             }
         }
@@ -250,6 +246,13 @@ public class CommandLineInterface {
             return queuedQuery.poll();
         }
         return null;
+    }
+
+    private void deleteLastCodePoint(StringBuilder buffer) {
+        if (buffer.length() > 0) {
+            int start = buffer.offsetByCodePoints(buffer.length(), -1);
+            buffer.delete(start, buffer.length());
+        }
     }
 
     private void flushBuffer() {
@@ -275,9 +278,9 @@ public class CommandLineInterface {
         inputBuffer.setLength(0);
     }
 
-    private void writeToTelnet(int charCode) {
+    private void writeToTelnet(int codePoint) {
         if (telnetHandler.isTelnet()) {
-            writer.write(charCode);
+            writer.write(Character.toChars(codePoint));
             writer.flush();
         }
     }
