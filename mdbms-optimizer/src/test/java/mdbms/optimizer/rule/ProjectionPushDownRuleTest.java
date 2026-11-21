@@ -22,7 +22,6 @@ import mdbms.optimizer.QueryPlanPrinter;
 import mdbms.optimizer.binder.BindingContext;
 import mdbms.optimizer.binder.QueryBinder;
 import mdbms.optimizer.binder.TableBinding;
-import mdbms.optimizer.lexer.ShaylaLexer;
 import mdbms.optimizer.parser.ShaylaParser;
 import org.junit.jupiter.api.Test;
 
@@ -94,7 +93,7 @@ class ProjectionPushDownRuleTest {
 
     // resolve kolom milik node pertama bertipe type
     private static List<String> usedColumns(String sql, QueryNodeType type) {
-        QueryTree tree = new ShaylaParser(new ShaylaLexer("")).parseToTree(sql);
+        QueryTree tree = new ShaylaParser().parseToTree(sql);
         BindingContext bindings = new QueryBinder(catalog()).bind(tree);
         return ProjectionPushDownRule.resolvedColumnsUsedBy(find(tree, type), bindings).stream()
             .map(ColumnReference::toString).toList();
@@ -140,7 +139,7 @@ class ProjectionPushDownRuleTest {
     // parse + bind, opsional seleksi dulu, lalu proyeksi
     private String optimize(String sql, boolean pushSelections) {
         Main.InMemorySchemaCatalog catalog = catalog();
-        QueryTree tree = new ShaylaParser(new ShaylaLexer("")).parseToTree(sql);
+        QueryTree tree = new ShaylaParser().parseToTree(sql);
         BindingContext bindings = new QueryBinder(catalog).bind(tree);
         OptimizationContext context = new OptimizationContext(bindings, catalog, catalog, null);
         if (pushSelections) {
@@ -223,7 +222,7 @@ class ProjectionPushDownRuleTest {
     @Test
     void isIdempotent() {
         Main.InMemorySchemaCatalog catalog = catalog();
-        QueryTree tree = new ShaylaParser(new ShaylaLexer("")).parseToTree(
+        QueryTree tree = new ShaylaParser().parseToTree(
             "SELECT students.name FROM students JOIN takes ON students.id = takes.nim;");
         OptimizationContext context = new OptimizationContext(
             new QueryBinder(catalog).bind(tree), catalog, catalog, null);
@@ -234,7 +233,7 @@ class ProjectionPushDownRuleTest {
 
     @Test
     void onlyCollapsesWithoutBindings() {
-        QueryTree tree = new ShaylaParser(new ShaylaLexer("")).parseToTree(
+        QueryTree tree = new ShaylaParser().parseToTree(
             "SELECT students.name FROM students, takes;");
         assertEquals(1, countProjects(new QueryPlanPrinter().printPlan(rule.apply(tree, null))));
     }
@@ -309,7 +308,7 @@ class ProjectionPushDownRuleTest {
                 + "ORDER BY students.name LIMIT 10;");
         for (String sql : queries) {
             Main.InMemorySchemaCatalog catalog = catalog();
-            QueryTree tree = new ShaylaParser(new ShaylaLexer("")).parseToTree(sql);
+            QueryTree tree = new ShaylaParser().parseToTree(sql);
             BindingContext bindings = new QueryBinder(catalog).bind(tree);
             OptimizationContext context = new OptimizationContext(bindings, catalog, catalog, null);
             QueryTree result = rule.apply(applyBelow(tree, new SelectionPushDownRule(), context), context);
@@ -354,7 +353,7 @@ class ProjectionPushDownRuleTest {
 
     @Test
     void returnsNullWhenColumnCannotBeResolved() {
-        QueryTree tree = new ShaylaParser(new ShaylaLexer("")).parseToTree("SELECT name FROM students;");
+        QueryTree tree = new ShaylaParser().parseToTree("SELECT name FROM students;");
         assertNull(ProjectionPushDownRule.resolvedColumnsUsedBy(tree, null));
         assertNull(ProjectionPushDownRule.resolve(col(null, "name"), new BindingContext()));
     }
