@@ -49,31 +49,32 @@ class CommandLineInterfaceTest {
     @Test
     void readQueryEchoesUnicodeInputForTelnetClients() throws IOException {
         ByteArrayOutputStream input = new ByteArrayOutputStream();
-        input.write(new byte[] {(byte) 255, (byte) 253, 1});
+        input.write(new byte[] { (byte) 255, (byte) 253, 1 });
         input.write("SELECT 'café 😀';\r\n".getBytes(StandardCharsets.UTF_8));
 
         TestSocket socket = new TestSocket(input.toByteArray());
         CommandLineInterface cli = newCli(socket);
 
         assertEquals("SELECT 'café 😀';", cli.readQuery());
-        assertEquals("ShaylaDB> SELECT 'café 😀';\n", socket.outputAsString());
+        assertEquals("ShaylaDB> SELECT 'café 😀';" + System.lineSeparator(), socket.outputAsString());
     }
 
     @Test
     void readQueryReturnsToMainPromptAfterTerminatingAContinuedStatement() throws IOException {
         ByteArrayOutputStream input = new ByteArrayOutputStream();
-        input.write("What\r\ndeheck;\r\nHumm;\r\n".getBytes(StandardCharsets.UTF_8));
+        input.write("What\r\nis;\r\nthis;\r\n".getBytes(StandardCharsets.UTF_8));
         TestSocket socket = new TestSocket(input.toByteArray());
         CommandLineInterface cli = newCli(socket);
+        String endline = System.lineSeparator();
 
-        assertEquals("What\ndeheck;", cli.readQuery());
-        assertEquals("Humm;", cli.readQuery());
+        assertEquals("What\nis;", cli.readQuery());
+        assertEquals("this;", cli.readQuery());
         assertNull(cli.readQuery());
 
         String output = socket.outputAsString();
-        assertTrue(output.contains("ShaylaDB> What\n\t-> deheck;\n"));
-        assertTrue(output.contains("\nShaylaDB> Humm;\n"));
-        assertFalse(output.contains("\t-> Humm;"));
+        assertTrue(output.contains("ShaylaDB> What" + endline + "\t-> is;" + endline));
+        assertTrue(output.contains(endline + "ShaylaDB> this;" + endline));
+        assertFalse(output.contains("\t-> this;"));
     }
 
     @Test
@@ -112,7 +113,7 @@ class CommandLineInterfaceTest {
     @Test
     void readQueryRejectsOversizedTelnetQuery() throws IOException {
         ByteArrayOutputStream input = new ByteArrayOutputStream();
-        input.write(new byte[] {(byte) 255, (byte) 253, 1});
+        input.write(new byte[] { (byte) 255, (byte) 253, 1 });
         input.write("X".repeat(17).getBytes(StandardCharsets.UTF_8));
 
         TestSocket socket = new TestSocket(input.toByteArray());
@@ -127,7 +128,7 @@ class CommandLineInterfaceTest {
 
     @Test
     void readQueryRejectsTelnetInputTrickledPastAbsoluteDeadline() throws IOException {
-        byte[] telnetInput = new byte[] {(byte) 255, (byte) 253, 1};
+        byte[] telnetInput = new byte[] { (byte) 255, (byte) 253, 1 };
         byte[] queryInput = "SELECT 1234567890;\r\n".getBytes(StandardCharsets.UTF_8);
         byte[] input = new byte[telnetInput.length + queryInput.length];
         System.arraycopy(telnetInput, 0, input, 0, telnetInput.length);
