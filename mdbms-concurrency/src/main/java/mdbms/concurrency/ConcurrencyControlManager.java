@@ -8,6 +8,8 @@ import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.locks.LockSupport;
+import java.util.function.Supplier;
 
 import mdbms.api.IConcurrencyControl;
 import mdbms.api.IFailureRecoveryManager;
@@ -236,12 +238,14 @@ public final class ConcurrencyControlManager implements IConcurrencyControl {
     public AccessStatus requestWrite(int txId, DataItem data, Object oldVal, Object newVal) {
         AccessStatus status = request(txId, data, true);
         if (status == AccessStatus.GRANTED && frm != null && (oldVal != null || newVal != null)) {
-            LogType opType = (oldVal == null) ? LogType.INSERT : (newVal == null ? LogType.DELETE : LogType.UPDATE);
-            RecordImage beforeImg = toRecordImage(oldVal);
-            RecordImage afterImg = toRecordImage(newVal);
-            RecoveryResult result = frm.writeDataLog(txId, opType, data.tableName(), data.rowId(), beforeImg, afterImg);
-            if (result == null || !result.isSuccess()) {
-                throw new IllegalStateException("Unable to persist " + opType.toString().toLowerCase() +" log for transaction " + txId);
+            Transaction tx = activeTransactions.get(txId);
+            try {
+                persistDataLog(txId, data, oldVal, newVal);
+            } catch (RuntimeException failure) {
+                if (tx != null && activeTransactions.containsKey(txId)) {
+                    failAndAbort(tx, "Unable to persist data log");
+                }
+                throw failure;
             }
         }
         return status;
@@ -250,6 +254,71 @@ public final class ConcurrencyControlManager implements IConcurrencyControl {
     @Override
     public AccessStatus requestWrite(int txId, DataItem data) {
         return request(txId, data, true);
+    }
+
+    /**
+     * Acquires both row identities and writes the relocation log before the
+     * caller is allowed to change storage.
+     */
+    public AccessStatus requestRelocation(
+            int txId,
+            DataItem oldItem,
+            DataItem newItem,
+            Object oldValues,
+            Object newValues) {
+        Objects.requireNonNull(oldItem, "oldItem");
+        Objects.requireNonNull(newItem, "newItem");
+        Transaction tx = activeTransactions.get(txId);
+        if (tx == null) return AccessStatus.ABORTED;
+        synchronized (tx) {
+            if (tx.getState() != TransactionState.ACTIVE) return AccessStatus.ABORTED;
+            return prepareRelocationLocked(tx, oldItem, newItem, oldValues, newValues);
+        }
+    }
+
+    /**
+     * Runs a relocation as one CCM operation. Holding the transaction monitor
+     * across the callback prevents commit/abort from releasing protection
+     * between the WAL preparation and the physical move.
+     */
+    @Override
+    public <T> T executeRelocation(
+            int txId,
+            DataItem oldItem,
+            DataItem newItem,
+            Object oldValues,
+            Object newValues,
+            Supplier<T> physicalChange) {
+        Objects.requireNonNull(oldItem, "oldItem");
+        Objects.requireNonNull(newItem, "newItem");
+        Objects.requireNonNull(physicalChange, "physicalChange");
+        Transaction tx = requireTransaction(txId);
+
+        for (;;) {
+            synchronized (tx) {
+                if (tx.getState() != TransactionState.ACTIVE) {
+                    throw new IllegalStateException("Transaction " + txId + " is " + tx.getState());
+                }
+                AccessStatus status = prepareRelocationLocked(
+                        tx, oldItem, newItem, oldValues, newValues);
+                if (status == AccessStatus.WAITING) {
+                    // Release the transaction monitor while waiting so the
+                    // other transaction can commit and release its locks.
+                } else if (status == AccessStatus.ABORTED) {
+                    throw new IllegalStateException("Relocation was aborted for transaction " + txId);
+                } else {
+                    try {
+                        return physicalChange.get();
+                    } catch (RuntimeException failure) {
+                        if (activeTransactions.containsKey(txId)) {
+                            failAndAbort(tx, "Relocation failed");
+                        }
+                        throw failure;
+                    }
+                }
+            }
+            LockSupport.parkNanos(10_000_000L);
+        }
     }
 
     @Override
@@ -291,6 +360,83 @@ public final class ConcurrencyControlManager implements IConcurrencyControl {
         if (frm == null) return true;
         RecoveryResult result = frm.writeTransactionLog(txId, LogType.COMMIT);
         return result != null && result.isSuccess() && frm.flushLogUpTo(result.getLsn());
+    }
+
+    private AccessStatus prepareRelocationLocked(
+            Transaction tx,
+            DataItem oldItem,
+            DataItem newItem,
+            Object oldValues,
+            Object newValues) {
+        if (oldItem.equals(newItem)) {
+            AccessStatus status = protocol.requestWrite(tx, oldItem);
+            if (status == AccessStatus.ABORTED && tx.getState() == TransactionState.ACTIVE) {
+                failAndAbort(tx, "Protocol aborted relocation");
+                return status;
+            }
+            if (status != AccessStatus.GRANTED || frm == null) return status;
+            try {
+                persistDataLog(tx.getId(), oldItem, oldValues, newValues);
+                return status;
+            } catch (RuntimeException failure) {
+                failAndAbort(tx, "Unable to persist relocation log");
+                throw failure;
+            }
+        }
+
+        AccessStatus status = protocol.requestWriteBatch(tx, List.of(oldItem, newItem));
+        if (status == AccessStatus.ABORTED && tx.getState() == TransactionState.ACTIVE) {
+            failAndAbort(tx, "Protocol aborted relocation");
+            return status;
+        }
+        if (status != AccessStatus.GRANTED || frm == null) return status;
+
+        try {
+            // record the complete relocation once, after both identities are protected and before storage is changed.
+            persistRelocationLog(tx.getId(), oldItem, newItem, oldValues, newValues);
+            return status;
+        } catch (RuntimeException failure) {
+            failAndAbort(tx, "Unable to persist relocation log");
+            throw failure;
+        }
+    }
+
+    private void persistDataLog(int txId, DataItem data, Object oldVal, Object newVal) {
+        LogType opType = (oldVal == null) ? LogType.INSERT
+                : (newVal == null ? LogType.DELETE : LogType.UPDATE);
+        RecoveryResult result = frm.writeDataLog(
+                txId,
+                opType,
+                data.tableName(),
+                data.rowId(),
+                toRecordImage(oldVal),
+                toRecordImage(newVal));
+        if (result == null || !result.isSuccess()
+                || !frm.flushLogUpTo(result.getLsn())) {
+            throw new IllegalStateException(
+                    "Unable to persist " + opType.toString().toLowerCase()
+                            + " log for transaction " + txId);
+        }
+    }
+
+    private void persistRelocationLog(
+            int txId,
+            DataItem oldItem,
+            DataItem newItem,
+            Object oldValues,
+            Object newValues) {
+        RecoveryResult result = frm.writeRelocationLog(
+                txId,
+                oldItem.tableName(),
+                oldItem.rowId(),
+                newItem.rowId(),
+                toRecordImage(oldValues),
+                toRecordImage(newValues));
+        if (result == null || !result.isSuccess()
+                || !frm.flushLogUpTo(result.getLsn())) {
+            throw new IllegalStateException(
+                    "Unable to persist relocation log for transaction " + txId);
+        }
     }
 
     private void failAndAbort(Transaction tx, String reason) {
