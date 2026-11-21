@@ -141,19 +141,7 @@ public class QueryBinder {
         if (tableName == null || tableName.isBlank()) {
             throw semanticError("Table name cannot be null or blank");
         }
-        TableSchema schema = schemaCatalog.getTableSchema(tableName);
-        if (schema == null) {
-            // Case-insensitive fallback lookup if listTable is supported
-            List<String> tables = schemaCatalog.listTable();
-            if (tables != null) {
-                for (String t : tables) {
-                    if (t.equalsIgnoreCase(tableName)) {
-                        schema = schemaCatalog.getTableSchema(t);
-                        break;
-                    }
-                }
-            }
-        }
+        TableSchema schema = new DdlValidator(schemaCatalog).findTable(tableName);
         if (schema == null) {
             throw semanticError("Table '" + tableName + "' does not exist", tableName);
         }
@@ -169,7 +157,7 @@ public class QueryBinder {
 
         if (tableName != null && !tableName.isBlank()) {
             // Qualified reference: table.col
-            TableBinding tb = context.getTableBinding(tableName);
+            TableBinding tb = context.getTableBindingByAlias(tableName);
             if (tb == null) {
                 throw semanticError("Table '" + tableName + "' is not referenced in the query", tableName);
             }
@@ -261,7 +249,7 @@ public class QueryBinder {
             if (!column.isWildcard()) {
                 expanded.add(column);
             } else if (column.getTableName() != null) {
-                TableBinding table = context.getTableBinding(column.getTableName());
+                TableBinding table = context.getTableBindingByAlias(column.getTableName());
                 if (table == null) {
                     throw semanticError("Table '" + column.getTableName() + "' is not referenced in the query");
                 }
@@ -279,7 +267,7 @@ public class QueryBinder {
 
     private List<ColumnReference> visibleColumns(QueryTree node, BindingContext context) {
         if (node.getNodeType() == QueryNodeType.TABLE_SCAN) {
-            TableBinding table = context.getTableBinding(node.getTableName());
+            TableBinding table = context.getTableBindingByAlias(node.getBindingName());
             return table.getSchema().columns().stream()
                 .map(column -> new ColumnReference(table.getAlias(), column.name())).toList();
         }
@@ -347,22 +335,49 @@ public class QueryBinder {
         if (node == null) {
             return;
         }
+        if (node.getNodeType() == QueryNodeType.CREATE_TABLE) {
+            try {
+                TableSchema schema = new DdlValidator(schemaCatalog).validateCreate(node);
+                node.setTableDefinition(schema);
+                context.registerTableBinding(schema.tableName(), new TableBinding(schema.tableName(), null, schema));
+            } catch (QuerySemanticException error) {
+                if (errorCollector != null) errorCollector.addException(error);
+                throw error;
+            }
+            return;
+        }
         if (node.getNodeType() == QueryNodeType.TABLE_SCAN && node.getTableName() != null) {
             String tblName = node.getTableName();
             TableSchema schema = resolveTable(tblName);
-            TableBinding binding = new TableBinding(tblName, tblName, schema);
-            context.registerTableBinding(tblName, binding);
+            node.setTableName(schema.tableName());
+            String alias = node.getBindingName();
+            if (context.getTableBindingByAlias(alias) != null) {
+                throw semanticError("Duplicate table name or alias '" + alias + "'", alias);
+            }
+            TableBinding binding = new TableBinding(schema.tableName(), alias, schema);
+            context.registerTableBinding(alias, binding);
             for (ColumnDefinition col : schema.columns()) {
-                ColumnReference ref = new ColumnReference(tblName, col.name());
-                context.registerColumnBinding(ref, new ColumnBinding(tblName, tblName, col));
+                ColumnReference ref = new ColumnReference(alias, col.name());
+                context.registerColumnBinding(ref, new ColumnBinding(schema.tableName(), alias, col));
             }
         } else if (node.getTableName() != null && (
             node.getNodeType() == QueryNodeType.UPDATE ||
             node.getNodeType() == QueryNodeType.INSERT ||
             node.getNodeType() == QueryNodeType.DELETE ||
-            node.getNodeType() == QueryNodeType.CREATE_INDEX)) {
+            node.getNodeType() == QueryNodeType.CREATE_INDEX ||
+            node.getNodeType() == QueryNodeType.DROP_TABLE)) {
             String tblName = node.getTableName();
             TableSchema schema = resolveTable(tblName);
+            node.setTableName(schema.tableName());
+            tblName = schema.tableName();
+            if (node.getNodeType() == QueryNodeType.DROP_TABLE) {
+                try {
+                    new DdlValidator(schemaCatalog).validateDrop(node);
+                } catch (QuerySemanticException error) {
+                    if (errorCollector != null) errorCollector.addException(error);
+                    throw error;
+                }
+            }
             TableBinding binding = new TableBinding(tblName, tblName, schema);
             context.registerTableBinding(tblName, binding);
             for (ColumnDefinition col : schema.columns()) {

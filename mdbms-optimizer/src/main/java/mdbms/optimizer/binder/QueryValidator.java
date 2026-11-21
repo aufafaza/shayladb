@@ -130,9 +130,6 @@ public class QueryValidator implements IQueryValidator {
             case COLUMN_REFERENCE -> {
                 ColumnReference ref = new ColumnReference(node.getTableName(), node.getValue());
                 ColumnBinding cb = context.getColumnBinding(ref);
-                if (cb == null && node.getTableName() != null) {
-                    cb = context.getColumnBinding(new ColumnReference(null, node.getValue()));
-                }
                 if (cb == null) {
                     throw semanticError(
                         "Column '" + node.getValue() + "' is not bound in context",
