@@ -283,9 +283,9 @@ class HeapFileTest {
         assertEquals(2, heapFile.blockCount());
     }
 
-    // ruang bekas baris yang dihapus di block lama dipakai insert berikutnya
+    // ruang bekas baris yang dihapus ditahan, insert lain ga boleh ngambil jadi undo delete pasti muat di RowId asal
     @Test
-    void deletedRowSpaceOnEarlierBlockIsReused(){
+    void deletedRowSpaceIsHeldSoUndoFitsAtOriginalRowId(){
         RowId early = heapFile.insert(List.of(1, "a".repeat(1400)));
         heapFile.insert(List.of(2, "b".repeat(1400)));
         heapFile.insert(List.of(3, "c".repeat(1400)));
@@ -293,11 +293,52 @@ class HeapFileTest {
         assertEquals(2, heapFile.blockCount());
 
         heapFile.delete(early);
+        RowId other = heapFile.insert(List.of(5, "e".repeat(1400)));
+
+        assertEquals(2, other.blockNumber());
+        assertTrue(heapFile.insertAt(early, List.of(1, "a".repeat(1400))));
+        assertEquals(List.of(1, "a".repeat(1400)), heapFile.fetch(early).values());
+    }
+
+    // ruang bekas baris yang dihapus balik lagi abis dilepas pas ga ada transaksi aktif, termasuk di block lama
+    @Test
+    void deletedRowSpaceOnEarlierBlockIsReusedAfterRelease(){
+        RowId early = heapFile.insert(List.of(1, "a".repeat(1400)));
+        heapFile.insert(List.of(2, "b".repeat(1400)));
+        heapFile.insert(List.of(3, "c".repeat(1400)));
+        heapFile.insert(List.of(4, "d".repeat(1400)));
+        assertEquals(2, heapFile.blockCount());
+
+        heapFile.delete(early);
+        assertEquals(1, heapFile.releaseAllReservations());
         RowId reused = heapFile.insert(List.of(5, "e".repeat(1400)));
 
         assertEquals(0, reused.blockNumber());
         assertEquals(2, heapFile.blockCount());
         assertEquals(List.of(5, "e".repeat(1400)), heapFile.fetch(reused).values());
+    }
+
+    // relokasi yang di abort tetap bisa balikin baris ke RowId asalnya walau transaksi lain insert di halaman yang sama
+    @Test
+    void abortedRelocationRestoresRowEvenAfterAnotherInsert(){
+        RowId original = heapFile.insert(List.of(1, "a".repeat(1900)));
+        heapFile.insert(List.of(2, "b".repeat(1900)));
+
+        // baris 1 ga muat di tempat jadi pindah, lokasi baru diisi dulu baru yang lama dihapus
+        List<Object> moved = List.of(1, "c".repeat(3000));
+        RowId destination = heapFile.reserve(moved);
+        heapFile.insertAt(destination, moved);
+        heapFile.delete(original);
+
+        // transaksi lain insert, ruang bekas baris 1 ga boleh kepake
+        RowId other = heapFile.insert(List.of(3, "d".repeat(1900)));
+        assertNotEquals(original.blockNumber(), other.blockNumber());
+
+        // undo relokasi, hapus di lokasi baru terus taruh lagi isi lama di RowId asal
+        heapFile.delete(destination);
+        assertTrue(heapFile.insertAt(original, List.of(1, "a".repeat(1900))));
+        assertEquals(List.of(1, "a".repeat(1900)), heapFile.fetch(original).values());
+        assertEquals(List.of(3, "d".repeat(1900)), heapFile.fetch(other).values());
     }
 
     // deleteIfPresent balikin baris yang dihapus, lalu null buat baris, slot, atau block yang udah ga ada
