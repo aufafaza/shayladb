@@ -27,7 +27,6 @@ import mdbms.optimizer.binder.BindingContext;
 import mdbms.optimizer.binder.QueryBinder;
 import mdbms.optimizer.cost.CardinalityEstimator;
 import mdbms.optimizer.cost.SystemCostEstimator;
-import mdbms.optimizer.lexer.ShaylaLexer;
 import mdbms.optimizer.parser.ShaylaParser;
 import org.junit.jupiter.api.Test;
 
@@ -66,7 +65,7 @@ class IndexSelectionRuleTest {
     }
 
     private QueryTree optimize(String sql, IndexedCatalog catalog) {
-        QueryTree tree = new ShaylaParser(new ShaylaLexer("")).parseToTree(sql);
+        QueryTree tree = new ShaylaParser().parseToTree(sql);
         BindingContext bindings = new QueryBinder(catalog).bind(tree);
         OptimizationContext context = new OptimizationContext(bindings, catalog, catalog, null);
         return rule.apply(findSelect(tree), context);
@@ -76,7 +75,7 @@ class IndexSelectionRuleTest {
     private QueryTree optimizeWithCost(String sql, int rows, int blocks, IndexedCatalog catalog) {
         catalog.addTable(catalog.getTableSchema("students"), new Statistic("students", rows, blocks, 40, 10,
             Map.of("id", rows, "name", 10, "gpa", 40)));
-        QueryTree tree = new ShaylaParser(new ShaylaLexer("")).parseToTree(sql);
+        QueryTree tree = new ShaylaParser().parseToTree(sql);
         BindingContext bindings = new QueryBinder(catalog).bind(tree);
         OptimizationContext context = new OptimizationContext(bindings, catalog, catalog,
             new SystemCostEstimator(catalog, new CardinalityEstimator()));
@@ -106,10 +105,10 @@ class IndexSelectionRuleTest {
 
     @Test
     void matchesOnlySelectionsSittingOnATable() {
-        QueryTree tree = new ShaylaParser(new ShaylaLexer(""))
+        QueryTree tree = new ShaylaParser()
             .parseToTree("SELECT * FROM students, takes WHERE students.id = takes.nim");
 
-        assertTrue(rule.matches(findSelect(new ShaylaParser(new ShaylaLexer(""))
+        assertTrue(rule.matches(findSelect(new ShaylaParser()
             .parseToTree("SELECT * FROM students WHERE id = 1"))));
         assertFalse(rule.matches(findSelect(tree)));
         assertFalse(rule.matches(scan("students")));
@@ -161,7 +160,7 @@ class IndexSelectionRuleTest {
 
     @Test
     void notEqualNeverUsesIndex() {
-        QueryTree select = findSelect(new ShaylaParser(new ShaylaLexer(""))
+        QueryTree select = findSelect(new ShaylaParser()
             .parseToTree("SELECT * FROM students WHERE id <> 7"));
         IndexedCatalog catalog = catalog();
         OptimizationContext context = new OptimizationContext(
@@ -212,7 +211,7 @@ class IndexSelectionRuleTest {
 
     @Test
     void withoutContextNothingChanges() {
-        QueryTree select = findSelect(new ShaylaParser(new ShaylaLexer(""))
+        QueryTree select = findSelect(new ShaylaParser()
             .parseToTree("SELECT * FROM students WHERE id = 7"));
 
         assertSame(select, rule.apply(select, null));
@@ -289,7 +288,7 @@ class IndexSelectionRuleTest {
 
     // selection pushdown dulu, baru index dipasang di tiap SELECT yang nempel ke tabel
     private QueryTree pushThenIndex(String sql, IndexedCatalog catalog) {
-        QueryTree tree = new ShaylaParser(new ShaylaLexer("")).parseToTree(sql);
+        QueryTree tree = new ShaylaParser().parseToTree(sql);
         BindingContext bindings = new QueryBinder(catalog).bind(tree);
         OptimizationContext context = new OptimizationContext(bindings, catalog, catalog, null);
         QueryTree pushed = new SelectionPushDownRule().apply(findSelect(tree), context);
@@ -357,7 +356,7 @@ class IndexSelectionRuleTest {
     @Test
     void originalTreeIsNotModified() {
         IndexedCatalog catalog = catalog();
-        QueryTree tree = new ShaylaParser(new ShaylaLexer(""))
+        QueryTree tree = new ShaylaParser()
             .parseToTree("SELECT * FROM students WHERE id = 7 AND gpa > 3.0");
         BindingContext bindings = new QueryBinder(catalog).bind(tree);
         String before = tree.formatTree();
@@ -378,7 +377,7 @@ class IndexSelectionRuleTest {
             "SELECT * FROM students WHERE id <> 1 AND name <> 'b'",
         };
         for (String sql : queries) {
-            QueryTree select = findSelect(new ShaylaParser(new ShaylaLexer("")).parseToTree(sql));
+            QueryTree select = findSelect(new ShaylaParser().parseToTree(sql));
             int before = QueryTreeRewrites.splitConjuncts(select.getConditions().get(0)).size();
 
             QueryTree result = optimize(sql, catalog);
