@@ -12,6 +12,7 @@ import mdbms.models.query.ColumnReference;
 import mdbms.models.query.ExpressionNode;
 import mdbms.models.query.ExpressionTree;
 import mdbms.models.schema.ColumnDefinition;
+import mdbms.optimizer.exception.QuerySemanticException;
 
 public class BindingContext {
     private final Map<String, TableBinding> tableBindings = new LinkedHashMap<>();
@@ -20,10 +21,10 @@ public class BindingContext {
     public void registerTableBinding(String alias, TableBinding binding) {
         Objects.requireNonNull(binding, "binding must not be null");
         String key = (alias != null && !alias.isBlank()) ? alias : binding.getTableName();
-        tableBindings.put(key, binding);
-        if (!tableBindings.containsKey(binding.getTableName())) {
-            tableBindings.put(binding.getTableName(), binding);
+        if (getTableBindingByAlias(key) != null) {
+            throw new QuerySemanticException("Duplicate table name or alias '" + key + "'", key);
         }
+        tableBindings.put(key, binding);
     }
 
     public void registerColumnBinding(ColumnReference reference, ColumnBinding binding) {
@@ -33,6 +34,21 @@ public class BindingContext {
     }
 
     public TableBinding getTableBinding(String alias) {
+        TableBinding direct = getTableBindingByAlias(alias);
+        if (direct != null) return direct;
+        // Physical-name lookup is useful for catalog consumers, but a self join
+        // has no unique binding for its physical table name.
+        TableBinding found = null;
+        for (TableBinding binding : tableBindings.values()) {
+            if (binding.getTableName().equalsIgnoreCase(alias)) {
+                if (found != null) return null;
+                found = binding;
+            }
+        }
+        return found;
+    }
+
+    public TableBinding getTableBindingByAlias(String alias) {
         if (alias == null || alias.isBlank()) {
             return null;
         }
@@ -43,10 +59,6 @@ public class BindingContext {
         for (Map.Entry<String, TableBinding> entry : tableBindings.entrySet()) {
             if (entry.getKey().equalsIgnoreCase(alias)) {
                 return entry.getValue();
-            }
-            TableBinding tb = entry.getValue();
-            if (tb.getAlias().equalsIgnoreCase(alias) || tb.getTableName().equalsIgnoreCase(alias)) {
-                return tb;
             }
         }
         return null;
@@ -73,8 +85,7 @@ public class BindingContext {
                     }
                 } else if (key.getTableName() != null && key.getTableName().equalsIgnoreCase(reference.getTableName())) {
                     return entry.getValue();
-                } else if (entry.getValue().getTableAlias().equalsIgnoreCase(reference.getTableName())
-                    || entry.getValue().getTableName().equalsIgnoreCase(reference.getTableName())) {
+                } else if (entry.getValue().getTableAlias().equalsIgnoreCase(reference.getTableName())) {
                     return entry.getValue();
                 }
             }

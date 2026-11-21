@@ -60,10 +60,10 @@ public class PlanTranslator {
                     case DEFAULT:
                     case LINEAR_SCAN:
                         return new SequentialScanOperator(dataAccess, schemaCatalog, concurrencyControl, txId,
-                                queryTree.getTableName());
+                                queryTree.getTableName(), queryTree.getBindingName());
                     case INDEX_SCAN:
                         return new IndexScanOperator(dataAccess, schemaCatalog, concurrencyControl, txId,
-                                queryTree.getTableName(), queryTree.getIndexScan());
+                                queryTree.getTableName(), queryTree.getBindingName(), queryTree.getIndexScan());
                     default:
                         throw new RuntimeException("Invalid algorithm for table scan: " + queryTree.getAlgorithm());
                 }
@@ -101,12 +101,16 @@ public class PlanTranslator {
             case CREATE_INDEX:
                 return new CreateIndexOperator(schemaCatalog, new IndexInfo(queryTree.getIndexName(),
                         queryTree.getTableName(), queryTree.getIndexColumn().getColumnName(), IndexType.BPLUS_TREE));
-            // case BEGIN:
-            //     return new BeginOperator(txId);
-            // case COMMIT:
-            //     return new CommitOperator(concurrencyControl, txId);
-            // case ABORT:
-            //     return new AbortOperator(concurrencyControl, txId);
+            case BEGIN:
+                return new BeginOperator(txId);
+            case CREATE_TABLE:
+                return new CreateTableOperator(schemaCatalog, queryTree.getTableDefinition());
+            case DROP_TABLE:
+                return new DropTableOperator(schemaCatalog, queryTree.getTableName(), queryTree.getDropBehavior());
+            case COMMIT:
+                return new CommitOperator(concurrencyControl, txId);
+            case ABORT:
+                return new AbortOperator(concurrencyControl, txId);
             default:
                 return emptyOperator();
         }
