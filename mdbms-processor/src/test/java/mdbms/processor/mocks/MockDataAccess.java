@@ -16,7 +16,7 @@ import mdbms.models.data.RowId;
 import mdbms.models.data.Rows;
 
 public final class MockDataAccess implements IDataAccess {
-    public static final String TABLE_NAME = "table";
+    public static final String TABLE_NAME = "records";
     public static final String ID_COLUMN = "id";
     public static final String SECOND_COLUMN = "other_id";
     public static final String NAME_COLUMN = "name";
