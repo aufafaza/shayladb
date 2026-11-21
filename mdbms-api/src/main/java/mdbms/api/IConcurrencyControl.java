@@ -27,7 +27,13 @@ public interface IConcurrencyControl {
     AccessStatus requestWrite(int txId, DataItem data);
 
     default WriteContext requestWriteWithContext(int txId, DataItem data, Object oldVal, Object newVal) {
-        return new WriteContext(txId, requestWrite(txId, data, oldVal, newVal), txId, data.tableName(), data.getRowId());
+        AccessStatus status = requestWrite(txId, data, oldVal, newVal);
+        if (status != AccessStatus.GRANTED) {
+            return WriteContext.denied(txId, status, data != null ? data.tableName() : null,
+                    data != null ? data.getRowId() : null);
+        }
+        return new WriteContext(txId, status, 0L, data != null ? data.tableName() : null,
+                data != null ? data.getRowId() : null);
     }
 
     /** Protects and logs both identities before executing the physical change. */
