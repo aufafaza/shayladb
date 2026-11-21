@@ -54,9 +54,10 @@ public class Main {
                 System.out.println("  [2] Parser  (Output Unbound QueryTree & ExpressionTree)");
                 System.out.println("  [3] Binder  (Parse + Bind + Validate: Output Bound QueryTree & Binding Tables)");
                 System.out.println("  [4] Cost    (Parse + Bind + Estimate Cardinality & I/O Cost)");
-                System.out.println("  [5] All     (Lexer + Parser + Binder & Validator + Cost Estimator)");
+                System.out.println("  [5] All     (Lexer + Parser + Binder & Validator + Cost Estimator + Optimizer)");
                 System.out.println("  [6] Tables  (View or Add Table Schema & Statistics Stubs)");
                 System.out.println("  [7] Plan    (Parse + Bind + Validate: Output Unoptimized Execution Plan)");
+                System.out.println("  [8] Optimize (Plan Before & After Optimization with Total Cost)");
                 System.out.println("  [0] Exit");
                 System.out.print("Choice: ");
 
@@ -74,6 +75,7 @@ public class Main {
                 }
                 if (!choice.equals("1") && !choice.equals("2") && !choice.equals("3")
                     && !choice.equals("4") && !choice.equals("5") && !choice.equals("7")
+                    && !choice.equals("8") && !choice.equalsIgnoreCase("optimize")
                     && !choice.equalsIgnoreCase("plan")
                     && !choice.equalsIgnoreCase("lexer")
                     && !choice.equalsIgnoreCase("parser")
@@ -81,7 +83,7 @@ public class Main {
                     && !choice.equalsIgnoreCase("cost")
                     && !choice.equalsIgnoreCase("all")
                     && !choice.equalsIgnoreCase("both")) {
-                    System.out.println("Invalid choice. Please enter 1, 2, 3, 4, 5, 6, 7, or 0.");
+                    System.out.println("Invalid choice. Please enter 1, 2, 3, 4, 5, 6, 7, 8, or 0.");
                     continue;
                 }
 
@@ -119,6 +121,22 @@ public class Main {
         }
         if (mode.equals("7") || mode.equalsIgnoreCase("plan")) {
             runPlanMode(sql);
+        }
+        if (mode.equals("8") || mode.equalsIgnoreCase("optimize")
+            || mode.equals("5") || mode.equalsIgnoreCase("all")) {
+            runOptimizeMode(sql);
+        }
+    }
+
+    // QO-15: plan sebelum dan sesudah optimasi beserta biaya totalnya
+    public static void runOptimizeMode(String sql) {
+        System.out.println("\n--- [PLAN, before & after optimization] ---");
+        QueryErrorCollector collector = new QueryErrorCollector();
+        ShaylaParser parser = new ShaylaParser(new ShaylaLexer(sql, collector));
+        try {
+            System.out.print(new QueryOptimizer(CATALOG, parser).explainQuery(sql));
+        } catch (QueryProcessingException e) {
+            System.err.println(e.getFormattedError());
         }
     }
 

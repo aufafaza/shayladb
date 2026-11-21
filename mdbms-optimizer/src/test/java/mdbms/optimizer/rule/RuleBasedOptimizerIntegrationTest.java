@@ -75,7 +75,7 @@ class RuleBasedOptimizerIntegrationTest {
 
         assertEquals("""
             PROJECT [columns=[students.name, takes.code]]
-              JOIN [conditions=[(students.id = takes.nim)]]
+              JOIN [conditions=[(students.id = takes.nim)], algorithm=BLOCK_NESTED_LOOP_JOIN]
                 PROJECT [columns=[students.id, students.name]]
                   TABLE_SCAN [table=students, conditions=[(students.id = 7)], indexScan=idx_students_id id EQ 7, algorithm=INDEX_SCAN]
                 PROJECT [columns=[takes.nim, takes.code]]
@@ -103,7 +103,7 @@ class RuleBasedOptimizerIntegrationTest {
 
         assertEquals("""
             PROJECT [columns=[students.id, students.name, students.gpa, takes.nim, takes.code, takes.grade]]
-              JOIN [conditions=[(students.id = takes.nim)]]
+              JOIN [conditions=[(students.id = takes.nim)], algorithm=BLOCK_NESTED_LOOP_JOIN]
                 TABLE_SCAN [table=students, conditions=[(students.id = 7)], indexScan=idx_students_id id EQ 7, algorithm=INDEX_SCAN]
                 TABLE_SCAN [table=takes]
             """, print(run.optimized()));
