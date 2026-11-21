@@ -1,4 +1,4 @@
-package mdbms.processor.operator;
+package mdbms.processor.mocks;
 
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -9,7 +9,7 @@ import mdbms.models.schema.IndexInfo;
 import mdbms.models.schema.IndexType;
 import mdbms.models.schema.TableSchema;
 
-final class MockSchemaCatalog implements ISchemaCatalog {
+public final class MockSchemaCatalog implements ISchemaCatalog {
     private final Map<String, TableSchema> tables = new LinkedHashMap<>();
     private final List<IndexInfo> indexes = new ArrayList<>();
 

@@ -10,6 +10,10 @@ import mdbms.models.schema.ColumnDefinition;
 import mdbms.models.schema.DataType;
 import mdbms.models.schema.TableSchema;
 import mdbms.processor.IResultRow;
+import mdbms.processor.mocks.MockConcurrencyControl;
+import mdbms.processor.mocks.MockDataAccess;
+import mdbms.processor.mocks.MockSchemaCatalog;
+
 import org.junit.jupiter.api.Test;
 
 class SequentialScanOperatorTest {
@@ -44,7 +48,9 @@ class SequentialScanOperatorTest {
                 MockDataAccess.TABLE_NAME,
                 List.of(
                         new ColumnDefinition(MockDataAccess.ID_COLUMN, DataType.INTEGER, 0, false),
-                        new ColumnDefinition(MockDataAccess.SECOND_COLUMN, DataType.INTEGER, 0, false)),
+                        new ColumnDefinition(MockDataAccess.SECOND_COLUMN, DataType.INTEGER, 0, false),
+                        new ColumnDefinition(MockDataAccess.NAME_COLUMN, DataType.VARCHAR, 32, false),
+                        new ColumnDefinition(MockDataAccess.SCORE_COLUMN, DataType.FLOAT, 0, false)),
                 List.of(),
                 List.of()));
         return new SequentialScanOperator(

@@ -1,4 +1,4 @@
-package mdbms.processor.operator;
+package mdbms.processor.mocks;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -6,8 +6,9 @@ import java.util.List;
 import mdbms.models.data.RowId;
 import mdbms.processor.IResultRow;
 import mdbms.processor.ResultTableSchema;
+import mdbms.processor.operator.IQueryOperator;
 
-final class IntegerRowUtility {
+public final class IntegerRowUtility {
     private static IResultRow row(int value) {
         return new IResultRow() {
             @Override

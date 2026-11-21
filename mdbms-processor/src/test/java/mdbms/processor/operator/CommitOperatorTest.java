@@ -6,6 +6,8 @@ import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 import mdbms.processor.exception.TransactionCompletionException;
+import mdbms.processor.mocks.RecordingConcurrencyControl;
+
 import org.junit.jupiter.api.Test;
 
 class CommitOperatorTest {

@@ -6,6 +6,8 @@ import java.util.List;
 
 import org.junit.jupiter.api.Test;
 
+import mdbms.processor.mocks.IntegerRowUtility;
+
 class SortOperatorTest {
     @Test
     void sortAscending() {
