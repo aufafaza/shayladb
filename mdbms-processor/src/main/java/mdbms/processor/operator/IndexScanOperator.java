@@ -53,9 +53,7 @@ public class IndexScanOperator implements IQueryOperator, IRowProducingOperator 
     }
 
     @Override public void open() {
-        if(schemaCatalog.getTableSchema(tableName)==null) throw new IllegalArgumentException("Tabel tidak ditemukan: "+tableName);
-
-        schema = new ResultTableSchema(schemaCatalog.getTableSchema(tableName));
+        schema = getSchema();
         AccessPermission.read(concurrencyControlManager, transactionId, DataItem.tableRange(tableName));
         rowIds = lookup();
         position = 0;
