@@ -21,7 +21,9 @@ public interface IConcurrencyControl {
 
     AccessStatus requestWrite(int txId, DataItem data);
 
-    WriteContext requestWriteWithContext(int txId, DataItem data, Object oldVal, Object newVal);
+    default WriteContext requestWriteWithContext(int txId, DataItem data, Object oldVal, Object newVal) {
+        return new WriteContext(txId, requestWrite(txId, data, oldVal, newVal), txId, data.tableName(), data.getRowId());
+    }
 
     Transaction getTransaction(int txId);
 
