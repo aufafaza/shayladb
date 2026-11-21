@@ -139,11 +139,11 @@ public class DBMSServer {
         return stoppedLatch.await(timeout, unit);
     }
 
-    int getActiveClientCount() {
+    public int getActiveClientCount() {
         return activeClientSockets.size();
     }
 
-    int getActiveSessionCount() {
+    public int getActiveSessionCount() {
         SessionManager manager = sessionManager;
         return manager == null ? 0 : manager.getSessionCount();
     }

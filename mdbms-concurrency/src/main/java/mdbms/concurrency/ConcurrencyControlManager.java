@@ -94,6 +94,22 @@ public final class ConcurrencyControlManager implements IConcurrencyControl {
 
     public int getActiveTransactionCount() { return activeTransactions.size(); }
 
+    public int getLockCount() {
+        if (protocol instanceof LockBasedProtocol lockBased) {
+            return lockBased.getLockManager().getLockTableSnapshot().values().stream()
+                    .mapToInt(java.util.List::size)
+                    .sum();
+        }
+        return 0;
+    }
+
+    public int getWaitingRequestCount() {
+        if (protocol instanceof LockBasedProtocol lockBased) {
+            return lockBased.getLockManager().getWaitingRequestsSnapshot().size();
+        }
+        return 0;
+    }
+
     public boolean isAcceptingTransactions() {
         synchronized (lifecycleMonitor) {
             return acceptingTransactions;
