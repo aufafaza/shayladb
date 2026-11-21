@@ -200,6 +200,7 @@ public final class ConcurrencyControlManager implements IConcurrencyControl {
         return requestWriteWithContext(txId, data, oldVal, newVal).getStatus();
     }
 
+    @Override
     public WriteContext requestWriteWithContext(int txId, DataItem data, Object oldVal, Object newVal) {
         Objects.requireNonNull(data, "data");
         Transaction tx = activeTransactions.get(txId);

@@ -6,6 +6,7 @@ import mdbms.models.data.DataItem;
 import mdbms.models.transaction.AccessStatus;
 import mdbms.models.transaction.Operation;
 import mdbms.models.transaction.Transaction;
+import mdbms.models.transaction.WriteContext;
 
 public interface IConcurrencyControl {
     int beginTransaction();
@@ -19,6 +20,8 @@ public interface IConcurrencyControl {
     AccessStatus requestWrite(int txId, DataItem data, Object oldVal, Object newVal);
 
     AccessStatus requestWrite(int txId, DataItem data);
+
+    WriteContext requestWriteWithContext(int txId, DataItem data, Object oldVal, Object newVal);
 
     Transaction getTransaction(int txId);
 
