@@ -361,7 +361,18 @@ public final class StorageManager implements IDataAccess, ISchemaCatalog, IStati
     @Override
     public void rebuildIndexesAndReloadCatalog(){
         reloadCatalogAndIndexes();
+        releaseOrphanReservations();
         rebuildIndexes();
+    }
+
+    // lepas slot dipesan yang nyangkut di disk dari transaksi yang ga sempat selesai sebelum crash
+    // cuma boleh dipanggil pas ga ada transaksi aktif, balikin jumlah slot yang dilepas
+    public int releaseOrphanReservations(){
+        int released = 0;
+        for (String table : catalog.listTables()){
+            released += heapFileOf(table).releaseAllReservations();
+        }
+        return released;
     }
 
     // kosongin cache heap dan statistik lalu baca ulang katalog dan buka ulang index sesuai katalog terbaru
