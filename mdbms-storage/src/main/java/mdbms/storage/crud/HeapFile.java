@@ -255,6 +255,32 @@ public class HeapFile{
         return rowCount;
     }
 
+    // lepas semua slot yang masih dipesan dan balikin jumlahnya, cuma aman dipanggil pas ga ada transaksi aktif
+    // slot dipesan yang ikut ke disk sebelum crash bakal nyangkut, kalau ga dilepas ruangnya kepake selamanya
+    public int releaseAllReservations(){
+        int released = 0;
+        for (int blockNumber = 0; blockNumber < blockCount(); blockNumber++){
+            Block block = pool.pin(fileName, blockNumber);
+            boolean dirty = false;
+            try{
+                SlottedPage page = SlottedPage.of(block.data);
+                for (int slot = 0; slot < page.slotCount(); slot++){
+                    if (page.isReserved(slot)){
+                        page.releaseReservation(slot);
+                        released++;
+                        dirty = true;
+                    }
+                }
+                if (dirty){
+                    writeBack(block, page);
+                }
+            } finally{
+                pool.unpin(block, dirty, NO_LSN);
+            }
+        }
+        return released;
+    }
+
     public int blockCount(){
         return pool.blockCount(fileName);
     }
