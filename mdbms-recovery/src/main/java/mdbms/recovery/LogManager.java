@@ -237,4 +237,33 @@ public class LogManager {
     public WalFileHandler getWalFileHandler() {
         return walFileHandler;
     }
+
+    /**
+     * Memangkas seluruh catatan WAL dengan LSN > maxLsn secara recovery-safe
+     * dan menyelaraskan ulang nextLsn serta maxTxId.
+     */
+    public void truncateLogsAfter(long maxLsn) {
+        synchronized (appendLock) {
+            List<LogRecord> allLogs = walFileHandler.readAll();
+            List<LogRecord> kept = new ArrayList<>();
+            long highestLsn = 0L;
+            int highestTxId = 0;
+
+            for (LogRecord rec : allLogs) {
+                if (rec.getLsn() <= maxLsn) {
+                    kept.add(rec);
+                    if (rec.getLsn() > highestLsn) {
+                        highestLsn = rec.getLsn();
+                    }
+                    if (rec.getTxId() > highestTxId) {
+                        highestTxId = rec.getTxId();
+                    }
+                }
+            }
+
+            walFileHandler.rewriteWithRecords(kept);
+            this.nextLsn.set(highestLsn + 1);
+            this.maxTxId = highestTxId;
+        }
+    }
 }

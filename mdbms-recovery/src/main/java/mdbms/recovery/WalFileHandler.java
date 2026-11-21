@@ -9,6 +9,9 @@ import java.nio.channels.FileChannel;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardOpenOption;
+import java.nio.file.AtomicMoveNotSupportedException;
+import java.nio.file.StandardCopyOption;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -37,6 +40,7 @@ public class WalFileHandler {
     private FileChannel channel;
     private volatile long flushedLsn = 0L;
     private volatile long lastWrittenLsn = 0L;
+    private record RawWalLine(String text, int endOffset, boolean hasNewline) {}
 
     public WalFileHandler() {
         this(Path.of(DEFAULT_WAL_PATH));
@@ -161,63 +165,93 @@ public class WalFileHandler {
 
     /**
      * Membaca seluruh entri log dari berkas WAL.
+     * Kebijakan partial/corrupt tail: baris terakhir yang tidak lengkap/korup diabaikan dan
+     * dipangkas dari disk agar append berikutnya & restart kedua tetap valid;
+     * korupsi di tengah WAL langsung melempar IllegalStateException.
      */
     public List<LogRecord> readAll() {
         synchronized (ioLock) {
+            boolean interrupted = Thread.interrupted();
             try {
-                if (channel != null && channel.isOpen()) {
-                    channel.force(false);
-                }
-            } catch (IOException ignored) {
-            }
-
-            if (!Files.exists(logFilePath)) {
-                return Collections.emptyList();
-            }
-
-            List<String> rawLines = new ArrayList<>();
-            try (BufferedReader reader = Files.newBufferedReader(logFilePath, StandardCharsets.UTF_8)) {
-                String line;
-                while ((line = reader.readLine()) != null) {
-                    if (!line.trim().isEmpty()) {
-                        rawLines.add(line);
-                    }
-                }
-            } catch (IOException e) {
-                throw new RuntimeException("Gagal membaca berkas WAL: " + logFilePath, e);
-            }
-
-            List<LogRecord> records = new ArrayList<>();
-            int totalLines = rawLines.size();
-
-            for (int i = 0; i < totalLines; i++) {
-                String line = rawLines.get(i);
-                boolean isLastLine = (i == totalLines - 1);
                 try {
-                    LogRecord rec = parseRecord(line);
-                    records.add(rec);
-                } catch (Exception e) {
-                    if (isLastLine) {
-                        System.err.println("[WAL] Mengabaikan baris terakhir yang tidak lengkap: " + line);
-                    } else {
-                        throw new IllegalStateException("Format log tidak valid pada baris " + (i + 1) + ": " + line, e);
+                    if (channel != null && channel.isOpen()) {
+                        channel.force(false);
+                    }
+                } catch (ClosedByInterruptException e) {
+                    interrupted = true;
+                    Thread.interrupted();
+                    initChannel();
+                } catch (IOException ignored) {
+                }
+
+                if (!Files.exists(logFilePath)) {
+                    return Collections.emptyList();
+                }
+
+                byte[] allBytes;
+                try {
+                    allBytes = Files.readAllBytes(logFilePath);
+                } catch (IOException e) {
+                    throw new RuntimeException("Gagal membaca berkas WAL: " + logFilePath, e);
+                }
+
+                List<RawWalLine> rawLines = scanNonEmptyLines(allBytes);
+                List<LogRecord> records = new ArrayList<>();
+                int totalLines = rawLines.size();
+                int lastValidEndOffset = 0;
+                boolean truncatedTail = false;
+                boolean lastValidMissingNewline = false;
+
+                for (int i = 0; i < totalLines; i++) {
+                    RawWalLine raw = rawLines.get(i);
+                    boolean isLastLine = (i == totalLines - 1);
+                    try {
+                        LogRecord rec = parseRecord(raw.text());
+                        records.add(rec);
+                        lastValidEndOffset = raw.endOffset();
+                        lastValidMissingNewline = !raw.hasNewline();
+                    } catch (Exception e) {
+                        if (isLastLine) {
+                            System.err.println("[WAL] Mengabaikan baris terakhir yang tidak lengkap: " + raw.text());
+                            truncatedTail = true;
+                        } else {
+                            throw new IllegalStateException(
+                                    "Format log tidak valid pada baris " + (i + 1) + ": " + raw.text(), e);
+                        }
                     }
                 }
-            }
 
-            long highestDiskLsn = 0L;
-            for (LogRecord rec : records) {
-                if (rec.getLsn() > highestDiskLsn) {
-                    highestDiskLsn = rec.getLsn();
+                if (truncatedTail) {
+                    truncateFileToOffset(lastValidEndOffset);
+                    lastValidMissingNewline = lastValidEndOffset > 0 && allBytes[lastValidEndOffset - 1] != '\n';
+                }
+                if (lastValidMissingNewline && lastValidEndOffset > 0) {
+                    ensureTrailingNewline();
+                }
+
+                long highestDiskLsn = 0L;
+                for (LogRecord rec : records) {
+                    if (rec.getLsn() > highestDiskLsn) {
+                        highestDiskLsn = rec.getLsn();
+                    }
+                }
+                if (truncatedTail) {
+                    lastWrittenLsn = highestDiskLsn;
+                    flushedLsn = highestDiskLsn;
+                } else {
+                    if (highestDiskLsn > lastWrittenLsn) {
+                        lastWrittenLsn = highestDiskLsn;
+                    }
+                    if (highestDiskLsn > flushedLsn) {
+                        flushedLsn = highestDiskLsn;
+                    }
+                }
+                return records;
+            } finally {
+                if (interrupted) {
+                    Thread.currentThread().interrupt();
                 }
             }
-            if (highestDiskLsn > lastWrittenLsn) {
-                lastWrittenLsn = highestDiskLsn;
-            }
-            if (highestDiskLsn > flushedLsn) {
-                flushedLsn = highestDiskLsn;
-            }
-            return records;
         }
     }
 
@@ -504,5 +538,167 @@ public class WalFileHandler {
         }
         tokens.add(current.toString());
         return tokens;
+    }
+
+    private List<RawWalLine> scanNonEmptyLines(byte[] bytes) {
+        List<RawWalLine> lines = new ArrayList<>();
+        int start = 0;
+        for (int i = 0; i < bytes.length; i++) {
+            if (bytes[i] == '\n') {
+                int len = i - start;
+                if (len > 0 && bytes[i - 1] == '\r') {
+                    len--;
+                }
+                String text = new String(bytes, start, len, StandardCharsets.UTF_8);
+                if (!text.trim().isEmpty()) {
+                    lines.add(new RawWalLine(text, i + 1, true));
+                }
+                start = i + 1;
+            }
+        }
+        if (start < bytes.length) {
+            int len = bytes.length - start;
+            if (len > 0 && bytes[bytes.length - 1] == '\r') {
+                len--;
+            }
+            String text = new String(bytes, start, len, StandardCharsets.UTF_8);
+            if (!text.trim().isEmpty()) {
+                lines.add(new RawWalLine(text, bytes.length, false));
+            }
+        }
+        return lines;
+    }
+
+    private void truncateFileToOffset(int validLength) {
+        try {
+            if (channel != null && channel.isOpen()) {
+                channel.close();
+            }
+            if (fos != null) {
+                fos.close();
+            }
+        } catch (IOException ignored) {
+        } finally {
+            channel = null;
+            fos = null;
+        }
+        try (FileChannel truncChannel = FileChannel.open(logFilePath, StandardOpenOption.WRITE)) {
+            truncChannel.truncate(validLength);
+            truncChannel.force(true);
+        } catch (IOException e) {
+            throw new RuntimeException("Gagal memangkas ekor korup WAL: " + logFilePath, e);
+        }
+        initChannel();
+    }
+
+    private void ensureTrailingNewline() {
+        try {
+            if (channel == null || !channel.isOpen()) {
+                initChannel();
+            }
+            ByteBuffer nl = ByteBuffer.wrap(new byte[] { '\n' });
+            while (nl.hasRemaining()) {
+                channel.write(nl);
+            }
+            channel.force(true);
+        } catch (IOException e) {
+            throw new RuntimeException("Gagal menambahkan newline penutup WAL: " + logFilePath, e);
+        }
+    }
+
+    /**
+     * Mengganti isi berkas WAL secara recovery-safe menggunakan berkas sementara:
+     * tulis semua record -> cek setiap hasil boolean append & flushUpTo -> atomic move -> reopen channel.
+     * Jika gagal di tengah jalan, berkas WAL lama tetap utuh dan exception dilempar secara eksplisit.
+     */
+    public void rewriteWithRecords(List<LogRecord> records) {
+        synchronized (ioLock) {
+            boolean interrupted = Thread.interrupted();
+            Path tempPath = logFilePath.resolveSibling(logFilePath.getFileName() + ".rewrite.tmp");
+            WalFileHandler staging = null;
+            boolean closedCurrent = false;
+            try {
+                if (logFilePath.getParent() != null) {
+                    Files.createDirectories(logFilePath.getParent());
+                }
+                Files.deleteIfExists(tempPath);
+
+                staging = createStagingHandler(tempPath);
+                long highestLsn = 0L;
+                for (LogRecord rec : records) {
+                    if (!staging.append(rec)) {
+                        throw new RuntimeException("Gagal menulis ulang catatan WAL LSN=" + rec.getLsn());
+                    }
+                    if (rec.getLsn() > highestLsn) {
+                        highestLsn = rec.getLsn();
+                    }
+                }
+                if (highestLsn > 0 && !staging.flushUpTo(highestLsn)) {
+                    throw new RuntimeException("Gagal flush berkas WAL sementara hingga LSN=" + highestLsn);
+                }
+                staging.close();
+                staging = null;
+
+                // Tutup handle WAL aktif sebelum atomic move (wajib di Windows)
+                closeChannelQuietly();
+                closedCurrent = true;
+
+                try {
+                    Files.move(tempPath, logFilePath,
+                            StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
+                } catch (AtomicMoveNotSupportedException e) {
+                    Files.move(tempPath, logFilePath, StandardCopyOption.REPLACE_EXISTING);
+                }
+
+                initChannel();
+                closedCurrent = false;
+                lastWrittenLsn = highestLsn;
+                flushedLsn = highestLsn;
+            } catch (IOException e) {
+                throw new RuntimeException("Gagal mengganti berkas WAL secara aman: " + logFilePath, e);
+            } finally {
+                if (staging != null) {
+                    try {
+                        staging.close();
+                    } catch (RuntimeException ignored) {
+                    }
+                }
+                try {
+                    Files.deleteIfExists(tempPath);
+                } catch (IOException ignored) {
+                }
+                if (closedCurrent) {
+                    try {
+                        initChannel();
+                    } catch (RuntimeException ignored) {
+                    }
+                }
+                if (interrupted) {
+                    Thread.currentThread().interrupt();
+                }
+            }
+        }
+    }
+
+    /** Hook protected agar pengujian dapat menginjeksi kegagalan append/flush saat WAL rewrite. */
+    protected WalFileHandler createStagingHandler(Path tempPath) {
+        return new WalFileHandler(tempPath);
+    }
+
+    private void closeChannelQuietly() {
+        try {
+            if (channel != null && channel.isOpen()) {
+                channel.close();
+            }
+        } catch (IOException ignored) {
+        }
+        try {
+            if (fos != null) {
+                fos.close();
+            }
+        } catch (IOException ignored) {
+        }
+        channel = null;
+        fos = null;
     }
 }

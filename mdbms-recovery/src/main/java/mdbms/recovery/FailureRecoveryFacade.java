@@ -3,6 +3,9 @@ package mdbms.recovery;
 import java.nio.file.Path;
 import java.time.Instant;
 import java.util.List;
+import java.util.concurrent.locks.ReentrantLock;
+import java.util.function.BooleanSupplier;
+import java.util.function.Supplier;
 import mdbms.api.IDataAccess;
 import mdbms.api.IDurableStorage;
 import mdbms.api.IFailureRecoveryManager;
@@ -21,6 +24,9 @@ public class FailureRecoveryFacade implements IFailureRecoveryManager, AutoClose
     private final CrashRecoveryManager crashRecoveryManager;
     private final IDataAccess dataAccess;
     private final IDurableStorage durableStorage;
+    private final ReentrantLock maintenanceLock = new ReentrantLock(true);
+    private volatile BooleanSupplier maintenanceCoordinator;
+    private volatile boolean offlineMaintenanceMode = false;
 
     public FailureRecoveryFacade(
         Path logDir,
@@ -163,7 +169,12 @@ public class FailureRecoveryFacade implements IFailureRecoveryManager, AutoClose
 
     @Override
     public RecoveryResult createCheckpoint() {
-        return checkpointManager.executeCheckpoint();
+        maintenanceLock.lock();
+        try {
+            return checkpointManager.executeCheckpoint();
+        } finally {
+            maintenanceLock.unlock();
+        }
     }
 
     @Override
@@ -173,12 +184,30 @@ public class FailureRecoveryFacade implements IFailureRecoveryManager, AutoClose
 
     @Override
     public RecoveryResult recoverToPointInTime(Instant targetTime) {
-        return checkpointManager.recoverToPointInTime(targetTime);
+        maintenanceLock.lock();
+        try {
+            RecoveryResult blocked = checkMaintenanceBarrier();
+            if (blocked != null) {
+                return blocked;
+            }
+            return checkpointManager.recoverToPointInTime(targetTime);
+        } finally {
+            maintenanceLock.unlock();
+        }
     }
 
     @Override
     public RecoveryResult recoverToTransaction(int targetTxId) {
-        return checkpointManager.recoverToTransaction(targetTxId);
+        maintenanceLock.lock();
+        try {
+            RecoveryResult blocked = checkMaintenanceBarrier();
+            if (blocked != null) {
+                return blocked;
+            }
+            return checkpointManager.recoverToTransaction(targetTxId);
+        } finally {
+            maintenanceLock.unlock();
+        }
     }
 
     @Override
@@ -217,5 +246,97 @@ public class FailureRecoveryFacade implements IFailureRecoveryManager, AutoClose
 
     public IDurableStorage getDurableStorage() {
         return durableStorage;
+    }
+
+    /**
+     * Menghubungkan FRM dengan koordinator siklus hidup transaksi (CCM/DBMS).
+     * Supplier wajib mengembalikan true HANYA jika admission dijeda dan transaksi aktif == 0.
+     */
+    public void attachMaintenanceCoordinator(BooleanSupplier maintenanceReadySupplier) {
+        this.maintenanceCoordinator = maintenanceReadySupplier;
+    }
+
+    /**
+     * Mengaktifkan/menonaktifkan mode maintenance offline (hanya untuk administrasi tanpa live DBMS).
+     */
+    public void setOfflineMaintenanceMode(boolean enabled) {
+        if (enabled && maintenanceCoordinator != null) {
+            throw new IllegalStateException(
+                    "Tidak dapat memakai offline maintenance mode saat terhubung ke live maintenance coordinator");
+        }
+        this.offlineMaintenanceMode = enabled;
+    }
+
+    /** Entry point offline terkoordinasi untuk membuat snapshot baseline awal FR-05. */
+    public void createBaselineSnapshot() {
+        maintenanceLock.lock();
+        try {
+            if (maintenanceCoordinator != null && !maintenanceCoordinator.getAsBoolean()) {
+                throw new IllegalStateException(
+                        "Snapshot baseline ditolak: database harus berada dalam maintenance mode tanpa transaksi aktif");
+            }
+            checkpointManager.createSnapshot();
+        } finally {
+            maintenanceLock.unlock();
+        }
+    }
+
+    /** Entry point offline terkoordinasi untuk PITR (FR-05). */
+    public RecoveryResult recoverToPointInTimeOffline(Instant targetTime) {
+        return runInOfflineMaintenance(() -> checkpointManager.recoverToPointInTime(targetTime));
+    }
+
+    /** Entry point offline terkoordinasi untuk recovery hingga transaksi tertentu (FR-05). */
+    public RecoveryResult recoverToTransactionOffline(int targetTxId) {
+        return runInOfflineMaintenance(() -> checkpointManager.recoverToTransaction(targetTxId));
+    }
+
+    private RecoveryResult runInOfflineMaintenance(Supplier<RecoveryResult> action) {
+        maintenanceLock.lock();
+        try {
+            if (maintenanceCoordinator != null) {
+                return new RecoveryResult(
+                        false,
+                        -1L,
+                        logManager.getMaxTxId(),
+                        "HISTORICAL RECOVERY DITOLAK: gunakan maintenance coordinator live (bukan offline entry point)"
+                );
+            }
+            boolean prev = offlineMaintenanceMode;
+            offlineMaintenanceMode = true;
+            try {
+                return action.get();
+            } finally {
+                offlineMaintenanceMode = prev;
+            }
+        } finally {
+            maintenanceLock.unlock();
+        }
+    }
+
+    private RecoveryResult checkMaintenanceBarrier() {
+        BooleanSupplier coordinator = this.maintenanceCoordinator;
+        if (coordinator != null) {
+            if (!coordinator.getAsBoolean()) {
+                return new RecoveryResult(
+                        false,
+                        -1L,
+                        logManager.getMaxTxId(),
+                        "HISTORICAL RECOVERY DITOLAK: database harus berada dalam maintenance mode "
+                                + "(admission dijeda dan tidak ada transaksi aktif)"
+                );
+            }
+            return null;
+        }
+        if (!offlineMaintenanceMode) {
+            return new RecoveryResult(
+                    false,
+                    -1L,
+                    logManager.getMaxTxId(),
+                    "HISTORICAL RECOVERY DITOLAK: panggilan langsung tanpa maintenance barrier tidak diizinkan; "
+                            + "hubungkan maintenance coordinator atau gunakan entry point offline maintenance"
+            );
+        }
+        return null;
     }
 }

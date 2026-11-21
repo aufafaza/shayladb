@@ -47,7 +47,7 @@ public class RecordApplier {
                     applyIdempotentDelete(rid);
                     applyIdempotentInsert(record.getTable(), record.getNewRowId(), afterImg);
                 } else {
-                    dataAccess.updateByRowId(rid, afterImg.values());
+                    applyIdempotentUpdate(record.getTable(), rid, afterImg);
                 }
                 yield true;
             }
@@ -75,7 +75,7 @@ public class RecordApplier {
                     applyIdempotentDeleteAndRelease(record.getNewRowId());
                     applyIdempotentInsert(record.getTable(), rid, beforeImg);
                 } else {
-                    dataAccess.updateByRowId(rid, beforeImg.values());
+                    applyIdempotentUpdate(record.getTable(), rid, beforeImg);
                 }
                 yield true;
             }
@@ -165,6 +165,17 @@ public class RecordApplier {
                     throw e;
                 }
             }
+        }
+    }
+
+    private void applyIdempotentUpdate(String table, RowId rid, RecordImage img) {
+        try {
+            dataAccess.updateByRowId(rid, img.values());
+        } catch (RuntimeException e) {
+            if (!isMissingSlotOrRowError(e)) {
+                throw e;
+            }
+            applyIdempotentInsert(table, rid, img);
         }
     }
 
