@@ -120,7 +120,7 @@ public class PlanTranslator {
 
     private IQueryOperator targetRows(QueryTree queryTree, int txId) {
         return new SelectOperator(
-                new SequentialScanOperator(dataAccess, schemaCatalog, concurrencyControl, txId, queryTree.getTableName(), false),
+                new SequentialScanOperator(dataAccess, schemaCatalog, concurrencyControl, txId, queryTree.getTableName(), queryTree.getTableName(), false),
                 queryTree.getConditions());
     }
 

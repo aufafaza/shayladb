@@ -26,6 +26,7 @@ public class ClientHandler implements Runnable {
     private final ClientSession session;
     private final IConcurrencyControl concurrencyControl;
     private final Mode mode;
+    private final Runnable checkpointAction;
 
     ClientHandler(
             Socket clientSocket,
@@ -41,12 +42,18 @@ public class ClientHandler implements Runnable {
             IQueryProcessor processor,
             IConcurrencyControl concurrencyControl,
             Mode mode) {
+        this(clientSocket, sessionManager, processor, concurrencyControl, mode, null);
+    }
+
+    ClientHandler(Socket clientSocket, SessionManager sessionManager, IQueryProcessor processor,
+            IConcurrencyControl concurrencyControl, Mode mode, Runnable checkpointAction) {
         this.clientSocket = clientSocket;
         this.processor = processor;
         this.sessionManager = sessionManager;
         this.session = sessionManager.newSession();
         this.concurrencyControl = concurrencyControl;
         this.mode = mode;
+        this.checkpointAction = checkpointAction;
     }
 
     @Override
@@ -158,6 +165,9 @@ public class ClientHandler implements Runnable {
     }
 
     private ExecutionResult executeQuery(String query, String command) {
+        if (command.equals("CHECKPOINT")) {
+            return checkpoint(query);
+        }
         if (command.equals("BEGIN")) {
             return beginTransaction();
         }
@@ -168,6 +178,27 @@ public class ClientHandler implements Runnable {
             return abortTransaction();
         }
         return executeStatement(query);
+    }
+
+    private ExecutionResult checkpoint(String query) {
+        if (!query.trim().matches("(?i)CHECKPOINT\\s*;?")) {
+            return new ExecutionResult(false, null, null, -1, "Invalid command; use CHECKPOINT;");
+        }
+        // Otherwise the barrier would wait forever for this session's own transaction.
+        if (session.isTransacting()) {
+            return new ExecutionResult(false, null, null, -1,
+                    "CHECKPOINT requires no active transaction in this session; COMMIT or ABORT first");
+        }
+        if (checkpointAction == null) {
+            return new ExecutionResult(false, null, null, -1, "CHECKPOINT is not configured on this server");
+        }
+        try {
+            checkpointAction.run();
+            return new ExecutionResult(true, null, null, -1, "Checkpoint completed successfully");
+        } catch (RuntimeException failure) {
+            return new ExecutionResult(false, null, null, -1, "CHECKPOINT failed: "
+                    + FramedJsonProtocol.messageOrDefault(failure.getMessage(), "checkpoint unavailable"));
+        }
     }
 
     private ExecutionResult beginTransaction() {

@@ -19,9 +19,9 @@ public final class Main {
         dbms.start();
 
         DBMSServer jsonServer = new DBMSServer(
-                cfg.getPort(), dbms.getQueryProcessor(), dbms.getConcurrencyControl());
+                cfg.getPort(), dbms.getQueryProcessor(), dbms.getConcurrencyControl(), dbms::checkpoint);
         InteractiveDBMSServer interactiveServer = new InteractiveDBMSServer(
-                cfg.getInteractivePort(), dbms.getQueryProcessor(), dbms.getConcurrencyControl());
+                cfg.getInteractivePort(), dbms.getQueryProcessor(), dbms.getConcurrencyControl(), dbms::checkpoint);
         dbms.registerServer(jsonServer);
         dbms.registerServer(interactiveServer);
         Runtime.getRuntime().addShutdownHook(new Thread(dbms::shutdown, "mdbms-shutdown"));

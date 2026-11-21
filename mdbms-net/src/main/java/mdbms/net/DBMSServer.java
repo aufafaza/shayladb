@@ -21,6 +21,7 @@ public class DBMSServer {
     private final IQueryProcessor processor;
     private final IConcurrencyControl concurrencyControl;
     private final ClientHandler.Mode mode;
+    private final Runnable checkpointAction;
     private final Set<Socket> activeClientSockets = ConcurrentHashMap.newKeySet();
     private final Map<Socket, ClientHandler> activeHandlers = new ConcurrentHashMap<>();
     private volatile SessionManager sessionManager;
@@ -36,15 +37,23 @@ public class DBMSServer {
         this(port, processor, concurrencyControl, ClientHandler.Mode.FRAMED_JSON);
     }
 
-    protected DBMSServer(
-            int port,
-            IQueryProcessor processor,
-            IConcurrencyControl concurrencyControl,
+    public DBMSServer(int port, IQueryProcessor processor, IConcurrencyControl concurrencyControl,
+            Runnable checkpointAction) {
+        this(port, processor, concurrencyControl, ClientHandler.Mode.FRAMED_JSON, checkpointAction);
+    }
+
+    protected DBMSServer(int port, IQueryProcessor processor, IConcurrencyControl concurrencyControl,
             ClientHandler.Mode mode) {
+        this(port, processor, concurrencyControl, mode, null);
+    }
+
+    protected DBMSServer(int port, IQueryProcessor processor, IConcurrencyControl concurrencyControl,
+            ClientHandler.Mode mode, Runnable checkpointAction) {
         this.port = port;
         this.processor = processor;
         this.concurrencyControl = concurrencyControl;
         this.mode = mode;
+        this.checkpointAction = checkpointAction;
     }
 
     public void start() throws IOException {
@@ -185,7 +194,7 @@ public class DBMSServer {
             workerPool.execute(() -> {
                 ClientHandler handler = null;
                 try {
-                    handler = new ClientHandler(clientSocket, sessionManager, processor, concurrencyControl, mode);
+                    handler = new ClientHandler(clientSocket, sessionManager, processor, concurrencyControl, mode, checkpointAction);
                     activeHandlers.put(clientSocket, handler);
                     handler.run();
                 } finally {

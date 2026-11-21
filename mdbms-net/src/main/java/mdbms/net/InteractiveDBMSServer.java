@@ -13,4 +13,8 @@ public final class InteractiveDBMSServer extends DBMSServer {
             IConcurrencyControl concurrencyControl) {
         super(port, processor, concurrencyControl, ClientHandler.Mode.INTERACTIVE);
     }
+    public InteractiveDBMSServer(int port, IQueryProcessor processor,
+            IConcurrencyControl concurrencyControl, Runnable checkpointAction) {
+        super(port, processor, concurrencyControl, ClientHandler.Mode.INTERACTIVE, checkpointAction);
+    }
 }
