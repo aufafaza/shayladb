@@ -8,6 +8,8 @@ import mdbms.models.query.ColumnReference;
 import mdbms.models.query.ExpressionNode;
 import mdbms.models.query.ExpressionTree;
 import mdbms.processor.IResultRow;
+import mdbms.processor.mocks.MockOperator;
+
 import org.junit.jupiter.api.Test;
 
 final class JoinOperatorTest {

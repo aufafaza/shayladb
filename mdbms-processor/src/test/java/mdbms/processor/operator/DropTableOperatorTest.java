@@ -5,6 +5,8 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 
 import java.util.List;
 import mdbms.models.schema.TableSchema;
+import mdbms.processor.mocks.MockSchemaCatalog;
+
 import org.junit.jupiter.api.Test;
 
 class DropTableOperatorTest {

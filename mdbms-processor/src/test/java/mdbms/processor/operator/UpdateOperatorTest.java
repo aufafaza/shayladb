@@ -13,6 +13,11 @@ import mdbms.models.schema.ColumnDefinition;
 import mdbms.models.schema.DataType;
 import mdbms.models.schema.TableSchema;
 import mdbms.processor.ResultRow;
+import mdbms.processor.mocks.MockConcurrencyControl;
+import mdbms.processor.mocks.MockDataAccess;
+import mdbms.processor.mocks.MockOperator;
+import mdbms.processor.mocks.MockSchemaCatalog;
+
 import org.junit.jupiter.api.Test;
 
 class UpdateOperatorTest {

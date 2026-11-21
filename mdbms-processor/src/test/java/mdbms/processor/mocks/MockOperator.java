@@ -1,4 +1,4 @@
-package mdbms.processor.operator;
+package mdbms.processor.mocks;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -8,8 +8,9 @@ import mdbms.models.schema.ColumnDefinition;
 import mdbms.processor.IResultRow;
 import mdbms.processor.ResultRow;
 import mdbms.processor.ResultTableSchema;
+import mdbms.processor.operator.IQueryOperator;
 
-final class MockOperator implements IQueryOperator {
+public final class MockOperator implements IQueryOperator {
     private ResultTableSchema tableSchema;
     List<ResultRow> resultRows = new ArrayList<>();
 
