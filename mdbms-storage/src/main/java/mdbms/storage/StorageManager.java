@@ -33,6 +33,7 @@ import mdbms.storage.block.BlockManager;
 import mdbms.storage.block.BufferPool;
 import mdbms.storage.serializer.BinaryRecordSerializer;
 import mdbms.storage.serializer.IRecordSerializer;
+import mdbms.storage.serializer.SlottedPage;
 import mdbms.storage.catalog.CatalogManager;
 import mdbms.storage.statistics.StatisticsManager;
 import mdbms.storage.index.IndexManager;
@@ -315,6 +316,16 @@ public final class StorageManager implements IDataAccess, ISchemaCatalog, IStati
         if (schema != null && catalog.tableExists(schema.tableName())){
             throw new StorageException(StorageErrorCode.TABLE_ALREADY_EXISTS,
                 "Table already exists: " + schema.tableName());
+        }
+        if (schema != null){
+            long maximumRowSize = BinaryRecordSerializer.maximumSerializedSize(schema);
+
+            if (maximumRowSize > SlottedPage.MAX_RECORD_SIZE){
+                throw new StorageException(
+                    StorageErrorCode.SCHEMA_VIOLATION,
+                    "Maximum row size " + maximumRowSize + " bytes exceeds page record limit of " + SlottedPage.MAX_RECORD_SIZE + " bytes"
+                );
+            }
         }
         catalog.saveSchema(schema);
     }
