@@ -19,13 +19,33 @@ public interface IDataAccess{
 
     RowId reserveRowId(String table, List<Object> values);
 
+    default RowId reserveRowId(String table, List<Object> values, long pageLsn) {
+        return reserveRowId(table, values);
+    }
+
     void releaseRowId(RowId rowId);
+
+    default void releaseRowId(RowId rowId, long pageLsn) {
+        releaseRowId(rowId);
+    }
 
     void insertAt(RowId rowId, List<Object> values);
 
+    default void insertAt(RowId rowId, List<Object> values, long pageLsn) {
+        insertAt(rowId, values);
+    }
+
     Row updateByRowId(RowId rowId, List<Object> values);
 
+    default Row updateByRowId(RowId rowId, List<Object> values, long pageLsn) {
+        return updateByRowId(rowId, values);
+    }
+
     Row deleteByRowId(RowId rowId);
+
+    default Row deleteByRowId(RowId rowId, long pageLsn) {
+        return deleteByRowId(rowId);
+    }
 
     List<RowId> searchIndex(String indexName, Object key);
 
