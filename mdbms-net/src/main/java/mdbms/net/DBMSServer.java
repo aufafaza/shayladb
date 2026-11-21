@@ -23,6 +23,7 @@ public class DBMSServer {
     private final ClientHandler.Mode mode;
     private final Set<Socket> activeClientSockets = ConcurrentHashMap.newKeySet();
     private final Map<Socket, ClientHandler> activeHandlers = new ConcurrentHashMap<>();
+    private volatile SessionManager sessionManager;
     private final CountDownLatch readyLatch = new CountDownLatch(1);
     private final CountDownLatch stoppedLatch = new CountDownLatch(1);
 
@@ -74,7 +75,7 @@ public class DBMSServer {
             readyLatch.countDown();
         }
 
-        SessionManager sessionManager = new SessionManager();
+        sessionManager = new SessionManager();
         IOException acceptError = null;
         try {
             while (state == State.RUNNING) {
@@ -142,6 +143,15 @@ public class DBMSServer {
         return activeClientSockets.size();
     }
 
+    int getActiveSessionCount() {
+        SessionManager manager = sessionManager;
+        return manager == null ? 0 : manager.getSessionCount();
+    }
+
+    int getActiveHandlerCount() {
+        return activeHandlers.size();
+    }
+
     boolean isWorkerPoolTerminated() {
         return workerPool == null || workerPool.isTerminated();
     }
@@ -172,6 +182,7 @@ public class DBMSServer {
                 }
             });
         } catch (RejectedExecutionException | IOException e) {
+            activeHandlers.remove(clientSocket);
             if (e instanceof RejectedExecutionException && mode == ClientHandler.Mode.FRAMED_JSON) {
                 try {
                     new FramedJsonProtocol(clientSocket, clientSocket.getInputStream())
