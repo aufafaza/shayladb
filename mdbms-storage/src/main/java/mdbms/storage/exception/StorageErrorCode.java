@@ -13,5 +13,6 @@ public enum StorageErrorCode{
     SLOT_UNAVAILABLE,
     INVALID_BLOCK,
     BUFFER_FULL,
-    INVALID_PIN
+    INVALID_PIN,
+    DUPLICATE_KEY
 }
