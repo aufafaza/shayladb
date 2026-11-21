@@ -98,16 +98,23 @@ public class CrashRecoveryManager {
                 return new RecoveryResult(false, -1L, logManager.getMaxTxId(), "RECOVERY: Gagal pada fase Undo");
             }
 
-            durableStorage.flushBuffer();
-            durableStorage.rebuildIndexesAndReloadCatalog();
+            long lastExistingLsn = allLogs.get(allLogs.size() - 1).getLsn();
+            if (lastExistingLsn > 0 && !logManager.flushUpTo(lastExistingLsn)) {
+                return new RecoveryResult(false, -1L, logManager.getMaxTxId(),
+                        "RECOVERY: Gagal flush WAL sebelum persist hasil recovery");
+            }
 
-            long finalLsn = allLogs.get(allLogs.size() - 1).getLsn();
+            durableStorage.rebuildIndexesAndReloadCatalog();
+            durableStorage.flushBuffer();
+
+            long finalLsn = lastExistingLsn;
             for (Integer uncommittedTxId : state.activeTxs) {
                 TransactionLogRecord abortRec = logManager.appendTransactionLog(uncommittedTxId, LogType.ABORT);
                 finalLsn = abortRec.getLsn();
             }
-            if (!logManager.flushUpTo(finalLsn)) {
-                return new RecoveryResult(false, -1L, logManager.getMaxTxId(), "RECOVERY: Gagal flush WAL pasca-recovery");
+            if (finalLsn > 0 && !logManager.flushUpTo(finalLsn)) {
+                return new RecoveryResult(false, -1L, logManager.getMaxTxId(),
+                        "RECOVERY: Gagal flush WAL pasca-recovery");
             }
 
             return new RecoveryResult(
@@ -115,6 +122,7 @@ public class CrashRecoveryManager {
                     finalLsn,
                     logManager.getMaxTxId(),
                     "RECOVERY: Crash recovery selesai (Redo=" + state.committedTxs + ", Undo=" + state.activeTxs + ")");
+                    
         } catch (RuntimeException e) {
             return new RecoveryResult(
                     false,
