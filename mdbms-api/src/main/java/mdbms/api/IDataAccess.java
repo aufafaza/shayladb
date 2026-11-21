@@ -23,7 +23,18 @@ public interface IDataAccess{
 
     void insertAt(RowId rowId, List<Object> values);
 
+    // versi yang bawa LSN log perubahan dari CCM, halaman yang berubah ditandai LSN ini
+    // biar BufferPool flush WAL sampai LSN itu dulu sebelum halamannya ditulis ke disk (#54)
+    // default nya ngabaikan LSN biar implementasi lain kayak mock test tetap jalan
+    default void insertAt(RowId rowId, List<Object> values, long pageLsn) {
+        insertAt(rowId, values);
+    }
+
     Row updateByRowId(RowId rowId, List<Object> values);
+
+    default Row updateByRowId(RowId rowId, List<Object> values, long pageLsn) {
+        return updateByRowId(rowId, values);
+    }
 
     // true kalau isi baru muat di slot yang sama, false berarti UPDATE harus lewat relokasi (#55)
     // ga ngubah apa apa, dipanggil sebelum minta lock dan nulis log
@@ -37,7 +48,15 @@ public interface IDataAccess{
         throw new UnsupportedOperationException(getClass().getSimpleName() + " does not support updateInPlace");
     }
 
+    default boolean updateInPlace(RowId rowId, List<Object> values, long pageLsn) {
+        return updateInPlace(rowId, values);
+    }
+
     Row deleteByRowId(RowId rowId);
+
+    default Row deleteByRowId(RowId rowId, long pageLsn) {
+        return deleteByRowId(rowId);
+    }
 
     // tolak kalau ada baris lain yang primary key nya sama dengan values, baris ignoreRowId dilewatin
     // dipanggil QP sebelum INSERT dan UPDATE ngubah data, ignoreRowId diisi baris yang lagi di update, null buat INSERT
