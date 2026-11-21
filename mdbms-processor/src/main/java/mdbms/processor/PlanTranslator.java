@@ -62,7 +62,7 @@ public class PlanTranslator {
                     case DEFAULT:
                     case LINEAR_SCAN:
                         return new SequentialScanOperator(dataAccess, schemaCatalog, concurrencyControl, txId,
-                                queryTree.getTableName(), queryTree.getBindingName());
+                                queryTree.getTableName(), queryTree.getBindingName(), false);
                     case INDEX_SCAN:
                         return new IndexScanOperator(dataAccess, schemaCatalog, concurrencyControl, txId,
                                 queryTree.getTableName(), queryTree.getBindingName(), queryTree.getIndexScan());
