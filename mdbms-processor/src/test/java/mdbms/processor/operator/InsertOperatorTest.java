@@ -11,6 +11,9 @@ import mdbms.models.query.ExpressionTree;
 import mdbms.models.schema.ColumnDefinition;
 import mdbms.models.schema.DataType;
 import mdbms.models.schema.TableSchema;
+import mdbms.processor.mocks.MockDataAccess;
+import mdbms.processor.mocks.MockSchemaCatalog;
+import mdbms.processor.mocks.MockConcurrencyControl;
 import org.junit.jupiter.api.Test;
 
 class InsertOperatorTest {

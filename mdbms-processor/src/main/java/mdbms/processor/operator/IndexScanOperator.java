@@ -53,6 +53,8 @@ public class IndexScanOperator implements IQueryOperator, IRowProducingOperator 
     }
 
     @Override public void open() {
+        schema = null;
+        getSchema();
         AccessPermission.read(concurrencyControlManager, transactionId, DataItem.tableRange(tableName));
         rowIds = lookup();
         position = 0;
