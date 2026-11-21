@@ -353,10 +353,8 @@ public final class ConcurrencyControlManager implements IConcurrencyControl {
         if (status != AccessStatus.GRANTED || frm == null) return status;
 
         try {
-            // DELETE(old) followed by INSERT(new) is a recoverable relocation:
-            // undo reverses these records and redo is idempotent at both ids.
-            persistDataLog(tx.getId(), oldItem, oldValues, null);
-            persistDataLog(tx.getId(), newItem, null, newValues);
+            // record the complete relocation once, after both identities are protected and before storage is changed.
+            persistRelocationLog(tx.getId(), oldItem, newItem, oldValues, newValues);
             return status;
         } catch (RuntimeException failure) {
             failAndAbort(tx, "Unable to persist relocation log");
@@ -379,6 +377,26 @@ public final class ConcurrencyControlManager implements IConcurrencyControl {
             throw new IllegalStateException(
                     "Unable to persist " + opType.toString().toLowerCase()
                             + " log for transaction " + txId);
+        }
+    }
+
+    private void persistRelocationLog(
+            int txId,
+            DataItem oldItem,
+            DataItem newItem,
+            Object oldValues,
+            Object newValues) {
+        RecoveryResult result = frm.writeRelocationLog(
+                txId,
+                oldItem.tableName(),
+                oldItem.rowId(),
+                newItem.rowId(),
+                toRecordImage(oldValues),
+                toRecordImage(newValues));
+        if (result == null || !result.isSuccess()
+                || !frm.flushLogUpTo(result.getLsn())) {
+            throw new IllegalStateException(
+                    "Unable to persist relocation log for transaction " + txId);
         }
     }
 
