@@ -95,7 +95,7 @@ public class WalFileHandler {
      * Menyimpan data log sampai LSN tertentu ke disk fisik (fsync).
      */
     public boolean flushUpTo(long lsn) {
-        if (lsn < 0) {
+        if (lsn < 0 || lsn > lastWrittenLsn) {
             return false;
         }
         if (lsn <= flushedLsn) {
