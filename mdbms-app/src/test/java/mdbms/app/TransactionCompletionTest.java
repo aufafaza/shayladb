@@ -92,8 +92,11 @@ class TransactionCompletionTest {
         recovery.commitFlushes.set(0);
     }
 
+    // apa pun hasil transaksinya ga boleh ada frame buffer yang masih di pin atau slot dipesan yang ketinggalan
     @AfterEach
     void tearDown() {
+        assertEquals(0, storage.getBufferStats().pinnedBlocks(), "ada frame buffer yang ga dilepas");
+        assertEquals(0, storage.releaseOrphanReservations(), "ada slot dipesan yang ga dilepas");
         wal.close();
     }
 
@@ -116,6 +119,7 @@ class TransactionCompletionTest {
         long commitLsn = lsnOf(tx, LogType.COMMIT);
         Release release = protocol.releaseOf(tx);
         assertTrue(release.flushedLsn() >= commitLsn, "lock dilepas sebelum COMMIT durable");
+        assertEquals(0, release.pinnedBlocks(), "masih ada frame di pin pas lock dilepas");
         assertNull(ccm.getTransaction(tx));
         assertEquals(1, recovery.commitFlushes.get());
 
@@ -144,6 +148,7 @@ class TransactionCompletionTest {
         // isi heap pas lock dilepas udah balik semua, artinya rollback kelar duluan
         Release release = protocol.releaseOf(tx);
         assertEquals(baselineRows, release.heapRows());
+        assertEquals(0, release.pinnedBlocks(), "masih ada frame di pin pas lock dilepas");
         assertEquals(baselineRows, heapRows());
         assertEquals(baselineRowIds, rowIdsById());
         assertIndexMatchesHeap();
@@ -223,6 +228,23 @@ class TransactionCompletionTest {
         assertFalse(run(tx, "COMMIT;").success());
         assertEquals(baselineRows, heapRows());
         assertEquals(1, recovery.rollbackCalls.get());
+    }
+
+    @Test
+    void failedInsertLogReleasesTheReservedSlotAndAbortsTheTransaction() {
+        int tx = ccm.beginTransaction();
+        assertOk(run(tx, "UPDATE users SET name = 'ganti' WHERE id = 1;"));
+
+        // slot udah dipesan pas log INSERT nya gagal ditulis
+        recovery.failDataLog = true;
+        assertFalse(run(tx, "INSERT INTO users VALUES (101, 'baru');").success());
+        recovery.failDataLog = false;
+
+        assertNull(ccm.getTransaction(tx));
+        assertFalse(ccm.isFailed());
+        assertEquals(baselineRows, heapRows());
+        assertIndexMatchesHeap();
+        assertEquals(1, recovery.rollbackCalls.get(), "abort cuma boleh sekali");
     }
 
     @Test
@@ -355,7 +377,7 @@ class TransactionCompletionTest {
             .mapToLong(LogRecord::getLsn).findFirst().orElseThrow();
     }
 
-    private record Release(long flushedLsn, List<List<Object>> heapRows) {}
+    private record Release(long flushedLsn, int pinnedBlocks, List<List<Object>> heapRows) {}
 
     // nyatet kondisi WAL sama heap persis pas CCM ngelepas lock suatu transaksi
     private final class ReleaseRecordingProtocol extends LockBasedProtocol {
@@ -363,7 +385,9 @@ class TransactionCompletionTest {
 
         @Override
         public void releaseResources(Transaction tx) {
-            releases.put(tx.getId(), new Release(wal.getLogManager().getWalFileHandler().getFlushedLsn(), heapRows()));
+            // pin dihitung duluan sebelum heapRows ikut pin halaman
+            int pinned = storage.getBufferStats().pinnedBlocks();
+            releases.put(tx.getId(), new Release(wal.getLogManager().getWalFileHandler().getFlushedLsn(), pinned, heapRows()));
             super.releaseResources(tx);
         }
 
@@ -386,6 +410,7 @@ class TransactionCompletionTest {
         private volatile boolean failCommitAppend;
         private volatile boolean failCommitFlush;
         private volatile boolean failRollback;
+        private volatile boolean failDataLog;
         private volatile Runnable beforeCommitFlush = () -> {};
         private volatile long commitLsn = -1;
 
@@ -406,6 +431,7 @@ class TransactionCompletionTest {
         @Override
         public RecoveryResult writeDataLog(int txId, LogType opType, String table, RowId rid,
                 RecordImage beforeImg, RecordImage afterImg) {
+            if (failDataLog) return new RecoveryResult(false, -1, txId, "disuntik: log data gagal");
             return delegate.writeDataLog(txId, opType, table, rid, beforeImg, afterImg);
         }
 

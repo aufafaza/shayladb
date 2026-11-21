@@ -48,8 +48,9 @@ class BufferPoolTest {
         pool.discardFile("drop.idx");
 
         assertEquals(0, pool.blockCount("drop.idx"));
-        assertEquals(new BufferStats(4, 2, 0, 0, 2), pool.getBufferStats());
+        assertEquals(new BufferStats(4, 2, 0, 0, 2, 1), pool.getBufferStats());
         pool.unpin(pinned, false, 0);
+        assertEquals(0, pool.getBufferStats().pinnedBlocks());
         assertDoesNotThrow(pool::flushBuffer);
     }
 
@@ -63,11 +64,14 @@ class BufferPoolTest {
         assertNotSame(first, index);
         assertEquals(2, disk.reads);
         BufferStats snapshot = pool.getBufferStats();
-        assertEquals(new BufferStats(3, 2, 0, 1, 2), snapshot);
+        // frame users.tbl di pin dua kali tapi tetap dihitung satu frame
+        assertEquals(new BufferStats(3, 2, 0, 1, 2, 2), snapshot);
         pool.unpin(first, true, 7);
+        assertEquals(2, pool.getBufferStats().pinnedBlocks());
         pool.unpin(again, false, -1);
         pool.unpin(index, false, -1);
         assertEquals(1, pool.getBufferStats().dirtyBlocks());
+        assertEquals(0, pool.getBufferStats().pinnedBlocks());
         assertEquals(0, snapshot.dirtyBlocks());
     }
 
@@ -113,8 +117,9 @@ class BufferPoolTest {
         assertEquals(1, pool.blockCount("new.tbl"));
         assertCode(StorageErrorCode.BUFFER_FULL, () -> pool.appendBlock("new.tbl"));
         assertEquals(1, disk.blockCount("new.tbl"));
-        assertEquals(new BufferStats(1, 1, 0, 0, 0), pool.getBufferStats());
+        assertEquals(new BufferStats(1, 1, 0, 0, 0, 1), pool.getBufferStats());
         pool.unpin(block, false, 0);
+        assertEquals(0, pool.getBufferStats().pinnedBlocks());
         assertDoesNotThrow(pool::flushBuffer);
     }
 

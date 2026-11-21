@@ -163,11 +163,15 @@ public class BufferPool {
         for (Block block : frames.values()) flush(block);
     }
 
-    /** Membuat statistik kapasitas, jumlah frame, jumlah dirty, serta hit/miss dari pencarian melalui pin. */
+    /** Membuat statistik kapasitas, jumlah frame, jumlah dirty, hit/miss dari pencarian melalui pin, serta jumlah frame yang masih di pin. */
     public synchronized BufferStats getBufferStats() {
         int dirty = 0;
-        for (Block block : frames.values()) if (block.dirty) dirty++;
-        return new BufferStats(capacity, frames.size(), dirty, hits, misses);
+        int pinned = 0;
+        for (Block block : frames.values()) {
+            if (block.dirty) dirty++;
+            if (block.pinCount > 0) pinned++;
+        }
+        return new BufferStats(capacity, frames.size(), dirty, hits, misses, pinned);
     }
 
     /** Membentuk kunci cache dari path file yang divalidasi dan nomor blok nonnegatif. */
