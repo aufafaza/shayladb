@@ -103,6 +103,30 @@ public class LogManager {
     }
 
     /**
+     * Mencatat perubahan UPDATE yang memindahkan baris dari oldRid ke newRid.
+     */
+    public DataChangeLogRecord appendRelocationLog(
+            int txId,
+            String table,
+            RowId oldRid,
+            RowId newRid,
+            RecordImage beforeImg,
+            RecordImage afterImg) {
+        long lsn = nextLsn.getAndIncrement();
+        Instant now = Instant.now();
+        DataChangeLogRecord record = new DataChangeLogRecord(
+                lsn, txId, LogType.UPDATE, now, table, oldRid, newRid, beforeImg, afterImg);
+
+        boolean ok = walFileHandler.append(record);
+        if (!ok) {
+            throw new RuntimeException("Gagal menulis log relokasi data untuk txId=" + txId);
+        }
+
+        updateMaxTxId(txId);
+        return record;
+    }
+
+    /**
      * Mencatat penanda checkpoint.
      */
     public CheckpointLogRecord appendCheckpointLog(List<Integer> activeTxIds) {
@@ -115,10 +139,13 @@ public class LogManager {
             throw new RuntimeException("Gagal menulis log checkpoint");
         }
 
-        walFileHandler.flushUpTo(lsn);
+        boolean flushed = walFileHandler.flushUpTo(lsn);
+        if (!flushed) {
+            throw new RuntimeException("Gagal flush log checkpoint pada LSN=" + lsn);
+        }
         return record;
     }
-
+    
     /**
      * Memastikan log hingga LSN tertentu telah tersimpan di disk.
      */
@@ -165,6 +192,9 @@ public class LogManager {
                 String rowIdStr = changeLog.getRowId() != null
                         ? changeLog.getRowId().blockNumber() + ":" + changeLog.getRowId().slot()
                         : "-";
+                if (changeLog.isRelocation()) {
+                    rowIdStr += "->" + changeLog.getNewRowId().blockNumber() + ":" + changeLog.getNewRowId().slot();
+                }
                 String beforeStr = changeLog.getBeforeImage() != null
                         ? changeLog.getBeforeImage().values().toString()
                         : "<ABSENT>";

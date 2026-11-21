@@ -104,9 +104,10 @@ public class WalFileHandler {
 
         synchronized (ioLock) {
             try {
-                if (channel != null && channel.isOpen()) {
-                    channel.force(false);
+                if (channel == null || !channel.isOpen()) {
+                    return false;
                 }
+                channel.force(true);
                 flushedLsn = Math.max(flushedLsn, lastWrittenLsn);
                 return flushedLsn >= lsn;
             } catch (IOException e) {
@@ -161,6 +162,18 @@ public class WalFileHandler {
                 }
             }
 
+            long highestDiskLsn = 0L;
+            for (LogRecord rec : records) {
+                if (rec.getLsn() > highestDiskLsn) {
+                    highestDiskLsn = rec.getLsn();
+                }
+            }
+            if (highestDiskLsn > lastWrittenLsn) {
+                lastWrittenLsn = highestDiskLsn;
+            }
+            if (highestDiskLsn > flushedLsn) {
+                flushedLsn = highestDiskLsn;
+            }
             return records;
         }
     }
@@ -214,6 +227,12 @@ public class WalFileHandler {
             }
             sb.append(serializeImage(change.getBeforeImage())).append(FIELD_DELIMITER);
             sb.append(serializeImage(change.getAfterImage()));
+
+            RowId newRid = change.getNewRowId();
+            if (newRid != null) {
+                sb.append(FIELD_DELIMITER).append(newRid.blockNumber())
+                .append(FIELD_DELIMITER).append(newRid.slot());
+            }
             return sb.toString();
         } else if (record instanceof CheckpointLogRecord cp) {
             sb.append(FIELD_DELIMITER).append(serializeIntList(cp.getActiveTxIds()));
@@ -224,7 +243,8 @@ public class WalFileHandler {
     }
 
     private LogRecord parseRecord(String line) {
-        String[] tokens = line.split("\\|", -1);
+        List<String> tokenList = splitUnescaped(line, '|');
+        String[] tokens = tokenList.toArray(new String[0]);
         if (tokens.length < 4) {
             throw new IllegalArgumentException("Field log kurang dari 4: " + line);
         }
@@ -246,7 +266,14 @@ public class WalFileHandler {
                 RowId rid = (block >= 0 && slot >= 0) ? new RowId(table, block, slot) : null;
                 RecordImage beforeImg = deserializeImage(tokens[7].trim());
                 RecordImage afterImg = deserializeImage(tokens[8].trim());
-                yield new DataChangeLogRecord(lsn, txId, type, timestamp, table, rid, beforeImg, afterImg);
+
+                RowId newRid = null;
+                if (tokens.length >= 11) {
+                    int newBlock = Integer.parseInt(tokens[9].trim());
+                    int newSlot = Integer.parseInt(tokens[10].trim());
+                    newRid = (newBlock >= 0 && newSlot >= 0) ? new RowId(table, newBlock, newSlot) : null;
+                }
+                yield new DataChangeLogRecord(lsn, txId, type, timestamp, table, rid, newRid, beforeImg, afterImg);
             }
             case CHECKPOINT -> {
                 if (tokens.length < 5) {
@@ -403,5 +430,31 @@ public class WalFileHandler {
             result.add(Integer.parseInt(part.trim()));
         }
         return result;
+    }
+
+    private List<String> splitUnescaped(String line, char delimiter) {
+        List<String> tokens = new ArrayList<>();
+        StringBuilder current = new StringBuilder();
+        boolean escaped = false;
+
+        for (int i = 0; i < line.length(); i++) {
+            char c = line.charAt(i);
+            if (escaped) {
+                current.append('\\').append(c);
+                escaped = false;
+            } else if (c == '\\') {
+                escaped = true;
+            } else if (c == delimiter) {
+                tokens.add(current.toString());
+                current.setLength(0);
+            } else {
+                current.append(c);
+            }
+        }
+        if (escaped) {
+            current.append('\\');
+        }
+        tokens.add(current.toString());
+        return tokens;
     }
 }
