@@ -6,6 +6,7 @@ import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+
 import mdbms.models.schema.ColumnDefinition;
 import mdbms.models.schema.TableSchema;
 
@@ -23,9 +24,16 @@ public class ResultTableSchema {
     }
 
     public ResultTableSchema(TableSchema tableSchema) {
-        this.tableName = tableSchema.tableName();
+        this(tableSchema, tableSchema.tableName());
+    }
+
+    public ResultTableSchema(TableSchema tableSchema, String qualifier) {
+        this.tableName = Objects.requireNonNull(qualifier, "qualifier");
         for (ColumnDefinition columnDefinition : tableSchema.columns()) {
-            addColumn(columnDefinition);
+            // Each scan owns its column identities, including two aliases of
+            // the same catalog schema in a self join.
+            addColumn(new ColumnDefinition(columnDefinition.name(), columnDefinition.type(),
+                columnDefinition.length(), columnDefinition.nullable()));
         }
     }
 

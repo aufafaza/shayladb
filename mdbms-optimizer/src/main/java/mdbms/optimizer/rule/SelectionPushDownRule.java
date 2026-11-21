@@ -17,7 +17,7 @@ import mdbms.optimizer.binder.TableBinding;
 import mdbms.optimizer.cost.CardinalityEstimator;
 import mdbms.optimizer.cost.PlanEstimate;
 
-// QO-09: optimasi seleksi
+// Mendorong kondisi seleksi ke sumber data yang memakainya.
 public class SelectionPushDownRule implements IOptimizationRule {
     private static final CardinalityEstimator CARDINALITY = new CardinalityEstimator();
     private static final long ESTIMATE_ROWS = 1_000_000L;
@@ -163,8 +163,8 @@ public class SelectionPushDownRule implements IOptimizationRule {
 
     private static void collectTables(QueryTree node, BindingContext bindings, Set<String> out) {
         if (node.getNodeType() == QueryNodeType.TABLE_SCAN && node.getTableName() != null) {
-            TableBinding binding = bindings.getTableBinding(node.getTableName());
-            String name = binding != null ? binding.getAlias() : node.getTableName();
+            TableBinding binding = bindings.getTableBindingByAlias(node.getBindingName());
+            String name = binding != null ? binding.getAlias() : node.getBindingName();
             out.add(name.toLowerCase(Locale.ROOT));
         }
         for (QueryTree child : node.getChildren()) {

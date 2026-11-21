@@ -95,7 +95,7 @@ public class WalFileHandler {
      * Menyimpan data log sampai LSN tertentu ke disk fisik (fsync).
      */
     public boolean flushUpTo(long lsn) {
-        if (lsn < 0) {
+        if (lsn < 0 || lsn > lastWrittenLsn) {
             return false;
         }
         if (lsn <= flushedLsn) {
@@ -183,16 +183,21 @@ public class WalFileHandler {
      */
     public void close() {
         synchronized (ioLock) {
+            IOException failure = null;
             try {
-                if (channel != null && channel.isOpen()) {
-                    channel.force(false);
-                    channel.close();
-                }
-                if (fos != null) {
-                    fos.close();
-                }
-            } catch (IOException ignored) {
+                if (channel != null && channel.isOpen()) channel.force(false);
+            } catch (IOException e) { failure = e; }
+            try {
+                if (channel != null) channel.close();
+            } catch (IOException e) {
+                if (failure == null) failure = e; else failure.addSuppressed(e);
             }
+            try {
+                if (fos != null) fos.close();
+            } catch (IOException e) {
+                if (failure == null) failure = e; else failure.addSuppressed(e);
+            }
+            if (failure != null) throw new java.io.UncheckedIOException("Could not close WAL", failure);
         }
     }
 
