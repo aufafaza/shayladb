@@ -80,6 +80,14 @@ public class RollbackManager {
 
         rollbackLock.lock();
         try {
+            if (recordApplier.getDataAccess() == null || durableStorage == null) {
+                return new RecoveryResult(
+                    false,
+                    -1L,
+                    logManager.getMaxTxId(),
+                    "ROLLBACK: Layanan storage (IDataAccess/IDurableStorage) tidak tersedia"
+                );
+            }
             if (completedRollbacks.contains(txId)) {
                 return new RecoveryResult(
                     false,
@@ -128,37 +136,51 @@ public class RollbackManager {
                 }
             }
 
-            for (int i = txLogs.size() - 1; i >= 0; i--) {
-                LogRecord record = txLogs.get(i);
-                if (record.getTxId() != txId) {
-                    continue;
-                }
-                if (record instanceof DataChangeLogRecord change) {
-                    boolean undone = undo(change);
-                    if (!undone) {
-                        return new RecoveryResult(
-                            false,
-                            change.getLsn(),
-                            logManager.getMaxTxId(),
-                            "ROLLBACK: Gagal melakukan undo pada log record LSN=" + change.getLsn() + " dengan txId=" + txId
-                        );
+            try {
+                for (int i = txLogs.size() - 1; i >= 0; i--) {
+                    LogRecord record = txLogs.get(i);
+                    if (record.getTxId() != txId) {
+                        continue;
+                    }
+                    if (record instanceof DataChangeLogRecord change) {
+                        boolean undone = undo(change);
+                        if (!undone) {
+                            return new RecoveryResult(
+                                false,
+                                change.getLsn(),
+                                logManager.getMaxTxId(),
+                                "ROLLBACK: Gagal melakukan undo pada log record LSN=" + change.getLsn() + " dengan txId=" + txId
+                            );
+                        }
                     }
                 }
-            }
 
-            if (durableStorage != null) {
                 durableStorage.flushBuffer();
-            }
-            TransactionLogRecord abortRecord = logManager.appendTransactionLog(txId, LogType.ABORT);
-            logManager.flushUpTo(abortRecord.getLsn());
-            completedRollbacks.add(txId);
+                TransactionLogRecord abortRecord = logManager.appendTransactionLog(txId, LogType.ABORT);
+                if (!logManager.flushUpTo(abortRecord.getLsn())) {
+                    return new RecoveryResult(
+                        false,
+                        abortRecord.getLsn(),
+                        logManager.getMaxTxId(),
+                        "ROLLBACK: Gagal flush log ABORT untuk txId=" + txId
+                    );
+                }
+                completedRollbacks.add(txId);
 
-            return new RecoveryResult(
-                true,
-                abortRecord.getLsn(),
-                logManager.getMaxTxId(),
-                "ROLLBACK: Rollback selesai untuk txId=" + txId
-            );
+                return new RecoveryResult(
+                    true,
+                    abortRecord.getLsn(),
+                    logManager.getMaxTxId(),
+                    "ROLLBACK: Rollback selesai untuk txId=" + txId
+                );
+            } catch (RuntimeException e) {
+                return new RecoveryResult(
+                    false,
+                    -1L,
+                    logManager.getMaxTxId(),
+                    "ROLLBACK: Gagal menerapkan rollback untuk txId=" + txId + ": " + e.getMessage()
+                );
+            }
         } finally {
             rollbackLock.unlock();
             activeRollbacks.remove(txId);
