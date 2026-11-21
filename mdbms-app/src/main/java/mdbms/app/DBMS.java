@@ -1,6 +1,10 @@
 package mdbms.app;
 
 import java.nio.file.Path;
+import java.util.Set;
+import java.util.List;
+import java.util.concurrent.*;
+import java.util.concurrent.locks.ReentrantLock;
 import mdbms.api.IConcurrencyControl;
 import mdbms.api.IDataAccess;
 import mdbms.api.IDurableStorage;
@@ -13,22 +17,31 @@ import mdbms.concurrency.LockBasedProtocol;
 import mdbms.concurrency.TimestampsBasedProtocol;
 import mdbms.models.log.RecoveryResult;
 import mdbms.optimizer.QueryOptimizer;
-import mdbms.optimizer.lexer.ShaylaLexer;
 import mdbms.optimizer.parser.ShaylaParser;
 import mdbms.processor.QueryProcessor;
 import mdbms.recovery.FailureRecoveryFacade;
 import mdbms.recovery.WalFileHandler;
 import mdbms.storage.SampleDataLoader;
 import mdbms.storage.StorageManager;
+import mdbms.net.DBMSServer;
 
 public class DBMS {
     private static final int INDEX_MAX_DEGREE = 4;
+    public static final long SHUTDOWN_TIMEOUT_SECONDS = 15;
+    private final Set<DBMSServer> servers = ConcurrentHashMap.newKeySet();
+    private final Phaser executions = new Phaser(1);
+    private final ReentrantLock maintenance = new ReentrantLock();
+    private volatile ScheduledExecutorService checkpointScheduler;
+    private volatile boolean shutdownRequested;
+    private volatile Throwable shutdownFailure;
+    private CompletableFuture<Void> shutdownCompletion;
+    private Thread shutdownThread;
 
     private final DBMSConfig cfg;
     private final IDurableStorage storage;
     private final IFailureRecoveryManager frm;
-    private IConcurrencyControl concurrencyControl;
-    private IQueryProcessor processor;
+    private volatile IConcurrencyControl concurrencyControl;
+    private volatile IQueryProcessor processor;
     private volatile boolean running;
 
     public DBMS(DBMSConfig cfg){
@@ -51,6 +64,7 @@ public class DBMS {
     }
 
     public synchronized void start(){
+        if (shutdownRequested) throw new IllegalStateException("Engine is closed; create a new DBMS instance");
         if (running) return;
         try {
             ConcurrencyProtocol protocol = createProtocol(cfg.getConcurrencyAlgorithm());
@@ -62,7 +76,17 @@ public class DBMS {
                 new QueryOptimizer((ISchemaCatalog) storage, new ShaylaParser()),
                 (IDataAccess) storage, (ISchemaCatalog) storage, frm, manager);
             concurrencyControl = manager;
-            processor = queryProcessor;
+            processor = (query, txId) -> {
+                synchronized (DBMS.this) {
+                    if (shutdownRequested) throw new IllegalStateException("Engine is shutting down");
+                    executions.register();
+                }
+                try {
+                    return queryProcessor.executeQuery(query, txId);
+                } finally {
+                    executions.arriveAndDeregister();
+                }
+            };
             running = true;
             System.out.println("Concurrency protocol: " + manager.getActiveProtocolName());
         } catch (RuntimeException | Error failure) {
@@ -71,21 +95,161 @@ public class DBMS {
         }
     }
 
-    public synchronized void shutdown(){
-        if (!running) {
-            closeRecovery();
-            return;
+    public void shutdown(){
+        shutdown(SHUTDOWN_TIMEOUT_SECONDS, TimeUnit.SECONDS);
+    }
+
+    public void shutdown(long timeout, TimeUnit unit) {
+        if (timeout <= 0) throw new IllegalArgumentException("Shutdown timeout must be positive");
+        CompletableFuture<Void> completion;
+        synchronized (this) {
+            if (shutdownCompletion == null) {
+                shutdownRequested = true;
+                if (concurrencyControl instanceof ConcurrencyControlManager manager) manager.stopTransactions();
+                shutdownCompletion = new CompletableFuture<>();
+                boolean wasRunning = running;
+                running = false;
+                processor = null;
+                shutdownThread = new Thread(() -> finishShutdown(wasRunning), "mdbms-shutdown-coordinator");
+                shutdownThread.setDaemon(true);
+                shutdownThread.start();
+            }
+            completion = shutdownCompletion;
         }
-        RecoveryResult checkpoint = frm.createCheckpoint();
-        if (checkpoint == null || !checkpoint.isSuccess()) {
-            throw new IllegalStateException("Checkpoint failed during shutdown: "
-                    + (checkpoint == null ? "no recovery result" : checkpoint.getMessage()));
+        try {
+            completion.get(timeout, unit);
+            if (shutdownFailure != null) throw new IllegalStateException("Shutdown failed", shutdownFailure);
+        } catch (InterruptedException interrupted) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException("Interrupted while awaiting shutdown", interrupted);
+        } catch (TimeoutException timedOut) {
+            shutdownFailure = timedOut;
+            throw new IllegalStateException("Shutdown timed out; resources may still be in use", timedOut);
+        } catch (ExecutionException failure) {
+            throw new IllegalStateException("Shutdown failed", failure.getCause());
         }
-        storage.flushBuffer();
-        closeRecovery();
-        running = false;
-        processor = null;
-        concurrencyControl = null;
+    }
+
+    public synchronized void registerServer(DBMSServer server) {
+        if (!running || shutdownRequested) throw new IllegalStateException("Engine is not accepting servers");
+        servers.add(java.util.Objects.requireNonNull(server));
+    }
+
+    /** Runs a quiescent checkpoint and serializes it with shutdown's final durability work. */
+    public void checkpoint() {
+        try {
+            maintenance.lockInterruptibly();
+            try {
+                if (!running || shutdownRequested) throw new IllegalStateException("Engine is not running");
+                ConcurrencyControlManager manager = (ConcurrencyControlManager) concurrencyControl;
+                manager.pauseTransactions();
+                try {
+                    manager.awaitNoActiveTransactions();
+                    requireCheckpoint();
+                } finally {
+                    if (!shutdownRequested && !manager.isFailed()) manager.resumeTransactions();
+                }
+            } finally {
+                maintenance.unlock();
+            }
+        } catch (InterruptedException interrupted) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException("Checkpoint cancelled", interrupted);
+        }
+    }
+
+    public synchronized void startCheckpointScheduler(long interval, TimeUnit unit) {
+        if (!running || shutdownRequested) throw new IllegalStateException("Engine is not running");
+        if (interval <= 0) throw new IllegalArgumentException("Checkpoint interval must be positive");
+        if (checkpointScheduler != null) throw new IllegalStateException("Checkpoint scheduler already started");
+        checkpointScheduler = Executors.newSingleThreadScheduledExecutor(task -> {
+            Thread thread = new Thread(task, "mdbms-checkpoint");
+            thread.setDaemon(true);
+            return thread;
+        });
+        checkpointScheduler.scheduleWithFixedDelay(() -> {
+            try { checkpoint(); }
+            catch (RuntimeException failure) {
+                if (!shutdownRequested) {
+                    shutdownFailure = failure;
+                    ((ConcurrencyControlManager) concurrencyControl).pauseTransactions();
+                }
+            }
+        }, interval, interval, unit);
+    }
+
+    private void finishShutdown(boolean wasRunning) {
+        boolean quiescent = !wasRunning;
+        Throwable failure = null;
+        try {
+            Throwable serverFailure = null;
+            for (DBMSServer server : servers) {
+                try { server.stopAccepting(); }
+                catch (Exception problem) {
+                    if (serverFailure == null) serverFailure = problem;
+                    else serverFailure.addSuppressed(problem);
+                }
+            }
+            ScheduledExecutorService scheduler = checkpointScheduler;
+            if (scheduler != null) scheduler.shutdown();
+            for (DBMSServer server : servers) {
+                try { server.shutdown(); }
+                catch (Exception problem) {
+                    if (serverFailure == null) serverFailure = problem;
+                    else serverFailure.addSuppressed(problem);
+                }
+            }
+            if (serverFailure != null) throw new IllegalStateException("Server cleanup failed", serverFailure);
+            if (scheduler != null && !scheduler.awaitTermination(5, TimeUnit.SECONDS)) {
+                throw new IllegalStateException("Checkpoint scheduler did not terminate");
+            }
+            int phase = executions.arrive();
+            executions.awaitAdvanceInterruptibly(phase);
+            if (wasRunning) {
+                maintenance.lockInterruptibly();
+                try {
+                    quiescent = true;
+                    ConcurrencyControlManager manager = (ConcurrencyControlManager) concurrencyControl;
+                    manager.awaitAdmissionStopped();
+                    for (var tx : List.copyOf(manager.getActiveTransactions().values())) {
+                        manager.abortTransaction(tx.getId(), "Engine shutdown");
+                    }
+                    if (manager.isFailed()) throw new IllegalStateException(manager.getFailureReason());
+                    requireCheckpoint();
+                    storage.close();
+                } finally {
+                    maintenance.unlock();
+                }
+            }
+        } catch (Throwable problem) {
+            failure = problem;
+        } finally {
+            // Never close WAL while an uncooperative worker can still mutate storage.
+            if (quiescent) {
+                try { closeRecovery(); }
+                catch (Throwable closeFailure) {
+                    if (failure == null) failure = closeFailure;
+                    else failure.addSuppressed(closeFailure);
+                }
+            }
+            processor = null;
+            if (failure == null && shutdownFailure == null) {
+                concurrencyControl = null;
+                shutdownCompletion.complete(null);
+            }
+            else {
+                if (failure == null) failure = shutdownFailure;
+                shutdownFailure = failure;
+                shutdownCompletion.completeExceptionally(failure);
+            }
+        }
+    }
+
+    private void requireCheckpoint() {
+        RecoveryResult result = frm.createCheckpoint();
+        if (result == null || !result.isSuccess()) {
+            throw new IllegalStateException("Checkpoint failed: " + (result == null ? "no result" : result.getMessage()));
+        }
     }
 
     public boolean isRunning(){
