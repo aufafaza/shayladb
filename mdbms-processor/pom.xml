@@ -18,5 +18,10 @@
             <groupId>mdbms</groupId>
             <artifactId>mdbms-api</artifactId>
         </dependency>
+        <dependency>
+            <groupId>mdbms</groupId>
+            <artifactId>mdbms-optimizer</artifactId>
+            <scope>test</scope>
+        </dependency>
     </dependencies>
 </project>

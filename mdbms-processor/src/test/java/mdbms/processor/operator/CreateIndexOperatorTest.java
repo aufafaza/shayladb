@@ -6,6 +6,8 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import java.util.List;
 import mdbms.models.schema.IndexInfo;
 import mdbms.models.schema.IndexType;
+import mdbms.processor.mocks.MockSchemaCatalog;
+
 import org.junit.jupiter.api.Test;
 
 class CreateIndexOperatorTest {

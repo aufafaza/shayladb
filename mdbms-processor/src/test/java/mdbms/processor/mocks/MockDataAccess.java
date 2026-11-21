@@ -1,4 +1,4 @@
-package mdbms.processor.operator;
+package mdbms.processor.mocks;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -15,7 +15,7 @@ import mdbms.models.data.Row;
 import mdbms.models.data.RowId;
 import mdbms.models.data.Rows;
 
-final class MockDataAccess implements IDataAccess {
+public final class MockDataAccess implements IDataAccess {
     public static final String TABLE_NAME = "table";
     public static final String ID_COLUMN = "id";
     public static final String SECOND_COLUMN = "other_id";
