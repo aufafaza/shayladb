@@ -13,7 +13,7 @@ import mdbms.models.log.LogType;
 import mdbms.models.log.RecordImage;
 import mdbms.models.log.RecoveryResult;
 import mdbms.models.log.TransactionLogRecord;
-public class FailureRecoveryFacade implements IFailureRecoveryManager {
+public class FailureRecoveryFacade implements IFailureRecoveryManager, AutoCloseable {
 
     private final LogManager logManager;
     private final RollbackManager rollbackManager;
@@ -38,23 +38,29 @@ public class FailureRecoveryFacade implements IFailureRecoveryManager {
             ? logDir.getParent()
             : logDir;
 
-        this.logManager = new LogManager(new WalFileHandler(walFilePath));
-        RecordApplier recordApplier = new RecordApplier(dataAccess);
-        this.rollbackManager = new RollbackManager(logManager, recordApplier, durableStorage);
-        this.checkpointManager = new CheckpointManager(
-            logManager,
-            durableStorage,
-            recordApplier,
-            dataDirPath != null ? dataDirPath.toString() : null,
-            snapshotDir != null ? snapshotDir.toString() : null
-        );
-        this.crashRecoveryManager = new CrashRecoveryManager(
-            logManager,
-            rollbackManager,
-            checkpointManager,
-            recordApplier,
-            durableStorage
-        );
+        WalFileHandler wal = new WalFileHandler(walFilePath);
+        try {
+            this.logManager = new LogManager(wal);
+            RecordApplier recordApplier = new RecordApplier(dataAccess);
+            this.rollbackManager = new RollbackManager(logManager, recordApplier, durableStorage);
+            this.checkpointManager = new CheckpointManager(
+                logManager,
+                durableStorage,
+                recordApplier,
+                dataDirPath != null ? dataDirPath.toString() : null,
+                snapshotDir != null ? snapshotDir.toString() : null
+            );
+            this.crashRecoveryManager = new CrashRecoveryManager(
+                logManager,
+                rollbackManager,
+                checkpointManager,
+                recordApplier,
+                durableStorage
+            );
+        } catch (RuntimeException | Error failure) {
+            wal.close();
+            throw failure;
+        }
     }
 
     public FailureRecoveryFacade(
@@ -184,6 +190,7 @@ public class FailureRecoveryFacade implements IFailureRecoveryManager {
         return logManager.formatLogTable(readLogs(filterTxId));
     }
 
+    @Override
     public void close() {
         logManager.getWalFileHandler().close();
     }
