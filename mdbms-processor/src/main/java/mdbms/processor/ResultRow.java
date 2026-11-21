@@ -1,6 +1,6 @@
 package mdbms.processor;
 
-import java.util.HashMap;
+import java.util.TreeMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -14,7 +14,7 @@ public class ResultRow implements IResultRow {
     public final static ResultRow EMPTY = new ResultRow(new ResultTableSchema());
 
     private final ResultTableSchema tableSchema;
-    private final Map<String, Map<String, Object>> values = new HashMap<>();
+    private final Map<String, Map<String, Object>> values = new TreeMap<>(String.CASE_INSENSITIVE_ORDER);
     private RowId rowId;
 
 
@@ -25,7 +25,7 @@ public class ResultRow implements IResultRow {
         for (ColumnDefinition column : schema.getColumns()) {
             String tableName = schema.getColumnTableOrigin(column);
             if (!values.containsKey(tableName)) {
-                values.put(tableName, new HashMap<>());
+                values.put(tableName, new TreeMap<>(String.CASE_INSENSITIVE_ORDER));
             }
             values.get(tableName).put(column.name(), null);
         }
@@ -55,7 +55,7 @@ public class ResultRow implements IResultRow {
 
         ColumnDefinition matchingColumn = null;
         for (ColumnDefinition column : tableSchema.getColumns()) {
-            if (column.name().equals(columnName)) {
+            if (column.name().equalsIgnoreCase(columnName)) {
                 if (matchingColumn != null) {
                     throw new AmbiguousColumnException(columnName);
                 }

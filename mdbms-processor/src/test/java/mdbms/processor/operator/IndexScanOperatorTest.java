@@ -55,6 +55,25 @@ class IndexScanOperatorTest {
     }
 
     private static IndexScanOperator createOperator(ComparisonOperator operator, int value) {
+        return createOperator(operator, value, MockDataAccess.TABLE_NAME);
+    }
+
+    @Test
+    void aliasQualifiesIndexedResultsAndSchemaBeforeFirstRow() {
+        IndexScanOperator operator = createOperator(ComparisonOperator.EQ, 3, "u");
+        operator.open();
+        try {
+            assertEquals("u", operator.getSchema().getColumnTableOrigin(MockDataAccess.ID_COLUMN));
+            IResultRow row = operator.next();
+            assertEquals(2, row.get("u", MockDataAccess.ID_COLUMN));
+            assertEquals(3, row.get("u", MockDataAccess.SECOND_COLUMN));
+            assertNull(row.get(MockDataAccess.TABLE_NAME, MockDataAccess.ID_COLUMN));
+        } finally {
+            operator.close();
+        }
+    }
+
+    private static IndexScanOperator createOperator(ComparisonOperator operator, int value, String qualifier) {
         MockDataAccess dataAccess = new MockDataAccess();
         MockSchemaCatalog catalog = new MockSchemaCatalog();
         MockConcurrencyControl concurrencyControl = new MockConcurrencyControl();
@@ -75,6 +94,7 @@ class IndexScanOperatorTest {
                 concurrencyControl,
                 1,
                 MockDataAccess.TABLE_NAME,
+                qualifier,
                 new IndexScanSpec(index, new Condition(MockDataAccess.SECOND_COLUMN, operator, value)));
     }
 }

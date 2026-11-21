@@ -16,6 +16,8 @@ import mdbms.processor.operator.BeginOperator;
 import mdbms.processor.operator.CartesianJoinOperator;
 import mdbms.processor.operator.CommitOperator;
 import mdbms.processor.operator.CreateIndexOperator;
+import mdbms.processor.operator.CreateTableOperator;
+import mdbms.processor.operator.DropTableOperator;
 import mdbms.processor.operator.DeleteOperator;
 import mdbms.processor.operator.IQueryOperator;
 import mdbms.processor.operator.IndexScanOperator;
@@ -60,10 +62,10 @@ public class PlanTranslator {
                     case DEFAULT:
                     case LINEAR_SCAN:
                         return new SequentialScanOperator(dataAccess, schemaCatalog, concurrencyControl, txId,
-                                queryTree.getTableName());
+                                queryTree.getTableName(), queryTree.getBindingName());
                     case INDEX_SCAN:
                         return new IndexScanOperator(dataAccess, schemaCatalog, concurrencyControl, txId,
-                                queryTree.getTableName(), queryTree.getIndexScan());
+                                queryTree.getTableName(), queryTree.getBindingName(), queryTree.getIndexScan());
                     default:
                         throw new RuntimeException("Invalid algorithm for table scan: " + queryTree.getAlgorithm());
                 }
@@ -103,6 +105,10 @@ public class PlanTranslator {
                         queryTree.getTableName(), queryTree.getIndexColumn().getColumnName(), IndexType.BPLUS_TREE));
             case BEGIN:
                 return new BeginOperator(txId);
+            case CREATE_TABLE:
+                return new CreateTableOperator(schemaCatalog, queryTree.getTableDefinition());
+            case DROP_TABLE:
+                return new DropTableOperator(schemaCatalog, queryTree.getTableName(), queryTree.getDropBehavior());
             case COMMIT:
                 return new CommitOperator(concurrencyControl, txId);
             case ABORT:
