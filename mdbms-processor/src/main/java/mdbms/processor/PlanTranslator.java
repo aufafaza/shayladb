@@ -16,6 +16,8 @@ import mdbms.processor.operator.BeginOperator;
 import mdbms.processor.operator.CartesianJoinOperator;
 import mdbms.processor.operator.CommitOperator;
 import mdbms.processor.operator.CreateIndexOperator;
+import mdbms.processor.operator.CreateTableOperator;
+import mdbms.processor.operator.DropTableOperator;
 import mdbms.processor.operator.DeleteOperator;
 import mdbms.processor.operator.IQueryOperator;
 import mdbms.processor.operator.IndexScanOperator;
@@ -101,16 +103,16 @@ public class PlanTranslator {
             case CREATE_INDEX:
                 return new CreateIndexOperator(schemaCatalog, new IndexInfo(queryTree.getIndexName(),
                         queryTree.getTableName(), queryTree.getIndexColumn().getColumnName(), IndexType.BPLUS_TREE));
-            case BEGIN:
-                return new BeginOperator(txId);
             case CREATE_TABLE:
                 return new CreateTableOperator(schemaCatalog, queryTree.getTableDefinition());
             case DROP_TABLE:
                 return new DropTableOperator(schemaCatalog, queryTree.getTableName(), queryTree.getDropBehavior());
-            case COMMIT:
-                return new CommitOperator(concurrencyControl, txId);
-            case ABORT:
-                return new AbortOperator(concurrencyControl, txId);
+            // case BEGIN:
+            //     return new BeginOperator(txId);
+            // case COMMIT:
+            //     return new CommitOperator(concurrencyControl, txId);
+            // case ABORT:
+            //     return new AbortOperator(concurrencyControl, txId);
             default:
                 return emptyOperator();
         }
