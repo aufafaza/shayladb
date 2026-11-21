@@ -92,7 +92,7 @@ public class UpdateOperator extends QueryUnaryOperator implements IWriteOperator
                 WriteContext ctx = AccessPermission.writeWithContext(
                         concurrencyControlManager, transactionId, item, oldValues, newValues);
                 concurrencyControlManager.executeRelocation(transactionId, item, item, oldValues, newValues, () -> {
-                    if (!dataAccess.updateInPlace(current.rowId(), newValues, ctx.getLSN())) {
+                    if (!dataAccess.updateInPlace(current.rowId(), newValues, ctx.getLsn())) {
                         throw new QueryExecutionException("Row no longer fits in place; retry the transaction");
                     }
                     return null;
