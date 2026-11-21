@@ -30,7 +30,7 @@ import static org.junit.jupiter.api.Assertions.*;
 class QueryAnalyzerFeaturesTest {
     private Main.InMemorySchemaCatalog catalog;
     private QueryOptimizer optimizer;
-    private final ShaylaParser parser = new ShaylaParser(new ShaylaLexer(""));
+    private final ShaylaParser parser = new ShaylaParser();
 
     @BeforeEach void setUp() {
         catalog = new Main.InMemorySchemaCatalog();
