@@ -15,7 +15,6 @@ import mdbms.models.schema.DataType;
 import mdbms.models.schema.TableSchema;
 import mdbms.models.transaction.AccessStatus;
 import mdbms.optimizer.QueryOptimizer;
-import mdbms.optimizer.lexer.ShaylaLexer;
 import mdbms.optimizer.parser.ShaylaParser;
 import mdbms.processor.QueryProcessor;
 import mdbms.processor.operator.CreateTableOperator;
@@ -37,6 +36,7 @@ class QueryEndToEndTest {
             case "beginTransaction" -> transactionIds.getAndIncrement();
             case "requestRead", "requestWrite" -> AccessStatus.GRANTED;
             case "commitTransaction" -> null;
+            case "getTransaction" -> null;
             case "abortTransaction" -> throw new AssertionError("Unexpected abort: " + args[1]);
             default -> throw new UnsupportedOperationException(method.getName());
         });
@@ -90,14 +90,105 @@ class QueryEndToEndTest {
         assertEquals(List.of(List.of(1, "Alice")), selected.rows());
     }
 
+    @Test
+    void explainReturnsThePlanWithoutExecutingTheQuery() {
+        System.out.println("\n=== EXPLAIN ===");
+        ExecutionResult explained = execute("EXPLAIN INSERT INTO users VALUES (1, 'Alice');");
+        assertTrue(explained.success(), explained.message());
+        assertEquals(List.of(), explained.columns());
+        assertEquals(0, explained.affectedRows());
+        assertTrue(explained.message().contains("Before optimization"), explained.message());
+        assertTrue(explained.message().contains("After optimization"), explained.message());
+        assertTrue(explained.message().contains("INSERT [table=users"), explained.message());
+        System.out.print(explained.message());
+
+        ExecutionResult selected = execute("explain\n  SELECT name FROM users WHERE id = 1;");
+        assertTrue(selected.message().contains("TABLE_SCAN [table=users]"), selected.message());
+        assertEquals(List.of(), execute("SELECT id, name FROM users;").rows(), "EXPLAIN must not insert");
+    }
+
     private StorageManager openStorage() {
         StorageManager manager = new StorageManager(directory.toString(), 8, 4);
         manager.attachRecoveryManager(recovery);
         return manager;
     }
 
+    @Test
+    void createsInsertsSelectsAndDropsATableThroughTheFullPipeline() {
+        useOptimizer();
+        assertTrue(execute("CREATE TABLE notes (id INT PRIMARY KEY, label VARCHAR(20), score FLOAT, code CHAR(2));").success());
+        assertTrue(execute("INSERT INTO notes VALUES (1, 'hello', 3.5, 'AB');").success());
+        assertEquals(List.of(List.of("hello")), execute("SELECT n.label FROM notes AS n WHERE n.id = 1;").rows());
+        storage.flushBuffer();
+        storage = openStorage();
+        useOptimizer();
+        assertEquals(DataType.CHAR, storage.getTableSchema("notes").columns().get(3).type());
+        assertEquals(List.of(List.of("hello")), execute("SELECT n.label FROM notes AS n;").rows());
+        assertTrue(execute("DROP TABLE notes;").success());
+        assertFalse(storage.listTable().contains("notes"));
+        assertFalse(Files.exists(directory.resolve("notes.tbl")));
+        assertFalse(openStorage().listTable().contains("notes"));
+    }
+
+    @Test
+    void aliasFiltersAndSelfJoinsPreserveSeparateRowsAfterOptimization() {
+        useOptimizer();
+        assertTrue(execute("INSERT INTO users VALUES (1, 'Alice');").success());
+        assertTrue(execute("INSERT INTO users VALUES (2, 'Bob');").success());
+        assertTrue(execute("INSERT INTO users VALUES (3, 'Cara');").success());
+        ExecutionResult selected = execute("SELECT a.name, b.name FROM users AS a JOIN users AS b "
+            + "ON a.id < b.id WHERE a.id >= 1 ORDER BY b.id DESC, a.id ASC LIMIT 2;");
+        assertTrue(selected.success(), selected.message());
+        assertEquals(List.of(List.of("Alice", "Cara"), List.of("Bob", "Cara")), selected.rows());
+        ExecutionResult mixedCase = execute("SELECT S.NAME FROM USERS AS s WHERE S.ID >= 2 ORDER BY S.ID DESC LIMIT 1;");
+        assertTrue(mixedCase.success(), mixedCase.message());
+        assertEquals(List.of(List.of("Cara")), mixedCase.rows());
+        assertEquals(List.of(List.of(1, "Alice"), List.of(2, "Bob"), List.of(3, "Cara")),
+            execute("SELECT * FROM users AS a NATURAL JOIN users AS b ORDER BY a.id;").rows());
+    }
+
+    @Test
+    void restrictPreservesParentAndCascadeOnlyRemovesDependentConstraints() {
+        useOptimizer();
+        assertTrue(execute("INSERT INTO users VALUES (1, 'Alice');").success());
+        assertTrue(execute("CREATE TABLE grades (id INT PRIMARY KEY, user_id INT REFERENCES users(id));").success());
+        assertTrue(execute("INSERT INTO grades VALUES (42, 1);").success());
+        ExecutionResult restricted = execute("DROP TABLE users RESTRICT;");
+        assertFalse(restricted.success());
+        assertTrue(restricted.message().contains("RESTRICT"), restricted.message());
+        assertEquals(1, storage.getTableSchema("grades").foreignKeys().size());
+        assertEquals(List.of(List.of("Alice")), execute("SELECT name FROM users;").rows());
+        assertTrue(execute("DROP TABLE users CASCADE;").success());
+        assertTrue(storage.getTableSchema("grades").foreignKeys().isEmpty());
+        assertEquals(List.of(List.of(1)), execute("SELECT g.user_id FROM grades AS g;").rows());
+        storage.flushBuffer();
+        StorageManager reopened = openStorage();
+        assertFalse(reopened.listTable().contains("users"));
+        assertTrue(reopened.getTableSchema("grades").foreignKeys().isEmpty());
+        assertEquals(List.of(42, 1), reopened.readBlock(new DataRetrieval("grades", List.of(), List.of())).rows().get(0).values());
+    }
+
+    @Test
+    void explainShowsAliasedPlansWithoutExecutingTheQuery() {
+        useOptimizer();
+        ExecutionResult explained = execute("explain\n  SELECT * FROM users AS u WHERE u.id = 1;");
+        assertTrue(explained.success(), explained.message());
+        assertEquals(List.of(), explained.columns());
+        assertTrue(explained.message().contains("Before optimization"), explained.message());
+        assertTrue(explained.message().contains("After optimization"), explained.message());
+        assertTrue(explained.message().contains("TABLE_SCAN [table=users, alias=u]"), explained.message());
+
+        assertTrue(execute("EXPLAIN INSERT INTO users VALUES (1, 'Alice');").success());
+        assertEquals(List.of(), execute("SELECT * FROM users;").rows(), "EXPLAIN must not insert");
+    }
+
+    private void useOptimizer() {
+        processor = new QueryProcessor(new QueryOptimizer(storage, new ShaylaParser()),
+            storage, storage, recovery, concurrency);
+    }
+
     private QueryProcessor processorFor(StorageManager manager) {
-        QueryOptimizer optimizer = new QueryOptimizer(manager, new ShaylaParser(new ShaylaLexer(""))) {
+        QueryOptimizer optimizer = new QueryOptimizer(manager, new ShaylaParser()) {
             @Override public ParsedQuery optimizeQuery(ParsedQuery query) { return query; }
         };
         return new QueryProcessor(optimizer, manager, manager, recovery, concurrency);

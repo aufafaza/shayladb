@@ -19,7 +19,6 @@ import mdbms.optimizer.Main;
 import mdbms.optimizer.QueryPlanPrinter;
 import mdbms.optimizer.binder.BindingContext;
 import mdbms.optimizer.binder.QueryBinder;
-import mdbms.optimizer.lexer.ShaylaLexer;
 import mdbms.optimizer.parser.ShaylaParser;
 import org.junit.jupiter.api.Test;
 
@@ -46,7 +45,7 @@ class SelectionPushDownRuleTest {
     // parse + bind, lalu apply rule ke SELECT teratas
     private String optimizeSelection(String sql) {
         Main.InMemorySchemaCatalog catalog = catalog();
-        QueryTree tree = new ShaylaParser(new ShaylaLexer("")).parseToTree(sql);
+        QueryTree tree = new ShaylaParser().parseToTree(sql);
         BindingContext bindings = new QueryBinder(catalog).bind(tree);
         OptimizationContext context = new OptimizationContext(bindings, catalog, catalog, null);
         return new QueryPlanPrinter().printPlan(rule.apply(findSelect(tree), context));
@@ -167,7 +166,7 @@ class SelectionPushDownRuleTest {
                 new ColumnDefinition("name", DataType.VARCHAR, 50, false),
                 new ColumnDefinition("gpa", DataType.FLOAT, 4, false)), List.of("id"), List.of()),
             new Statistic("students", 1000, 100, 40, 10, Map.of("id", 1000, "name", 900, "gpa", 40)));
-        QueryTree tree = new ShaylaParser(new ShaylaLexer("")).parseToTree("SELECT name FROM students "
+        QueryTree tree = new ShaylaParser().parseToTree("SELECT name FROM students "
             + "WHERE students.name <> 'x' AND students.gpa = 3.5 AND students.id > 1 AND students.id = 7;");
         BindingContext bindings = new QueryBinder(catalog).bind(tree);
         OptimizationContext context = new OptimizationContext(bindings, catalog, catalog, null);
@@ -206,7 +205,7 @@ class SelectionPushDownRuleTest {
         assertEquals(
             "CARTESIAN\n"
                 + "  SELECT [conditions=[(Students.gpa > 3.0)]]\n"
-                + "    TABLE_SCAN [table=STUDENTS]\n"
+                + "    TABLE_SCAN [table=students]\n"
                 + "  TABLE_SCAN [table=takes]\n",
             optimizeSelection("SELECT name FROM STUDENTS, takes WHERE Students.gpa > 3.0;"));
     }
@@ -214,7 +213,7 @@ class SelectionPushDownRuleTest {
     @Test
     void leavesOriginalTreeUntouched() {
         Main.InMemorySchemaCatalog catalog = catalog();
-        QueryTree tree = new ShaylaParser(new ShaylaLexer("")).parseToTree(
+        QueryTree tree = new ShaylaParser().parseToTree(
             "SELECT name FROM students, takes WHERE students.gpa > 3.0 AND takes.grade = 'A' ORDER BY name LIMIT 3;");
         BindingContext bindings = new QueryBinder(catalog).bind(tree);
         String before = new QueryPlanPrinter().printPlan(tree);
@@ -233,7 +232,7 @@ class SelectionPushDownRuleTest {
             "SELECT * FROM takes NATURAL JOIN courses WHERE courses.credits > 2 AND takes.nim = 5;");
         for (String sql : queries) {
             Main.InMemorySchemaCatalog catalog = catalog();
-            QueryTree tree = new ShaylaParser(new ShaylaLexer("")).parseToTree(sql);
+            QueryTree tree = new ShaylaParser().parseToTree(sql);
             BindingContext bindings = new QueryBinder(catalog).bind(tree);
             QueryTree select = findSelect(tree);
             QueryTree result = rule.apply(select, new OptimizationContext(bindings, catalog, catalog, null));
@@ -274,7 +273,7 @@ class SelectionPushDownRuleTest {
 
     @Test
     void onlySplitsWhenBindingsAreMissing() {
-        QueryTree tree = new ShaylaParser(new ShaylaLexer("")).parseToTree(
+        QueryTree tree = new ShaylaParser().parseToTree(
             "SELECT students.name FROM students, takes WHERE students.gpa > 3.0 AND takes.grade = 'A';");
         assertEquals(
             "SELECT [conditions=[(students.gpa > 3.0)]]\n"

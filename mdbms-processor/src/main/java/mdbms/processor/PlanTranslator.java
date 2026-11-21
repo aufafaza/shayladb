@@ -2,15 +2,11 @@ package mdbms.processor;
 
 import java.util.ArrayList;
 import java.util.List;
-import java.util.function.BiPredicate;
 
 import mdbms.api.IConcurrencyControl;
 import mdbms.api.IDataAccess;
-import mdbms.api.IFailureRecoveryManager;
-import mdbms.api.IQueryOptimizer;
 import mdbms.api.ISchemaCatalog;
 import mdbms.models.query.ParsedQuery;
-import mdbms.models.query.ColumnReference;
 import mdbms.models.query.QueryTree;
 import mdbms.models.query.SortDirection;
 import mdbms.models.schema.IndexInfo;
@@ -20,8 +16,9 @@ import mdbms.processor.operator.BeginOperator;
 import mdbms.processor.operator.CartesianJoinOperator;
 import mdbms.processor.operator.CommitOperator;
 import mdbms.processor.operator.CreateIndexOperator;
+import mdbms.processor.operator.CreateTableOperator;
+import mdbms.processor.operator.DropTableOperator;
 import mdbms.processor.operator.DeleteOperator;
-import mdbms.processor.operator.GroupByOperator;
 import mdbms.processor.operator.IQueryOperator;
 import mdbms.processor.operator.IndexScanOperator;
 import mdbms.processor.operator.InsertOperator;
@@ -65,10 +62,10 @@ public class PlanTranslator {
                     case DEFAULT:
                     case LINEAR_SCAN:
                         return new SequentialScanOperator(dataAccess, schemaCatalog, concurrencyControl, txId,
-                                queryTree.getTableName());
+                                queryTree.getTableName(), queryTree.getBindingName());
                     case INDEX_SCAN:
                         return new IndexScanOperator(dataAccess, schemaCatalog, concurrencyControl, txId,
-                                queryTree.getTableName(), queryTree.getIndexScan());
+                                queryTree.getTableName(), queryTree.getBindingName(), queryTree.getIndexScan());
                     default:
                         throw new RuntimeException("Invalid algorithm for table scan: " + queryTree.getAlgorithm());
                 }
@@ -92,7 +89,7 @@ public class PlanTranslator {
             case GROUP_BY:
                 // return new GroupByOperator(childOperators.get(0), queryTree.getValue(),
                 // false);
-                return new GroupByOperator(childOperators.get(0));
+                return emptyOperator();
             case INSERT:
                 return new InsertOperator(dataAccess, schemaCatalog, concurrencyControl, txId,
                         queryTree.getTableName(), queryTree.getInsertValues());
@@ -106,12 +103,16 @@ public class PlanTranslator {
             case CREATE_INDEX:
                 return new CreateIndexOperator(schemaCatalog, new IndexInfo(queryTree.getIndexName(),
                         queryTree.getTableName(), queryTree.getIndexColumn().getColumnName(), IndexType.BPLUS_TREE));
-            case BEGIN:
-                return new BeginOperator(txId);
-            case COMMIT:
-                return new CommitOperator(concurrencyControl, txId);
-            case ABORT:
-                return new AbortOperator(concurrencyControl, txId);
+            case CREATE_TABLE:
+                return new CreateTableOperator(schemaCatalog, queryTree.getTableDefinition());
+            case DROP_TABLE:
+                return new DropTableOperator(schemaCatalog, queryTree.getTableName(), queryTree.getDropBehavior());
+            // case BEGIN:
+            //     return new BeginOperator(txId);
+            // case COMMIT:
+            //     return new CommitOperator(concurrencyControl, txId);
+            // case ABORT:
+            //     return new AbortOperator(concurrencyControl, txId);
             default:
                 return emptyOperator();
         }

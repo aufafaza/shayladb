@@ -27,6 +27,7 @@ public class ShaylaLexer {
         Map.entry("UPDATE", TokenType.updateTok),
         Map.entry("SET", TokenType.setTok),
         Map.entry("CREATE", TokenType.createTok),
+        Map.entry("DROP", TokenType.dropTok),
         Map.entry("TABLE", TokenType.tableTok),
         Map.entry("VIEW", TokenType.viewTok),
         Map.entry("AS", TokenType.asTok),

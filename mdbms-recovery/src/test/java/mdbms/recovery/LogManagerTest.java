@@ -24,6 +24,7 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 
 class LogManagerTest {
 
@@ -161,5 +162,44 @@ class LogManagerTest {
         assertTrue(tableOutput.contains("LSN"));
         assertTrue(tableOutput.contains("Alice"));
         assertTrue(tableOutput.contains("users"));
+    }
+
+    @Test
+    void testCommitAndCheckpointThrowWhenWalFlushFails() {
+        WalFileHandler failingWal = new WalFileHandler(tempDir.resolve("failing_flush.log")) {
+            @Override
+            public boolean flushUpTo(long lsn) {
+                return false;
+            }
+        };
+        try {
+            LogManager failingManager = new LogManager(failingWal);
+            failingManager.appendTransactionLog(1, LogType.BEGIN);
+
+            assertThrows(RuntimeException.class, () -> failingManager.appendTransactionLog(1, LogType.COMMIT));
+            assertThrows(RuntimeException.class, () -> failingManager.appendCheckpointLog(List.of(1)));
+        } finally {
+            failingWal.close();
+        }
+    }
+
+    @Test
+    void testAppendRelocationLogRecordsOldAndNewRowIds() {
+        RowId oldRid = new RowId("users", 0, 3);
+        RowId newRid = new RowId("users", 2, 0);
+        RecordImage before = new RecordImage(List.of(1, "A"));
+        RecordImage after = new RecordImage(List.of(1, "A_Relocated_Long_Payload"));
+
+        DataChangeLogRecord record = logManager.appendRelocationLog(
+                12, "users", oldRid, newRid, before, after);
+
+        assertNotNull(record);
+        assertTrue(record.isRelocation());
+        assertEquals(oldRid, record.getRowId());
+        assertEquals(newRid, record.getNewRowId());
+        assertEquals(12, logManager.getMaxTxId());
+
+        String formatted = logManager.formatLogTable(logManager.readLogs(12));
+        assertTrue(formatted.contains("0:3->2:0"));
     }
 }

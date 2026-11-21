@@ -2,11 +2,16 @@ package mdbms.models.query;
 
 import java.util.List;
 import java.util.Objects;
+import mdbms.models.schema.DropBehavior;
+import mdbms.models.schema.TableSchema;
 
 public class QueryTree {
     private final QueryNodeType nodeType;
     private PhysicalAlgorithm algorithm;
-    private final String tableName;
+    private String tableName;
+    private String tableAlias;
+    private TableSchema tableDefinition;
+    private DropBehavior dropBehavior = DropBehavior.RESTRICT;
     private List<ExpressionTree> conditions;
     private final List<QueryTree> children;
     private int estimatedCost;
@@ -19,6 +24,50 @@ public class QueryTree {
     private List<ExpressionTree> insertValues = List.of();
     private String indexName;
     private ColumnReference indexColumn;
+    private IndexScanSpec indexScan;
+
+    public String getTableAlias() {
+        return tableAlias;
+    }
+
+    public String getBindingName() {
+        return tableAlias == null ? tableName : tableAlias;
+    }
+
+    public void setTableAlias(String alias) {
+        requireNodeType(QueryNodeType.TABLE_SCAN);
+        if (alias != null && alias.isBlank()) throw new IllegalArgumentException("Table alias must not be blank");
+        tableAlias = alias;
+    }
+
+    /** Records the catalog's canonical physical name after binding. */
+    public void setTableName(String name) {
+        if (name == null || name.isBlank()) throw new IllegalArgumentException("Table name must not be blank");
+        tableName = name;
+    }
+
+    public TableSchema getTableDefinition() {
+        return tableDefinition;
+    }
+
+    public void setTableDefinition(TableSchema schema) {
+        requireNodeType(QueryNodeType.CREATE_TABLE);
+        Objects.requireNonNull(schema, "schema");
+        if (!Objects.equals(tableName, schema.tableName())) {
+            throw new IllegalArgumentException("Table definition must match the node's table name");
+        }
+        tableDefinition = new TableSchema(schema.tableName(), List.copyOf(schema.columns()),
+            List.copyOf(schema.primaryKey()), List.copyOf(schema.foreignKeys()));
+    }
+
+    public DropBehavior getDropBehavior() {
+        return dropBehavior;
+    }
+
+    public void setDropBehavior(DropBehavior behavior) {
+        requireNodeType(QueryNodeType.DROP_TABLE);
+        dropBehavior = Objects.requireNonNull(behavior, "behavior");
+    }
 
     public QueryTree(
         QueryNodeType nodeType,
@@ -31,7 +80,7 @@ public class QueryTree {
         this(nodeType, algorithm, tableName, conditions, children, estimatedCost, List.of(), false);
     }
 
-    /** Additional payloads missing from the diagram: SELECT items and the natural-join marker. */
+    /** Creates a query node with projection columns and natural-join metadata. */
     public QueryTree(
         QueryNodeType nodeType,
         PhysicalAlgorithm algorithm,
@@ -79,7 +128,7 @@ public class QueryTree {
         return updateExpression;
     }
 
-    /** One SET assignment is sufficient for the required UPDATE grammar. */
+    /** Sets the target column and expression for an UPDATE. */
     public void setUpdateAssignment(ColumnReference column, ExpressionTree expression) {
         requireNodeType(QueryNodeType.UPDATE);
         requireConcreteColumn(column);
@@ -120,6 +169,20 @@ public class QueryTree {
         this.indexColumn = column;
     }
 
+    public IndexScanSpec getIndexScan() {
+        return indexScan;
+    }
+
+    // baca tabel lewat index, beda arti sama setIndexDefinition
+    public void setIndexScan(IndexScanSpec spec) {
+        requireNodeType(QueryNodeType.TABLE_SCAN);
+        Objects.requireNonNull(spec);
+        if (tableName != null && !tableName.equalsIgnoreCase(spec.index().tableName())) {
+            throw new IllegalArgumentException("Index belongs to another table: " + spec.index().tableName());
+        }
+        this.indexScan = spec;
+    }
+
     private void requireNodeType(QueryNodeType expected) {
         if (nodeType != expected) {
             throw new IllegalStateException("This payload requires a " + expected + " node");
@@ -133,7 +196,7 @@ public class QueryTree {
         }
     }
 
-    /** Attaches sort keys without changing the existing six/eight-parameter constructors */
+    /** Sets the ordered sort keys on a SORT node. */
     public void setOrderByClauses(List<OrderByClause> orderByClauses) {
         if (nodeType != QueryNodeType.SORT) {
             throw new IllegalStateException("Only SORT nodes can carry ORDER BY clauses");
@@ -185,7 +248,7 @@ public class QueryTree {
         return tableName;
     }
 
-    //Full ON/WHERE expression trees. see class diagram.
+    // Returns the ON and WHERE condition expressions.
     public List<ExpressionTree> getConditions() {
         return conditions;
     }
@@ -228,6 +291,9 @@ public class QueryTree {
         if (node.tableName != null) {
             details.add("table=" + node.tableName);
         }
+        if (node.tableAlias != null) details.add("alias=" + node.tableAlias);
+        if (node.tableDefinition != null) details.add("definition=" + node.tableDefinition);
+        if (node.nodeType == QueryNodeType.DROP_TABLE) details.add("behavior=" + node.dropBehavior);
         if (!node.projectionColumns.isEmpty()) {
             details.add("columns=" + node.projectionColumns);
         }
@@ -250,6 +316,12 @@ public class QueryTree {
         }
         if (node.indexColumn != null) {
             details.add("indexColumn=" + node.indexColumn);
+        }
+        if (node.indexScan != null) {
+            details.add("indexScan=" + node.indexScan.index().indexName()
+                + " " + node.indexScan.condition().column()
+                + " " + node.indexScan.condition().operator()
+                + " " + node.indexScan.condition().value());
         }
         if (node.algorithm != null && node.algorithm != PhysicalAlgorithm.DEFAULT) {
             details.add("algorithm=" + node.algorithm);

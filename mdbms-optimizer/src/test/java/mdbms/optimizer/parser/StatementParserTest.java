@@ -263,7 +263,7 @@ class StatementParserTest {
         assertError(";", ";");
         assertError("SELECT * FROM a", "SELECT");
         assertError("something a", "something");
-        assertError("CREATE TABLE a (id INT)", "TABLE");
+        assertError("CREATE VIEW a AS SELECT id FROM b", "VIEW");
         assertError("ROLLBACK", "ROLLBACK");
         assertError("START TRANSACTION", "START");
     }
@@ -370,6 +370,21 @@ class StatementParserTest {
         QuerySyntaxException missingIndexColumn = assertError("CREATE INDEX idx\nON a(\n)", ")");
         assertEquals(3, missingIndexColumn.getLine());
         assertEquals(1, missingIndexColumn.getColumn());
+    }
+
+    // Menerima DDL tabel dan menolak jenis DDL yang belum didukung.
+    @Test
+    void acceptsTableDdlAndRejectsUnsupportedDdl() {
+        assertEquals(QueryNodeType.CREATE_TABLE, parse("CREATE TABLE t (id INTEGER);").getNodeType());
+
+        QuerySyntaxException createView = assertThrows(QuerySyntaxException.class,
+            () -> parse("CREATE VIEW v;"));
+        assertTrue(createView.getMessage().contains("Unsupported statement 'CREATE VIEW'"), createView.getMessage());
+
+        assertEquals(QueryNodeType.DROP_TABLE, parse("DROP TABLE t;").getNodeType());
+
+        QuerySyntaxException alter = assertThrows(QuerySyntaxException.class, () -> parse("ALTER TABLE t;"));
+        assertTrue(alter.getMessage().contains("Unsupported statement 'ALTER'"), alter.getMessage());
     }
 
     private QueryTree parse(String sql) {

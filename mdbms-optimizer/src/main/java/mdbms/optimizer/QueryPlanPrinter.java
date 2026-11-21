@@ -86,6 +86,11 @@ public final class QueryPlanPrinter {
         if (node.getTableName() != null) {
             result.add("table=" + escape(node.getTableName()));
         }
+        if (node.getTableAlias() != null) result.add("alias=" + escape(node.getTableAlias()));
+        if (node.getTableDefinition() != null) result.add("definition=" + escape(node.getTableDefinition().toString()));
+        if (node.getNodeType() == mdbms.models.query.QueryNodeType.DROP_TABLE) {
+            result.add("behavior=" + node.getDropBehavior());
+        }
         if (!node.getProjectionColumns().isEmpty()) {
             result.add("columns=[" + node.getProjectionColumns().stream().map(this::column)
                 .collect(Collectors.joining(", ")) + "]");
@@ -117,6 +122,12 @@ public final class QueryPlanPrinter {
         }
         if (node.getIndexColumn() != null) {
             result.add("indexColumn=" + column(node.getIndexColumn()));
+        }
+        if (node.getIndexScan() != null) {
+            result.add("indexScan=" + escape(node.getIndexScan().index().indexName())
+                + " " + escape(String.valueOf(node.getIndexScan().condition().column()))
+                + " " + node.getIndexScan().condition().operator()
+                + " " + escape(String.valueOf(node.getIndexScan().condition().value())));
         }
         if (node.getAlgorithm() != null && node.getAlgorithm() != PhysicalAlgorithm.DEFAULT) {
             result.add("algorithm=" + node.getAlgorithm());
