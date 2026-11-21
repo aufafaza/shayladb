@@ -474,7 +474,7 @@ class TimestampsBasedProtocolTest {
         }
 
         @Test
-        @DisplayName("Timestamp protocol operations are non-blocking and cannot cause deadlock")
+        @DisplayName("Strict timestamp protocol prevents dirty writes and avoids deadlock")
         void testConcurrentRequests_TimestampProtocol_ShouldNeverDeadlockOrBlock() {
             // Arrange
             ConcurrencyControlManager ccm = new ConcurrencyControlManager(protocol);
@@ -487,11 +487,192 @@ class TimestampsBasedProtocolTest {
             AccessStatus s3 = ccm.requestWrite(tx2, ITEM_A);
             AccessStatus s4 = ccm.requestWrite(tx1, ITEM_B);
 
-            // Assert: Neither transaction enters WAITING state (unlike 2PL), eliminating deadlock
-            assertTrue(s1 == AccessStatus.GRANTED || s1 == AccessStatus.ABORTED);
-            assertTrue(s2 == AccessStatus.GRANTED || s2 == AccessStatus.ABORTED);
-            assertTrue(s3 == AccessStatus.GRANTED || s3 == AccessStatus.ABORTED);
-            assertTrue(s4 == AccessStatus.GRANTED || s4 == AccessStatus.ABORTED);
+            assertEquals(AccessStatus.GRANTED, s1);
+            assertEquals(AccessStatus.GRANTED, s2);
+            assertEquals(AccessStatus.WAITING, s3, "Newer tx2 must wait on uncommitted tx1 to prevent dirty write");
+            assertEquals(AccessStatus.ABORTED, s4, "Older tx1 must abort on newer write");
+
+            assertEquals(AccessStatus.GRANTED, ccm.requestWrite(tx2, ITEM_A));
+        }
+
+        @Test
+        @DisplayName("Strict TO prevents dirty read: newer transaction waits until older uncommitted writer commits")
+        void testStrictTimestamp_PreventsDirtyRead_WaitUntilCommit() {
+            ConcurrencyControlManager ccm = new ConcurrencyControlManager(protocol);
+            int tx1 = ccm.beginTransaction();
+            int tx2 = ccm.beginTransaction();
+
+            assertEquals(AccessStatus.GRANTED, ccm.requestWrite(tx1, ITEM_A));
+
+            assertEquals(AccessStatus.WAITING, ccm.requestRead(tx2, ITEM_A));
+
+            ccm.commitTransaction(tx1);
+
+            assertEquals(AccessStatus.GRANTED, ccm.requestRead(tx2, ITEM_A));
+            assertEquals(ccm.getTransaction(tx2).getTimestamp(), timestampManager.getReadTS(ITEM_A));
+            ccm.commitTransaction(tx2);
+        }
+
+        @Test
+        @DisplayName("Strict TO prevents dirty write: newer transaction waits until older uncommitted writer commits")
+        void testStrictTimestamp_PreventsDirtyWrite_WaitUntilCommit() {
+            // Arrange
+            ConcurrencyControlManager ccm = new ConcurrencyControlManager(protocol);
+            int tx1 = ccm.beginTransaction();
+            int tx2 = ccm.beginTransaction();
+
+            // Act & Assert:
+            assertEquals(AccessStatus.GRANTED, ccm.requestWrite(tx1, ITEM_A));
+
+            assertEquals(AccessStatus.WAITING, ccm.requestWrite(tx2, ITEM_A));
+
+            ccm.commitTransaction(tx1);
+
+            assertEquals(AccessStatus.GRANTED, ccm.requestWrite(tx2, ITEM_A));
+            assertEquals(ccm.getTransaction(tx2).getTimestamp(), timestampManager.getWriteTS(ITEM_A));
+            ccm.commitTransaction(tx2);
+        }
+
+        @Test
+        @DisplayName("Strict TO rollback: waiting reader proceeds after uncommitted writer aborts and sees restored state")
+        void testStrictTimestamp_AbortRollback_WaitingReaderReceivesCommittedState() {
+            // Arrange
+            RecordingRecoveryManager frm = new RecordingRecoveryManager();
+            ConcurrencyControlManager ccm = new ConcurrencyControlManager(protocol, frm);
+            long initialWriteTS = timestampManager.getWriteTS(ITEM_A);
+
+            int tx1 = ccm.beginTransaction();
+            int tx2 = ccm.beginTransaction();
+
+            assertEquals(AccessStatus.GRANTED, ccm.requestWrite(tx1, ITEM_A));
+
+            assertEquals(AccessStatus.WAITING, ccm.requestRead(tx2, ITEM_A));
+
+            ccm.abortTransaction(tx1, "test rollback");
+            assertTrue(frm.rolledBack.contains(tx1));
+
+            assertEquals(initialWriteTS, timestampManager.getWriteTS(ITEM_A));
+
+            assertEquals(AccessStatus.GRANTED, ccm.requestRead(tx2, ITEM_A));
+            ccm.commitTransaction(tx2);
+        }
+
+        @Test
+        @DisplayName("Strict TO rollback: waiting writer proceeds after uncommitted writer aborts")
+        void testStrictTimestamp_AbortRollback_WaitingWriterProceeds() {
+            // Arrange
+            RecordingRecoveryManager frm = new RecordingRecoveryManager();
+            ConcurrencyControlManager ccm = new ConcurrencyControlManager(protocol, frm);
+
+            int tx1 = ccm.beginTransaction();
+            int tx2 = ccm.beginTransaction();
+
+            assertEquals(AccessStatus.GRANTED, ccm.requestWrite(tx1, ITEM_A));
+
+            assertEquals(AccessStatus.WAITING, ccm.requestWrite(tx2, ITEM_A));
+
+            ccm.abortTransaction(tx1, "test rollback");
+
+            assertEquals(AccessStatus.GRANTED, ccm.requestWrite(tx2, ITEM_A));
+            ccm.commitTransaction(tx2);
+        }
+
+        @Test
+        @DisplayName("Timestamp violation: older transaction is immediately aborted when accessing uncommitted newer write")
+        void testStrictTimestamp_OlderTransactionAbortsOnUncommittedNewerWrite() {
+            // Arrange
+            RecordingRecoveryManager frm = new RecordingRecoveryManager();
+            ConcurrencyControlManager ccm = new ConcurrencyControlManager(protocol, frm);
+
+            int tx1 = ccm.beginTransaction();
+            int tx2 = ccm.beginTransaction();
+
+            assertEquals(AccessStatus.GRANTED, ccm.requestWrite(tx2, ITEM_A));
+
+            assertEquals(AccessStatus.ABORTED, ccm.requestRead(tx1, ITEM_A));
+            assertTrue(frm.rolledBack.contains(tx1));
+        }
+
+        @Test
+        @DisplayName("Transaction can read and write its own uncommitted modifications without blocking")
+        void testStrictTimestamp_SelfReadAndWrite_AllowedWithoutWaiting() {
+            // Arrange
+            ConcurrencyControlManager ccm = new ConcurrencyControlManager(protocol);
+            int tx1 = ccm.beginTransaction();
+
+            // Act & Assert
+            assertEquals(AccessStatus.GRANTED, ccm.requestWrite(tx1, ITEM_A));
+            assertEquals(AccessStatus.GRANTED, ccm.requestRead(tx1, ITEM_A));
+            assertEquals(AccessStatus.GRANTED, ccm.requestWrite(tx1, ITEM_A));
+
+            ccm.commitTransaction(tx1);
+        }
+
+        @Test
+        @DisplayName("Batch write respects uncommitted barriers atomically")
+        void testStrictTimestamp_BatchWriteBarrier() {
+            // Arrange
+            ConcurrencyControlManager ccm = new ConcurrencyControlManager(protocol);
+            int tx1 = ccm.beginTransaction();
+            int tx2 = ccm.beginTransaction();
+
+            assertEquals(AccessStatus.GRANTED, ccm.requestWrite(tx1, ITEM_A));
+
+            assertEquals(AccessStatus.WAITING, protocol.requestWriteBatch(ccm.getTransaction(tx2), List.of(ITEM_A, ITEM_B)));
+
+            ccm.commitTransaction(tx1);
+
+            assertEquals(AccessStatus.GRANTED, protocol.requestWriteBatch(ccm.getTransaction(tx2), List.of(ITEM_A, ITEM_B)));
+            ccm.commitTransaction(tx2);
+        }
+
+        @Test
+        @DisplayName("Concurrent metadata updates are atomic across multiple threads")
+        void testStrictTimestamp_ConcurrentMetadataUpdates_AtomicAcrossTransactions() throws Exception {
+            // Arrange
+            int numThreads = 10;
+            int opsPerThread = 50;
+            java.util.concurrent.ExecutorService pool = java.util.concurrent.Executors.newFixedThreadPool(numThreads);
+            java.util.concurrent.CountDownLatch latch = new java.util.concurrent.CountDownLatch(numThreads);
+            java.util.concurrent.atomic.AtomicInteger abortCount = new java.util.concurrent.atomic.AtomicInteger();
+            java.util.concurrent.atomic.AtomicInteger grantedCount = new java.util.concurrent.atomic.AtomicInteger();
+
+            // Act
+            for (int i = 0; i < numThreads; i++) {
+                final int threadId = i;
+                pool.submit(() -> {
+                    try {
+                        for (int op = 0; op < opsPerThread; op++) {
+                            long ts = System.nanoTime();
+                            Transaction tx = new Transaction(threadId * 1000 + op, ts);
+                            AccessStatus rs = protocol.requestRead(tx, ITEM_A);
+                            if (rs == AccessStatus.GRANTED) {
+                                grantedCount.incrementAndGet();
+                            } else if (rs == AccessStatus.ABORTED) {
+                                abortCount.incrementAndGet();
+                            }
+
+                            AccessStatus ws = protocol.requestWrite(tx, ITEM_A);
+                            if (ws == AccessStatus.GRANTED) {
+                                grantedCount.incrementAndGet();
+                                protocol.releaseResources(tx);
+                            } else if (ws == AccessStatus.ABORTED) {
+                                abortCount.incrementAndGet();
+                            }
+                        }
+                    } finally {
+                        latch.countDown();
+                    }
+                });
+            }
+
+            assertTrue(latch.await(10, java.util.concurrent.TimeUnit.SECONDS));
+            pool.shutdown();
+
+            // Assert: Timestamps must remain valid and non-negative
+            assertTrue(timestampManager.getReadTS(ITEM_A) >= 0L);
+            assertTrue(timestampManager.getWriteTS(ITEM_A) >= 0L);
+            assertTrue(grantedCount.get() + abortCount.get() > 0);
         }
     }
 

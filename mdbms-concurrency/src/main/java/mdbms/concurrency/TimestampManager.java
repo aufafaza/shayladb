@@ -32,14 +32,23 @@ public class TimestampManager {
 
     public void updateReadTS(DataItem data, long timestamp) {
         Objects.requireNonNull(data, "data");
-        dataTimestamps.computeIfAbsent(data, ignored -> new DataTimestamp(defaultInitialTimestamp, defaultInitialTimestamp))
-                .updateReadTS(timestamp);
+        getOrCreate(data).updateReadTS(timestamp);
     }
 
     public void updateWriteTS(DataItem data, long timestamp) {
         Objects.requireNonNull(data, "data");
-        dataTimestamps.computeIfAbsent(data, ignored -> new DataTimestamp(defaultInitialTimestamp, defaultInitialTimestamp))
-                .updateWriteTS(timestamp);
+        getOrCreate(data).updateWriteTS(timestamp);
+    }
+
+    public DataTimestamp getDataTimestamp(DataItem data) {
+        if (data == null) return null;
+        return dataTimestamps.get(data);
+    }
+
+    public DataTimestamp getOrCreate(DataItem data) {
+        Objects.requireNonNull(data, "data");
+        return dataTimestamps.computeIfAbsent(data,
+                ignored -> new DataTimestamp(defaultInitialTimestamp, defaultInitialTimestamp));
     }
 
     public void clear() {
