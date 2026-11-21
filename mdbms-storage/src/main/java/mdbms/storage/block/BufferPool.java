@@ -228,4 +228,9 @@ public class BufferPool {
             throw new StorageException(StorageErrorCode.INVALID_BLOCK, "Dirty changes require a nonnegative page LSN");
         }
     }
+
+    public synchronized long getPageLsn(String fileName, int blockNumber) {
+        Block block = frames.get(idFor(fileName, blockNumber));
+        return block != null ? block.pageLsn : -1L;
+    }
 }

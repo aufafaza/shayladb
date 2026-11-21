@@ -22,4 +22,12 @@ public final class Block {
         this.blockNumber = blockNumber;
         this.data = data;
     }
+
+    public boolean isDirty() {
+        return dirty;
+    }
+
+    public long getPageLsn() {
+        return pageLsn;
+    }
 }
