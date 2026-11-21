@@ -241,4 +241,28 @@ class WalFileHandlerTest {
         assertFalse(walHandler.flushUpTo(2L), "WAL tidak boleh mengklaim flush untuk LSN yang belum ditulis");
         assertTrue(walHandler.flushUpTo(1L));
     }
+
+    @Test
+    void testInterruptedThreadDoesNotCloseSharedWalChannel() {
+        DataChangeLogRecord rec1 = new DataChangeLogRecord(
+                1L, 1, LogType.INSERT, Instant.now(), "users",
+                new RowId("users", 0, 0), null, new RecordImage(List.of(1, "A")));
+        DataChangeLogRecord rec2 = new DataChangeLogRecord(
+                2L, 2, LogType.INSERT, Instant.now(), "users",
+                new RowId("users", 0, 1), null, new RecordImage(List.of(2, "B")));
+
+        Thread.currentThread().interrupt();
+        try {
+            assertTrue(walHandler.append(rec1), "Append tetap harus sukses meski thread ter-interrupt");
+            assertTrue(walHandler.flushUpTo(1L), "Flush WAL tetap harus sukses meski thread ter-interrupt");
+            assertTrue(Thread.currentThread().isInterrupted(), "Status interrupt thread harus tetap dipertahankan");
+        } finally {
+            Thread.interrupted(); // bersihkan status interrupt setelah pengujian
+        }
+
+        // Channel bersama harus tetap terbuka & sehat untuk transaksi berikutnya
+        assertTrue(walHandler.append(rec2));
+        assertTrue(walHandler.flushUpTo(2L));
+        assertEquals(2, walHandler.readAll().size());
+    }
 }

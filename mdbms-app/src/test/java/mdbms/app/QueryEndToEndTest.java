@@ -8,12 +8,14 @@ import java.util.concurrent.atomic.AtomicInteger;
 import mdbms.api.IConcurrencyControl;
 import mdbms.api.IFailureRecoveryManager;
 import mdbms.models.access.DataRetrieval;
+import mdbms.models.data.DataItem;
 import mdbms.models.query.ExecutionResult;
 import mdbms.models.query.ParsedQuery;
 import mdbms.models.schema.ColumnDefinition;
 import mdbms.models.schema.DataType;
 import mdbms.models.schema.TableSchema;
 import mdbms.models.transaction.AccessStatus;
+import mdbms.models.transaction.WriteContext;
 import mdbms.optimizer.QueryOptimizer;
 import mdbms.optimizer.parser.ShaylaParser;
 import mdbms.processor.QueryProcessor;
@@ -36,6 +38,12 @@ class QueryEndToEndTest {
             case "beginTransaction" -> transactionIds.getAndIncrement();
             case "requestRead", "requestWrite" -> AccessStatus.GRANTED;
             case "commitTransaction" -> null;
+            case "requestWriteWithContext" -> {
+                int txId = (int) args[0];
+                DataItem item = (DataItem) args[1];
+                AccessStatus status = AccessStatus.GRANTED;
+                yield new WriteContext(txId, status, 0L, item.tableName(), item.getRowId());
+            }
             case "getTransaction" -> null;
             case "abortTransaction" -> throw new AssertionError("Unexpected abort: " + args[1]);
             default -> throw new UnsupportedOperationException(method.getName());

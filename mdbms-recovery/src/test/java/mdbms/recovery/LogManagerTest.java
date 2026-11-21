@@ -202,4 +202,41 @@ class LogManagerTest {
         String formatted = logManager.formatLogTable(logManager.readLogs(12));
         assertTrue(formatted.contains("0:3->2:0"));
     }
+
+    @Test
+    void testConcurrentAppendsPreserveStrictlyMonotonicLsnOrderOnDisk() throws Exception {
+        int threadCount = 8;
+        int opsPerThread = 25;
+        java.util.concurrent.CyclicBarrier barrier = new java.util.concurrent.CyclicBarrier(threadCount);
+        java.util.concurrent.ExecutorService pool = java.util.concurrent.Executors.newFixedThreadPool(threadCount);
+        try {
+            List<java.util.concurrent.Future<?>> futures = new ArrayList<>();
+            for (int t = 1; t <= threadCount; t++) {
+                final int txId = t;
+                futures.add(pool.submit(() -> {
+                    barrier.await(5, java.util.concurrent.TimeUnit.SECONDS);
+                    logManager.appendTransactionLog(txId, LogType.BEGIN);
+                    for (int i = 0; i < opsPerThread; i++) {
+                        logManager.appendDataLog(
+                                txId, LogType.INSERT, "items", new RowId("items", txId, i),
+                                null, new RecordImage(List.of(txId * 100 + i, "val")));
+                    }
+                    logManager.appendTransactionLog(txId, LogType.COMMIT);
+                    return null;
+                }));
+            }
+            for (java.util.concurrent.Future<?> f : futures) {
+                f.get(10, java.util.concurrent.TimeUnit.SECONDS);
+            }
+        } finally {
+            pool.shutdownNow();
+        }
+
+        List<LogRecord> logs = logManager.readLogs(null);
+        assertEquals(threadCount * (opsPerThread + 2), logs.size());
+        for (int i = 0; i < logs.size(); i++) {
+            assertEquals(i + 1L, logs.get(i).getLsn(),
+                    "LSN pada berkas WAL harus urut menaik ketat tanpa pembalikan urutan");
+        }
+    }
 }
