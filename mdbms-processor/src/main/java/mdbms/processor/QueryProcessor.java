@@ -77,14 +77,11 @@ public class QueryProcessor implements IQueryProcessor {
                 rows.add(row);
             }
         } catch (QueryExecutionException e) {
-            // transaksi yang dibatalkan CCM sudah dihapus CCM, abort lagi akan gagal
-            if (!(e instanceof TransactionAbortedException)) {
-                concurrencyControl.abortTransaction(txId, "Query execution failed");
-            }
+            abortIfActive(txId);
             ExecutionResult executionResult = new ExecutionResult(false, null, null, 0, "Error: " + e.getMessage());
             return executionResult;
         } catch (Exception e) {
-            concurrencyControl.abortTransaction(txId, "Query execution failed");
+            abortIfActive(txId);
             return new ExecutionResult(false, columns, rows, 0, "Error: " + e.getMessage());
         } finally {
             if (translatedQuery != null) translatedQuery.close();
