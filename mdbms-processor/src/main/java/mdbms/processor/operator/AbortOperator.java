@@ -2,6 +2,7 @@ package mdbms.processor.operator;
 
 import mdbms.api.IConcurrencyControl;
 import mdbms.processor.IResultRow;
+import mdbms.processor.exception.TransactionCompletionException;
 
 @Deprecated
 public class AbortOperator implements IQueryOperator, IQueryMessage {
@@ -31,7 +32,9 @@ public class AbortOperator implements IQueryOperator, IQueryMessage {
             concurrencyControlManager.abortTransaction(transactionId, "ABORT requested by client");
             message = "ABORT transaction " + transactionId;
         } catch (RuntimeException e) {
+            // lempar biar hasil query gagal, jangan sampai klien ngira ABORT berhasil
             message = "ABORT failed: " + e.getMessage();
+            throw new TransactionCompletionException(message, e);
         }
         return null;
     }

@@ -1,5 +1,6 @@
 package mdbms.app;
 
+import java.nio.file.Path;
 import mdbms.api.IConcurrencyControl;
 import mdbms.api.IDataAccess;
 import mdbms.api.IDurableStorage;
@@ -15,7 +16,9 @@ import mdbms.optimizer.QueryOptimizer;
 import mdbms.optimizer.lexer.ShaylaLexer;
 import mdbms.optimizer.parser.ShaylaParser;
 import mdbms.processor.QueryProcessor;
-import mdbms.recovery.FailureRecoveryManager;
+import mdbms.recovery.FailureRecoveryFacade;
+import mdbms.recovery.WalFileHandler;
+import mdbms.storage.SampleDataLoader;
 import mdbms.storage.StorageManager;
 
 public class DBMS {
@@ -29,36 +32,60 @@ public class DBMS {
     private volatile boolean running;
 
     public DBMS(DBMSConfig cfg){
-        this(cfg, new FailureRecoveryManager());
+        this(cfg, new StorageManager(cfg.getDataDirectory(), cfg.getBufferCapacity(), INDEX_MAX_DEGREE));
     }
 
-    private DBMS(DBMSConfig cfg, IFailureRecoveryManager frm){
-        this(cfg, createStorage(cfg, frm), frm);
+    private DBMS(DBMSConfig cfg, StorageManager storage){
+        this(cfg, storage, new FailureRecoveryFacade(
+                Path.of(cfg.getDataDirectory()).resolve(WalFileHandler.DEFAULT_WAL_PATH),
+                Path.of(cfg.getDataDirectory()).resolve("snapshots"), storage, storage));
     }
 
     DBMS(DBMSConfig cfg, IDurableStorage storage, IFailureRecoveryManager frm){
         this.cfg = cfg;
         this.storage = storage;
         this.frm = frm;
+        if (storage instanceof StorageManager manager) {
+            manager.attachRecoveryManager(frm);
+        }
     }
 
     public synchronized void start(){
         if (running) return;
-        ConcurrencyProtocol protocol = createProtocol(cfg.getConcurrencyAlgorithm());
-        recoverOnStartup();
-        concurrencyControl = new ConcurrencyControlManager(protocol, frm);
-        System.out.println("Concurrency protocol: " + ((ConcurrencyControlManager) concurrencyControl).getActiveProtocolName());
-        processor = new QueryProcessor(
-            new QueryOptimizer((ISchemaCatalog) storage, new ShaylaParser(new ShaylaLexer(null))),
-            (IDataAccess) storage, (ISchemaCatalog) storage, frm, concurrencyControl);
-        running = true;
+        try {
+            ConcurrencyProtocol protocol = createProtocol(cfg.getConcurrencyAlgorithm());
+            ConcurrencyControlManager manager = new ConcurrencyControlManager(protocol, frm);
+            // CCM owns the single recovery call and seeds its IDs from the recovered WAL.
+            manager.initAfterRecovery();
+            loadSampleData();
+            IQueryProcessor queryProcessor = new QueryProcessor(
+                new QueryOptimizer((ISchemaCatalog) storage, new ShaylaParser(new ShaylaLexer(null))),
+                (IDataAccess) storage, (ISchemaCatalog) storage, frm, manager);
+            concurrencyControl = manager;
+            processor = queryProcessor;
+            running = true;
+            System.out.println("Concurrency protocol: " + manager.getActiveProtocolName());
+        } catch (RuntimeException | Error failure) {
+            closeRecovery();
+            throw failure;
+        }
     }
 
     public synchronized void shutdown(){
-        if (!running) return;
-        frm.createCheckpoint();
+        if (!running) {
+            closeRecovery();
+            return;
+        }
+        RecoveryResult checkpoint = frm.createCheckpoint();
+        if (checkpoint == null || !checkpoint.isSuccess()) {
+            throw new IllegalStateException("Checkpoint failed during shutdown: "
+                    + (checkpoint == null ? "no recovery result" : checkpoint.getMessage()));
+        }
         storage.flushBuffer();
+        closeRecovery();
         running = false;
+        processor = null;
+        concurrencyControl = null;
     }
 
     public boolean isRunning(){
@@ -73,17 +100,19 @@ public class DBMS {
         return concurrencyControl;
     }
 
-    private void recoverOnStartup(){
-        RecoveryResult result = frm.recoverOnStartup();
-        if (!result.isSuccess()) {
-            throw new IllegalStateException("Recovery failed: " + result.getMessage());
+    private void closeRecovery(){
+        if (frm instanceof FailureRecoveryFacade recovery) {
+            recovery.close();
         }
     }
 
-    private static IDurableStorage createStorage(DBMSConfig cfg, IFailureRecoveryManager frm){
-        StorageManager storage = new StorageManager(cfg.getDataDirectory(), cfg.getBufferCapacity(), INDEX_MAX_DEGREE);
-        storage.attachRecoveryManager(frm);
-        return storage;
+    // isi database contoh SM14 kalau katalog masih kosong, dijalanin setelah recovery dan sebelum transaksi diterima
+    // langsung di flush biar data contoh udah aman di disk walau server mati sebelum shutdown
+    private void loadSampleData(){
+        if (!(storage instanceof IDataAccess data) || !(storage instanceof ISchemaCatalog catalog)) return;
+        if (!catalog.listTable().isEmpty()) return;
+        new SampleDataLoader(data, catalog).loadIfEmpty();
+        storage.flushBuffer();
     }
 
     private static ConcurrencyProtocol createProtocol(ConcurrencyAlgorithm algorithm){

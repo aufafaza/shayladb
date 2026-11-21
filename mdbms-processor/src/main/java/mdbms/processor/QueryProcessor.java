@@ -12,6 +12,8 @@ import mdbms.api.ISchemaCatalog;
 import mdbms.models.query.ExecutionResult;
 import mdbms.models.query.ParsedQuery;
 import mdbms.models.schema.ColumnDefinition;
+import mdbms.models.transaction.Transaction;
+import mdbms.models.transaction.TransactionState;
 import mdbms.processor.exception.QueryExecutionException;
 import mdbms.processor.operator.IQueryMessage;
 import mdbms.processor.operator.IQueryOperator;
@@ -36,13 +38,14 @@ public class QueryProcessor implements IQueryProcessor {
 
     @Override
     public ExecutionResult executeQuery(String query, int txId) {
-        ParsedQuery parsedQuery = queryOptimizer.parseQuery(query);
-        ParsedQuery optimizedQuery = queryOptimizer.optimizeQuery(parsedQuery);
-        IQueryOperator translatedQuery = planTranslator.translate(optimizedQuery, txId);
-
+        IQueryOperator translatedQuery = null;
         List<String> columns = new ArrayList<>();
         List<List<Object>> rows = new ArrayList<>();
         try {
+            // parse sama translate ikut di dalam try biar statement yang ditolak optimizer juga ngebatalin transaksinya
+            ParsedQuery parsedQuery = queryOptimizer.parseQuery(query);
+            ParsedQuery optimizedQuery = queryOptimizer.optimizeQuery(parsedQuery);
+            translatedQuery = planTranslator.translate(optimizedQuery, txId);
             translatedQuery.open();
             boolean firstRow = true;
             ResultTableSchema tableSchema = null;
@@ -79,7 +82,7 @@ public class QueryProcessor implements IQueryProcessor {
         } catch (Exception e) {
             return new ExecutionResult(false, columns, rows, 0, "Error: " + e.getMessage());
         } finally {
-            translatedQuery.close();
+            if (translatedQuery != null) translatedQuery.close();
         }
 
         int affectedRows = -1;
@@ -92,6 +95,14 @@ public class QueryProcessor implements IQueryProcessor {
         }
         ExecutionResult executionResult = new ExecutionResult(true, columns, rows, affectedRows, message);
         return executionResult;
+    }
+
+    // statement gagal berarti seluruh transaksi dibatalkan, tapi skip kalau CCM udah duluan nutup transaksinya
+    private void abortIfActive(int txId) {
+        Transaction tx = concurrencyControl.getTransaction(txId);
+        if (tx != null && tx.getState() == TransactionState.ACTIVE) {
+            concurrencyControl.abortTransaction(txId, "Query execution failed");
+        }
     }
 
 }

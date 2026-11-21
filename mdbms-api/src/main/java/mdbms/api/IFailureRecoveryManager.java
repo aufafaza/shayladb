@@ -50,4 +50,15 @@ public interface IFailureRecoveryManager {
     Jika filterTxId bernilai null, seluruh catatan log akan dikembalikan 
     */
     List<LogRecord> readLogs(Integer filterTxId);
+
+    /* Mencatat transisi relokasi sebelum perubahan fisik */
+    default RecoveryResult writeRelocationLog(
+            int txId,
+            String table,
+            RowId oldRid,
+            RowId newRid,
+            RecordImage beforeImg,
+            RecordImage afterImg) {
+        throw new UnsupportedOperationException("writeRelocationLog belum diimplementasikan");
+    }
 }
