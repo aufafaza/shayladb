@@ -56,7 +56,7 @@ public class InsertOperator implements IQueryOperator, IWriteOperator {
             dataAccess.releaseRowId(rowId);
             throw e;
         }
-        dataAccess.insert(rowId, rowValues, ctx.getLsn());
+        dataAccess.insertAt(rowId, rowValues, ctx.getLsn());
         affectedRows = 1;
         return null;
     }
