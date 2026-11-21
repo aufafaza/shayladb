@@ -9,14 +9,18 @@ import mdbms.api.IQueryProcessor;
 
 // Server TCP single use. Buat baru/restart kalau gagal bind atau setelah shutdown  
 public class DBMSServer {
-    public static final int DEFAULT_PORT = 3306;
+    public static final int DEFAULT_PORT = 7654;
     public static final int DEFAULT_POOL_SIZE = 10;
+    public static final int DEFAULT_PENDING_CLIENTS = 10;
 
-    public enum State { NEW, RUNNING, STOPPING, STOPPED, FAILED }
+    public enum State {
+        NEW, RUNNING, STOPPING, STOPPED, FAILED
+    }
 
     private final int port;
     private final IQueryProcessor processor;
     private final IConcurrencyControl concurrencyControl;
+    private final ClientHandler.Mode mode;
     private final Set<Socket> activeClientSockets = ConcurrentHashMap.newKeySet();
     private final CountDownLatch readyLatch = new CountDownLatch(1);
     private final CountDownLatch stoppedLatch = new CountDownLatch(1);
@@ -24,12 +28,21 @@ public class DBMSServer {
     long shutdownTimeoutMs = 5_000L;
     private volatile State state = State.NEW;
     private volatile ServerSocket serverSocket;
-    private volatile ExecutorService workerPool;
+    private volatile ThreadPoolExecutor workerPool;
 
     public DBMSServer(int port, IQueryProcessor processor, IConcurrencyControl concurrencyControl) {
+        this(port, processor, concurrencyControl, ClientHandler.Mode.FRAMED_JSON);
+    }
+
+    protected DBMSServer(
+            int port,
+            IQueryProcessor processor,
+            IConcurrencyControl concurrencyControl,
+            ClientHandler.Mode mode) {
         this.port = port;
         this.processor = processor;
         this.concurrencyControl = concurrencyControl;
+        this.mode = mode;
     }
 
     public void start() throws IOException {
@@ -39,11 +52,23 @@ public class DBMSServer {
             }
             try {
                 serverSocket = new ServerSocket(port);
+                System.out.println("[INFO] DBMS Server successfully bind to port " + port);
             } catch (IOException | RuntimeException e) {
                 terminate(State.FAILED);
                 throw e;
             }
-            workerPool = Executors.newFixedThreadPool(DEFAULT_POOL_SIZE);
+            workerPool = new ThreadPoolExecutor(
+                    DEFAULT_POOL_SIZE,
+                    DEFAULT_POOL_SIZE,
+                    0L,
+                    TimeUnit.MILLISECONDS,
+                    new ArrayBlockingQueue<>(DEFAULT_PENDING_CLIENTS),
+                    r -> {
+                        Thread thread = new Thread(r, "mdbms-net-client");
+                        thread.setDaemon(false);
+                        return thread;
+                    },
+                    new ThreadPoolExecutor.AbortPolicy());
             state = State.RUNNING;
             readyLatch.countDown();
         }
@@ -55,7 +80,8 @@ public class DBMSServer {
                 try {
                     dispatchClient(serverSocket.accept(), sessionManager);
                 } catch (IOException e) {
-                    if (state == State.RUNNING) acceptError = e;
+                    if (state == State.RUNNING)
+                        acceptError = e;
                     break;
                 }
             }
@@ -74,7 +100,8 @@ public class DBMSServer {
                 serverSocket = null;
                 terminate(State.STOPPED);
             }
-            if (acceptError != null) throw acceptError;
+            if (acceptError != null)
+                throw acceptError;
         }
     }
 
@@ -85,38 +112,74 @@ public class DBMSServer {
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
         }
-        if (closeError != null) throw closeError;
+        if (closeError != null)
+            throw closeError;
     }
 
-    public boolean isRunning() { return state == State.RUNNING; }
-    public State getState() { return state; }
+    public boolean isRunning() {
+        return state == State.RUNNING;
+    }
+
+    public State getState() {
+        return state;
+    }
+
     public int getBoundPort() {
         ServerSocket socket = serverSocket;
         return state == State.RUNNING && socket != null ? socket.getLocalPort() : -1;
     }
+
     public boolean awaitReady(long timeout, TimeUnit unit) throws InterruptedException {
         return readyLatch.await(timeout, unit) && state == State.RUNNING;
     }
+
     public boolean awaitStopped(long timeout, TimeUnit unit) throws InterruptedException {
         return stoppedLatch.await(timeout, unit);
     }
-    int getActiveClientCount() { return activeClientSockets.size(); }
-    boolean isWorkerPoolTerminated() { return workerPool == null || workerPool.isTerminated(); }
+
+    int getActiveClientCount() {
+        return activeClientSockets.size();
+    }
+
+    boolean isWorkerPoolTerminated() {
+        return workerPool == null || workerPool.isTerminated();
+    }
 
     private void dispatchClient(Socket clientSocket, SessionManager sessionManager) {
         synchronized (this) {
-            if (state != State.RUNNING) { closeQuietly(clientSocket); return; }
+            if (state != State.RUNNING) {
+                closeQuietly(clientSocket);
+                return;
+            }
             activeClientSockets.add(clientSocket);
         }
         try {
+            System.out.println("[INFO] Client connected from: "
+                    + clientSocket.getInetAddress() + ":" + clientSocket.getPort());
+            clientSocket.setSoTimeout(FramedJsonProtocol.REQUEST_TIMEOUT_MILLIS);
             workerPool.execute(() -> {
                 try {
-                    new ClientHandler(clientSocket, sessionManager, processor, concurrencyControl).run();
+                    new ClientHandler(clientSocket, sessionManager, processor, concurrencyControl, mode).run();
                 } finally {
                     releaseClient(clientSocket);
                 }
             });
-        } catch (RejectedExecutionException e) {
+        } catch (RejectedExecutionException | IOException e) {
+            if (e instanceof RejectedExecutionException && mode == ClientHandler.Mode.FRAMED_JSON) {
+                try {
+                    new FramedJsonProtocol(clientSocket, clientSocket.getInputStream())
+                            .writeResponse(FramedJsonProtocol.Response.error(
+                                    "CAPACITY_REACHED",
+                                    "Server client capacity is exhausted",
+                                    0));
+                    System.out
+                            .println("[INFO] Capacity reached. Rejected client from: "
+                                    + clientSocket.getInetAddress()
+                                    + ":" + clientSocket.getPort());
+                } catch (IOException ignored) {
+                    // The socket may already be unavailable.
+                }
+            }
             releaseClient(clientSocket);
         }
     }
@@ -125,17 +188,23 @@ public class DBMSServer {
         ServerSocket socketToClose;
         List<Socket> clientsToClose;
         synchronized (this) {
-            if (state == State.NEW) { terminate(State.STOPPED); return null; }
-            if (state == State.STOPPED || state == State.FAILED) return null;
+            if (state == State.NEW) {
+                terminate(State.STOPPED);
+                return null;
+            }
+            if (state == State.STOPPED || state == State.FAILED)
+                return null;
             state = State.STOPPING;
             socketToClose = serverSocket;
             clientsToClose = List.copyOf(activeClientSockets);
             activeClientSockets.clear();
-            if (workerPool != null) workerPool.shutdown();
+            if (workerPool != null)
+                workerPool.shutdown();
         }
         IOException closeError = null;
         try {
-            if (socketToClose != null && !socketToClose.isClosed()) socketToClose.close();
+            if (socketToClose != null && !socketToClose.isClosed())
+                socketToClose.close();
         } catch (IOException e) {
             closeError = e;
         } finally {
@@ -145,14 +214,28 @@ public class DBMSServer {
     }
 
     private void terminate(State finalState) {
+        System.out.println("[INFO] Server terminated");
         state = finalState;
         readyLatch.countDown();
         stoppedLatch.countDown();
     }
 
-    private void releaseClient(Socket clientSocket) { activeClientSockets.remove(clientSocket); closeQuietly(clientSocket); }
+    private void releaseClient(Socket clientSocket) {
+        try {
+            System.out.println("[INFO] Releasing client from: "
+                    + clientSocket.getInetAddress() + ":" + clientSocket.getPort());
+        } finally {
+            activeClientSockets.remove(clientSocket);
+            closeQuietly(clientSocket);
+        }
+    }
 
     private static void closeQuietly(AutoCloseable resource) {
-        if (resource != null) try { resource.close(); } catch (Exception ignored) {}
+        if (resource != null) {
+            try {
+                resource.close();
+            } catch (Exception ignored) {
+            }
+        }
     }
 }

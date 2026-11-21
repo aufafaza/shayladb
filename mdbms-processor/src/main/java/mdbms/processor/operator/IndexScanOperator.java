@@ -12,7 +12,7 @@ import mdbms.processor.IResultRow;
 import mdbms.processor.ResultRow;
 import mdbms.processor.ResultTableSchema;
 
-public class IndexScanOperator implements IQueryOperator {
+public class IndexScanOperator implements IQueryOperator, IRowProducingOperator {
     private final IDataAccess dataAccess;
     private final ISchemaCatalog schemaCatalog;
     private final IConcurrencyControl concurrencyControlManager;
@@ -32,6 +32,16 @@ public class IndexScanOperator implements IQueryOperator {
         this.transactionId = transactionId;
         this.tableName = tableName;
         this.spec = spec;
+    }
+
+    @Override
+    public ResultTableSchema getSchema() {
+        if (schema == null) {
+            mdbms.models.schema.TableSchema tableSchema = schemaCatalog.getTableSchema(tableName);
+            if (tableSchema == null) throw new IllegalArgumentException("Tabel tidak ditemukan: "+tableName);
+            schema = new ResultTableSchema(tableSchema);
+        }
+        return schema;
     }
 
     @Override public void open() {
