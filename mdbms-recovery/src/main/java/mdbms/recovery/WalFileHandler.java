@@ -227,6 +227,12 @@ public class WalFileHandler {
             }
             sb.append(serializeImage(change.getBeforeImage())).append(FIELD_DELIMITER);
             sb.append(serializeImage(change.getAfterImage()));
+
+            RowId newRid = change.getNewRowId();
+            if (newRid != null) {
+                sb.append(FIELD_DELIMITER).append(newRid.blockNumber())
+                .append(FIELD_DELIMITER).append(newRid.slot());
+            }
             return sb.toString();
         } else if (record instanceof CheckpointLogRecord cp) {
             sb.append(FIELD_DELIMITER).append(serializeIntList(cp.getActiveTxIds()));
@@ -260,7 +266,14 @@ public class WalFileHandler {
                 RowId rid = (block >= 0 && slot >= 0) ? new RowId(table, block, slot) : null;
                 RecordImage beforeImg = deserializeImage(tokens[7].trim());
                 RecordImage afterImg = deserializeImage(tokens[8].trim());
-                yield new DataChangeLogRecord(lsn, txId, type, timestamp, table, rid, beforeImg, afterImg);
+
+                RowId newRid = null;
+                if (tokens.length >= 11) {
+                    int newBlock = Integer.parseInt(tokens[9].trim());
+                    int newSlot = Integer.parseInt(tokens[10].trim());
+                    newRid = (newBlock >= 0 && newSlot >= 0) ? new RowId(table, newBlock, newSlot) : null;
+                }
+                yield new DataChangeLogRecord(lsn, txId, type, timestamp, table, rid, newRid, beforeImg, afterImg);
             }
             case CHECKPOINT -> {
                 if (tokens.length < 5) {

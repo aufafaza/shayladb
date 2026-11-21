@@ -217,4 +217,127 @@ class RecordApplierTest {
             assertTrue(applier.redo(del));
         }
     }
+
+    @Test
+    void repeatedRedoRelocationHandlesPartialStatesWithoutDuplicates() {
+        InMemoryRelocationDataAccess store = new InMemoryRelocationDataAccess();
+        RecordApplier applier = new RecordApplier(store);
+
+        RowId oldRid = new RowId("users", 0, 1);
+        RowId newRid = new RowId("users", 1, 0);
+        List<Object> beforeVal = List.of(101, "Short", 10);
+        List<Object> afterVal = List.of(101, "LongRelocatedPayload", 99);
+
+        DataChangeLogRecord reloc = new DataChangeLogRecord(
+                1L, 1, LogType.UPDATE, Instant.now(), "users", oldRid, newRid,
+                new RecordImage(beforeVal), new RecordImage(afterVal));
+
+        // Kondisi 1: gagal sebelum mutasi (hanya oldRid ada)
+        store.rows.put(oldRid, beforeVal);
+        assertTrue(applier.redo(reloc));
+        assertTrue(applier.redo(reloc)); // diulang
+        assertEquals(1, store.rows.size());
+        assertEquals(afterVal, store.rows.get(newRid));
+
+        // Kondisi 2: gagal di tengah mutasi (keduanya ada / duplikat sementara)
+        store.rows.put(oldRid, beforeVal);
+        store.rows.put(newRid, afterVal);
+        assertTrue(applier.redo(reloc));
+        assertEquals(1, store.rows.size());
+        assertEquals(afterVal, store.rows.get(newRid));
+    }
+
+    @Test
+    void repeatedUndoRelocationRestoresOriginalRowAcrossAllFailurePoints() {
+        InMemoryRelocationDataAccess store = new InMemoryRelocationDataAccess();
+        RecordApplier applier = new RecordApplier(store);
+
+        RowId oldRid = new RowId("users", 0, 1);
+        RowId newRid = new RowId("users", 1, 0);
+        List<Object> beforeVal = List.of(101, "Short", 10);
+        List<Object> afterVal = List.of(101, "LongRelocatedPayload", 99);
+
+        DataChangeLogRecord reloc = new DataChangeLogRecord(
+                1L, 1, LogType.UPDATE, Instant.now(), "users", oldRid, newRid,
+                new RecordImage(beforeVal), new RecordImage(afterVal));
+
+        // Kondisi 1: gagal tepat setelah logging & reservasi (oldRid masih ada, newRid berstatus reserved)
+        store.rows.put(oldRid, beforeVal);
+        store.reserved.add(newRid);
+        assertTrue(applier.undo(reloc));
+        assertEquals(1, store.rows.size());
+        assertEquals(beforeVal, store.rows.get(oldRid));
+        assertFalse(store.reserved.contains(newRid), "Reservasi yatim pada newRid harus dilepas");
+
+        // Kondisi 2: gagal setelah insert newRid tapi sebelum delete oldRid (duplikat)
+        store.rows.put(oldRid, beforeVal);
+        store.rows.put(newRid, afterVal);
+        assertTrue(applier.undo(reloc));
+        assertTrue(applier.undo(reloc)); // diulang
+        assertEquals(1, store.rows.size());
+        assertEquals(beforeVal, store.rows.get(oldRid));
+
+        // Kondisi 3: gagal setelah delete oldRid tapi sebelum insert newRid (keduanya hilang)
+        store.rows.clear();
+        assertTrue(applier.undo(reloc));
+        assertEquals(1, store.rows.size());
+        assertEquals(beforeVal, store.rows.get(oldRid));
+    } 
+
+    private static final class InMemoryRelocationDataAccess implements IDataAccess {
+        final java.util.Map<RowId, List<Object>> rows = new java.util.LinkedHashMap<>();
+        final java.util.Set<RowId> reserved = new java.util.HashSet<>();
+
+        @Override
+        public Row fetchByRowId(RowId rowId) {
+            List<Object> vals = rows.get(rowId);
+            if (vals == null) {
+                throw new IllegalStateException("Slot contains no record: " + rowId);
+            }
+            return new Row(rowId, new ArrayList<>(vals));
+        }
+
+        @Override
+        public RowId reserveRowId(String table, List<Object> values) {
+            RowId rid = new RowId(table, 1, 0);
+            reserved.add(rid);
+            return rid;
+        }
+
+        @Override
+        public void releaseRowId(RowId rowId) {
+            reserved.remove(rowId);
+        }
+
+        @Override
+        public void insertAt(RowId rowId, List<Object> values) {
+            List<Object> existing = rows.get(rowId);
+            if (existing != null) {
+                if (existing.equals(values)) {
+                    return;
+                }
+                throw new IllegalStateException("Slot unavailable for row: " + rowId);
+            }
+            reserved.remove(rowId);
+            rows.put(rowId, new ArrayList<>(values));
+        }
+
+        @Override
+        public Row updateByRowId(RowId rowId, List<Object> values) {
+            rows.put(rowId, new ArrayList<>(values));
+            return new Row(rowId, new ArrayList<>(values));
+        }
+
+        @Override
+        public Row deleteByRowId(RowId rowId) {
+            List<Object> removed = rows.remove(rowId);
+            return removed == null ? null : new Row(rowId, removed);
+        }
+
+        @Override public Rows readBlock(DataRetrieval request) { return null; }
+        @Override public List<RowId> writeBlock(DataWrite request) { return List.of(); }
+        @Override public int deleteBlock(DataDeletion request) { return 0; }
+        @Override public List<RowId> searchIndex(String indexName, Object key) { return List.of(); }
+        @Override public List<RowId> searchIndexRange(String indexName, Object low, Object high, boolean lowInc, boolean highInc) { return List.of(); }
+    }
 }
