@@ -35,6 +35,7 @@ public final class ConcurrencyControlManager implements IConcurrencyControl {
     private volatile ConcurrencyProtocol protocol;
     private volatile boolean isRecovered = true;
     private boolean acceptingTransactions = true;
+    private volatile String failureReason;
 
     /** Uses timestamp ordering when no startup configuration is supplied. */
     public ConcurrencyControlManager() {
@@ -87,11 +88,24 @@ public final class ConcurrencyControlManager implements IConcurrencyControl {
         }
     }
 
-    /** Blocks until all transactions have completed while the barrier is active. */
+    // tunggu sampai semua transaksi selesai, langsung gagal kalau engine udah failed biar checkpoint ga nunggu selamanya
     public void awaitNoActiveTransactions() throws InterruptedException {
         synchronized (lifecycleMonitor) {
-            while (!activeTransactions.isEmpty()) lifecycleMonitor.wait();
+            while (!activeTransactions.isEmpty()) {
+                requireNotFailed();
+                lifecycleMonitor.wait();
+            }
         }
+    }
+
+    // true kalau ada transaksi yang hasil akhirnya ga pasti, engine harus restart dan crash recovery yang nentuin
+    public boolean isFailed() {
+        return failureReason != null;
+    }
+
+    // alasan engine masuk failed state, null kalau engine masih sehat
+    public String getFailureReason() {
+        return failureReason;
     }
 
     public int getActiveTransactionCount() { return activeTransactions.size(); }
@@ -136,6 +150,7 @@ public final class ConcurrencyControlManager implements IConcurrencyControl {
     @Override
     public int beginTransaction() {
         synchronized (lifecycleMonitor) {
+            requireNotFailed();
             if (!isRecovered) throw new IllegalStateException("Recovery has not completed");
             if (!acceptingTransactions) throw new IllegalStateException("Transaction admission is paused");
             int id = transactionCounter.getAndIncrement();
@@ -159,16 +174,20 @@ public final class ConcurrencyControlManager implements IConcurrencyControl {
         synchronized (tx) {
             requireState(tx, TransactionState.ACTIVE);
             tx.setState(TransactionState.PARTIALLY_COMMITTED);
+            RuntimeException commitFailure = null;
             boolean logged;
             try {
                 logged = persistCommitLog(txId);
             } catch (RuntimeException failure) {
-                failAndAbort(tx, "Unable to persist commit log");
-                throw failure;
+                commitFailure = failure;
+                logged = false;
             }
             if (!logged) {
-                failAndAbort(tx, "Unable to persist commit log");
-                throw new IllegalStateException("Unable to persist commit log for transaction " + txId);
+                IllegalStateException failure = new IllegalStateException(
+                        "Unable to persist commit log for transaction " + txId, commitFailure);
+                // commit belum pasti durable jadi coba rollback, kalau rollback ditolak hasilnya ga pasti dan engine failed
+                failAndAbort(tx, "Unable to persist commit log", failure);
+                throw failure;
             }
             protocol.releaseResources(tx);
             tx.setState(TransactionState.COMMITTED);
@@ -185,6 +204,9 @@ public final class ConcurrencyControlManager implements IConcurrencyControl {
         synchronized (tx) {
             if (tx.getState() == TransactionState.COMMITTED || tx.getState() == TransactionState.ABORTED) {
                 return;
+            }
+            if (tx.getState() == TransactionState.FAILED && isFailed()) {
+                throw new IllegalStateException("Transaction " + txId + " is in doubt, engine failed: " + failureReason);
             }
             if (tx.getState() != TransactionState.FAILED) tx.setState(TransactionState.FAILED);
             failAndAbort(tx, reason);
@@ -353,10 +375,8 @@ public final class ConcurrencyControlManager implements IConcurrencyControl {
         if (status != AccessStatus.GRANTED || frm == null) return status;
 
         try {
-            // DELETE(old) followed by INSERT(new) is a recoverable relocation:
-            // undo reverses these records and redo is idempotent at both ids.
-            persistDataLog(tx.getId(), oldItem, oldValues, null);
-            persistDataLog(tx.getId(), newItem, null, newValues);
+            // record the complete relocation once, after both identities are protected and before storage is changed.
+            persistRelocationLog(tx.getId(), oldItem, newItem, oldValues, newValues);
             return status;
         } catch (RuntimeException failure) {
             failAndAbort(tx, "Unable to persist relocation log");
@@ -382,13 +402,55 @@ public final class ConcurrencyControlManager implements IConcurrencyControl {
         }
     }
 
+    private void persistRelocationLog(
+            int txId,
+            DataItem oldItem,
+            DataItem newItem,
+            Object oldValues,
+            Object newValues) {
+        RecoveryResult result = frm.writeRelocationLog(
+                txId,
+                oldItem.tableName(),
+                oldItem.rowId(),
+                newItem.rowId(),
+                toRecordImage(oldValues),
+                toRecordImage(newValues));
+        if (result == null || !result.isSuccess()
+                || !frm.flushLogUpTo(result.getLsn())) {
+            throw new IllegalStateException(
+                    "Unable to persist relocation log for transaction " + txId);
+        }
+    }
+
     private void failAndAbort(Transaction tx, String reason) {
+        failAndAbort(tx, reason, null);
+    }
+
+    // rollback dulu baru lepas akses, kalau rollback gagal lock tetap dipegang dan engine masuk failed state
+    // cause dipakai buat nyimpen error asli biar ga ketimpa error rollback
+    private void failAndAbort(Transaction tx, String reason, RuntimeException cause) {
         synchronized (tx) {
             if (tx.getState() != TransactionState.FAILED) tx.setState(TransactionState.FAILED);
             if (frm != null) {
-                RecoveryResult rollback = frm.rollbackTransaction(tx.getId());
+                RecoveryResult rollback;
+                RuntimeException rollbackError = null;
+                try {
+                    rollback = frm.rollbackTransaction(tx.getId());
+                } catch (RuntimeException e) {
+                    rollback = null;
+                    rollbackError = e;
+                }
                 if (rollback == null || !rollback.isSuccess()) {
-                    throw new IllegalStateException("Rollback failed for transaction " + tx.getId());
+                    String detail = rollback != null ? rollback.getMessage()
+                            : rollbackError != null ? rollbackError.getMessage() : "no result";
+                    enterFailedState("Rollback failed for transaction " + tx.getId() + " after " + reason + ", " + detail);
+                    IllegalStateException failure = new IllegalStateException(
+                            "Rollback failed for transaction " + tx.getId() + ", engine moved to failed state", rollbackError);
+                    if (cause != null) {
+                        cause.addSuppressed(failure);
+                        throw cause;
+                    }
+                    throw failure;
                 }
             }
             protocol.releaseResources(tx);
@@ -397,6 +459,20 @@ public final class ConcurrencyControlManager implements IConcurrencyControl {
             synchronized (lifecycleMonitor) {
                 lifecycleMonitor.notifyAll();
             }
+        }
+    }
+
+    // tandai engine failed, transaksi baru ditolak dan yang lagi nunggu checkpoint dibangunin
+    private void enterFailedState(String reason) {
+        synchronized (lifecycleMonitor) {
+            if (failureReason == null) failureReason = reason;
+            lifecycleMonitor.notifyAll();
+        }
+    }
+
+    private void requireNotFailed() {
+        if (failureReason != null) {
+            throw new IllegalStateException("Engine is in failed state, restart required: " + failureReason);
         }
     }
 

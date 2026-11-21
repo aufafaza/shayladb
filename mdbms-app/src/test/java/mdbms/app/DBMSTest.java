@@ -13,7 +13,12 @@ import java.util.ArrayList;
 import java.util.List;
 import mdbms.api.IDurableStorage;
 import mdbms.api.IFailureRecoveryManager;
+import mdbms.models.access.DataRetrieval;
 import mdbms.models.log.RecoveryResult;
+import mdbms.models.schema.ColumnDefinition;
+import mdbms.models.schema.DataType;
+import mdbms.models.schema.TableSchema;
+import mdbms.storage.StorageManager;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -119,6 +124,40 @@ class DBMSTest {
 
         assertTrue(error.getMessage().contains(algorithm.name()));
         assertFalse(dbms.isRunning());
+    }
+
+    // SM14 database contoh kebentuk pas start pertama dan udah ada di disk tanpa nunggu shutdown
+    @Test
+    void firstStartLoadsSampleDatabase() {
+        new DBMS(cfg).start();
+
+        StorageManager reopened = new StorageManager(cfg.getDataDirectory(), 8, 4);
+        assertEquals(List.of("students", "takes", "courses"), reopened.listTable());
+        for (String table : reopened.listTable()) {
+            assertEquals(50, reopened.readBlock(new DataRetrieval(table, List.of(), List.of())).rows().size());
+        }
+    }
+
+    // start berikutnya ga nambah baris dobel
+    @Test
+    void laterStartsKeepExistingData() {
+        new DBMS(cfg).start();
+        new DBMS(cfg).start();
+
+        StorageManager reopened = new StorageManager(cfg.getDataDirectory(), 8, 4);
+        assertEquals(50, reopened.readBlock(new DataRetrieval("students", List.of(), List.of())).rows().size());
+    }
+
+    // data directory yang udah di bootstrap schema sendiri ga diisi data contoh
+    @Test
+    void startSkipsSampleWhenSchemaExists() {
+        StorageManager storage = new StorageManager(cfg.getDataDirectory(), 8, 4);
+        storage.updateTableSchema(new TableSchema("custom", List.of(
+                new ColumnDefinition("id", DataType.INTEGER, 0, false)), List.of("id"), List.of()));
+
+        new DBMS(cfg).start();
+
+        assertEquals(List.of("custom"), new StorageManager(cfg.getDataDirectory(), 8, 4).listTable());
     }
 
     @Test

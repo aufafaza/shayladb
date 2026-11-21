@@ -7,8 +7,9 @@ import java.util.function.BiPredicate;
 import mdbms.models.query.ExpressionTree;
 import mdbms.processor.ExpressionEvaluator;
 import mdbms.processor.IResultRow;
+import mdbms.processor.ResultTableSchema;
 
-public class JoinOperator extends QueryBinaryOperator {
+public class JoinOperator extends QueryBinaryOperator implements IRowProducingOperator {
     private final BiPredicate<IResultRow, IResultRow> condition;
     private final boolean natural;
     private final int blockSize;
@@ -28,6 +29,17 @@ public class JoinOperator extends QueryBinaryOperator {
                 .reduce(true, (a, b) -> a && b);
         this.natural = natural;
         this.blockSize = blockSize;
+    }
+
+    @Override
+    public ResultTableSchema getSchema() {
+        if (leftOperator instanceof IRowProducingOperator
+                && rightOperator instanceof IRowProducingOperator) {
+            ResultTableSchema left = ((IRowProducingOperator) leftOperator).getSchema();
+            ResultTableSchema right = ((IRowProducingOperator) rightOperator).getSchema();
+            if (left != null && right != null) return JoinRowUtil.combineSchema(left, right, natural);
+        }
+        return null;
     }
 
     @Override

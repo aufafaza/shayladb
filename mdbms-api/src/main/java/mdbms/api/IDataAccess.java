@@ -25,6 +25,18 @@ public interface IDataAccess{
 
     Row updateByRowId(RowId rowId, List<Object> values);
 
+    // true kalau isi baru muat di slot yang sama, false berarti UPDATE harus lewat relokasi (#55)
+    // ga ngubah apa apa, dipanggil sebelum minta lock dan nulis log
+    default boolean canUpdateInPlace(RowId rowId, List<Object> values) {
+        throw new UnsupportedOperationException(getClass().getSimpleName() + " does not support canUpdateInPlace");
+    }
+
+    // UPDATE yang ga pernah mindahin baris, false kalau ga muat dan ga ada yang berubah
+    // beda sama updateByRowId yang diam diam mindahin baris tanpa sempat dikunci dan dicatat
+    default boolean updateInPlace(RowId rowId, List<Object> values) {
+        throw new UnsupportedOperationException(getClass().getSimpleName() + " does not support updateInPlace");
+    }
+
     Row deleteByRowId(RowId rowId);
 
     List<RowId> searchIndex(String indexName, Object key);
