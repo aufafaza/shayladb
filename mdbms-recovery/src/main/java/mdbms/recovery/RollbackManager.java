@@ -77,9 +77,10 @@ public class RollbackManager {
                 "ROLLBACK: Transaction txId=" + txId + " is already being undone"
             );
         }
-
+        boolean interrupted = Thread.interrupted();
         rollbackLock.lock();
         try {
+            interrupted |= Thread.interrupted();
             if (recordApplier.getDataAccess() == null || durableStorage == null) {
                 return new RecoveryResult(
                     false,
@@ -184,6 +185,9 @@ public class RollbackManager {
         } finally {
             rollbackLock.unlock();
             activeRollbacks.remove(txId);
+            if (interrupted) {                              
+                Thread.currentThread().interrupt();
+            }
         }
     }
 
