@@ -19,7 +19,16 @@ public interface IDataAccess{
 
     RowId reserveRowId(String table, List<Object> values);
 
+    // versi yang bawa LSN, reservasi biasanya terjadi sebelum log ditulis jadi pemanggil umumnya ngirim 0 (#54)
+    default RowId reserveRowId(String table, List<Object> values, long pageLsn) {
+        return reserveRowId(table, values);
+    }
+
     void releaseRowId(RowId rowId);
+
+    default void releaseRowId(RowId rowId, long pageLsn) {
+        releaseRowId(rowId);
+    }
 
     void insertAt(RowId rowId, List<Object> values);
 
