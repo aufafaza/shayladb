@@ -90,8 +90,12 @@ public class CheckpointManager {
                 }
             }
 
-            storageManager.flushBuffer();
+            if (lastProcessedLsn > 0 && !logManager.flushUpTo(lastProcessedLsn)) {
+                return new RecoveryResult(false, -1L, logManager.getMaxTxId(),
+                        "PITR: Gagal flush WAL sebelum persist hasil recovery");
+            }
             storageManager.rebuildIndexesAndReloadCatalog();
+            storageManager.flushBuffer();
             truncateLogAfter(lastProcessedLsn);
 
             return new RecoveryResult(true, lastProcessedLsn, logManager.getMaxTxId(),
@@ -156,8 +160,12 @@ public class CheckpointManager {
                 }
             }
 
-            storageManager.flushBuffer();
+            if (lastProcessedLsn > 0 && !logManager.flushUpTo(lastProcessedLsn)) {
+                return new RecoveryResult(false, -1L, logManager.getMaxTxId(),
+                        "Recovery to transaction: Gagal flush WAL sebelum persist hasil recovery");
+            }
             storageManager.rebuildIndexesAndReloadCatalog();
+            storageManager.flushBuffer();
             truncateLogAfter(lastProcessedLsn);
 
             return new RecoveryResult(
