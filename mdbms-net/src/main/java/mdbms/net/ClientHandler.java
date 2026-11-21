@@ -7,6 +7,8 @@ import java.net.SocketTimeoutException;
 import mdbms.api.IConcurrencyControl;
 import mdbms.api.IQueryProcessor;
 import mdbms.models.query.ExecutionResult;
+import mdbms.models.transaction.Transaction;
+import mdbms.models.transaction.TransactionState;
 
 /**
  * Executes one connection using either the interactive telnet or framed raw
@@ -189,7 +191,8 @@ public class ClientHandler implements Runnable {
         } catch (RuntimeException e) {
             session.clearTransaction();
             return new ExecutionResult(false, null, null, 0,
-                    "COMMIT failed: " + FramedJsonProtocol.messageOrDefault(e.getMessage(), "unable to commit transaction"));
+                    "COMMIT failed: "
+                            + FramedJsonProtocol.messageOrDefault(e.getMessage(), "unable to commit transaction"));
         }
     }
 
@@ -202,7 +205,8 @@ public class ClientHandler implements Runnable {
         } catch (RuntimeException e) {
             session.clearTransaction();
             return new ExecutionResult(false, null, null, 0,
-                    "ABORT failed: " + FramedJsonProtocol.messageOrDefault(e.getMessage(), "unable to abort transaction"));
+                    "ABORT failed: "
+                            + FramedJsonProtocol.messageOrDefault(e.getMessage(), "unable to abort transaction"));
         }
     }
 
@@ -255,7 +259,8 @@ public class ClientHandler implements Runnable {
                 } catch (RuntimeException e) {
                     session.clearTransaction();
                     return new ExecutionResult(false, null, null, 0,
-                            "COMMIT failed: " + FramedJsonProtocol.messageOrDefault(e.getMessage(), "unable to commit transaction"));
+                            "COMMIT failed: " + FramedJsonProtocol.messageOrDefault(e.getMessage(),
+                                    "unable to commit transaction"));
                 }
             }
             return result;
@@ -282,7 +287,10 @@ public class ClientHandler implements Runnable {
 
     private RuntimeException abortIfActive(int txId, String reason) {
         try {
-            concurrencyControl.abortTransaction(txId, reason);
+            Transaction tx = concurrencyControl.getTransaction(txId);
+            if (tx != null && tx.getState() == TransactionState.ACTIVE) {
+                concurrencyControl.abortTransaction(txId, reason);
+            }
             return null;
         } catch (RuntimeException e) {
             return e;
