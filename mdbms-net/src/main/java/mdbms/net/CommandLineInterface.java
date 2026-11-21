@@ -13,6 +13,7 @@ import mdbms.models.query.ExecutionResult;
 
 public class CommandLineInterface {
     static final int MAX_TELNET_QUERY_BYTES = FramedJsonProtocol.MAX_FRAME_BYTES;
+    static final int TELNET_REQUEST_TIMEOUT_MILLIS = 5 * 60 * 1000; // 5 minutes
 
     private PrintWriter writer;
     private TelnetHandler telnetHandler;
@@ -33,15 +34,15 @@ public class CommandLineInterface {
 
     public CommandLineInterface(Socket socket) throws IOException {
         this(socket, new TelnetHandler(socket), MAX_TELNET_QUERY_BYTES,
-                FramedJsonProtocol.REQUEST_TIMEOUT_MILLIS);
+                TELNET_REQUEST_TIMEOUT_MILLIS);
     }
-    
+
     CommandLineInterface(Socket socket, TelnetHandler telnetHandler) throws IOException {
-        this(socket, telnetHandler, MAX_TELNET_QUERY_BYTES, FramedJsonProtocol.REQUEST_TIMEOUT_MILLIS);
+        this(socket, telnetHandler, MAX_TELNET_QUERY_BYTES, TELNET_REQUEST_TIMEOUT_MILLIS);
     }
 
     CommandLineInterface(Socket socket, TelnetHandler telnetHandler, int maxTelnetQueryBytes) throws IOException {
-        this(socket, telnetHandler, maxTelnetQueryBytes, FramedJsonProtocol.REQUEST_TIMEOUT_MILLIS);
+        this(socket, telnetHandler, maxTelnetQueryBytes, TELNET_REQUEST_TIMEOUT_MILLIS);
     }
 
     CommandLineInterface(
@@ -290,7 +291,7 @@ public class CommandLineInterface {
             return 2;
         }
         if (codePoint <= 0xffff) {
-            return 3; 
+            return 3;
         }
         return 4;
     }
