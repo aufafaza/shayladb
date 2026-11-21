@@ -1,6 +1,7 @@
 package mdbms.concurrency;
 
 import java.util.Objects;
+import java.util.List;
 import java.util.function.Consumer;
 import java.util.function.IntFunction;
 
@@ -42,6 +43,11 @@ public class LockBasedProtocol implements ConcurrencyProtocol {
     @Override 
     public AccessStatus requestWrite(Transaction tx, DataItem data) {
         return handleResult(tx, lockManager.acquireLock(tx, data, Locktype.EXCLUSIVE));
+    }
+
+    @Override
+    public AccessStatus requestWriteBatch(Transaction tx, List<DataItem> dataItems) {
+        return handleResult(tx, lockManager.acquireLocks(tx, dataItems, Locktype.EXCLUSIVE));
     }
 
     @Override
