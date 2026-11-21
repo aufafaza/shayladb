@@ -19,7 +19,8 @@ public class TimestampsBasedProtocol implements ConcurrencyProtocol {
 
     private static final Comparator<DataItem> DATA_ITEM_COMPARATOR = Comparator
             .comparing(DataItem::tableName, Comparator.nullsFirst(String::compareTo))
-            .thenComparing(item -> item.rowId() != null ? item.rowId().tableName() : "", Comparator.nullsFirst(String::compareTo))
+            .thenComparing(item -> item.rowId() != null ? item.rowId().tableName() : "",
+                    Comparator.nullsFirst(String::compareTo))
             .thenComparingInt(item -> item.rowId() != null ? item.rowId().blockNumber() : 0)
             .thenComparingInt(item -> item.rowId() != null ? item.rowId().slot() : 0);
 
@@ -37,6 +38,8 @@ public class TimestampsBasedProtocol implements ConcurrencyProtocol {
             return AccessStatus.ABORTED;
         }
         transactionRegistry.put(tx.getId(), tx);
+        if (data.isTableRange())
+            return AccessStatus.GRANTED;
         DataTimestamp dt = timestampManager.getOrCreate(data);
         return dt.checkAndApplyRead(tx);
     }
@@ -47,6 +50,8 @@ public class TimestampsBasedProtocol implements ConcurrencyProtocol {
             return AccessStatus.ABORTED;
         }
         transactionRegistry.put(tx.getId(), tx);
+        if (data.isTableRange())
+            return AccessStatus.GRANTED;
         DataTimestamp dt = timestampManager.getOrCreate(data);
         AccessStatus status = dt.checkAndApplyWrite(tx);
         if (status == AccessStatus.GRANTED) {

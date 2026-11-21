@@ -542,6 +542,7 @@ public final class StorageManager implements IDataAccess, ISchemaCatalog, IStati
     }
 
     // lepas slot dipesan yang nyangkut di disk dari transaksi yang ga sempat selesai sebelum crash
+    // sekalian balikin ruang bekas baris yang dihapus, karena delete nahan ruangnya biar undo pasti muat di RowId asal
     // cuma boleh dipanggil pas ga ada transaksi aktif, balikin jumlah slot yang dilepas
     public int releaseOrphanReservations(){
         int released = 0;

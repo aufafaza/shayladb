@@ -339,6 +339,7 @@ public class HeapFile{
 
     // lepas semua slot yang masih dipesan dan balikin jumlahnya, cuma aman dipanggil pas ga ada transaksi aktif
     // slot dipesan yang ikut ke disk sebelum crash bakal nyangkut, kalau ga dilepas ruangnya kepake selamanya
+    // ruang bekas baris yang dihapus juga ditahan sebagai slot dipesan, jadi baru bisa dipakai lagi abis dilepas di sini
     public int releaseAllReservations(){
         int released = 0;
         for (int blockNumber = 0; blockNumber < blockCount(); blockNumber++){

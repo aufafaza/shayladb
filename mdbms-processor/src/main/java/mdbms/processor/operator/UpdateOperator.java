@@ -65,7 +65,6 @@ public class UpdateOperator extends QueryUnaryOperator implements IWriteOperator
         while ((row = childOperator.next()) != null) {
             targetRowIds.add(row.getRowId());
         }
-        childOperator.close();
     }
 
     public IResultRow next() {
@@ -115,6 +114,7 @@ public class UpdateOperator extends QueryUnaryOperator implements IWriteOperator
                     throw failure;
                 }
             }
+            
             affectedRows++;
         }
         return null;

@@ -57,7 +57,7 @@ public class LockManager {
             Lock owned = findLock(locks, tx);
             if (owned == null) {
                 locks.add(new Lock(tx, data, type));
-            } else if (type == Locktype.EXCLUSIVE) {
+            } else if (type == Locktype.EXCLUSIVE || owned.getLocktype() != type) {
                 owned.setLocktype(Locktype.EXCLUSIVE);
             }
         }
@@ -121,13 +121,15 @@ public class LockManager {
     private static boolean isCompatible(ArrayList<Lock> locks, Transaction tx, Locktype requested) {
         if (locks == null) return true;
         for (Lock lock : locks) {
-            if (lock.getTransaction() != tx
-                    && (requested == Locktype.EXCLUSIVE
-                    || lock.getLocktype() == Locktype.EXCLUSIVE)) {
+            if (lock.getTransaction() != tx && conflicts(lock.getLocktype(), requested)) {
                 return false;
             }
         }
         return true;
+    }
+
+    static boolean conflicts(Locktype held, Locktype requested) {
+        return held != requested || held == Locktype.EXCLUSIVE;
     }
 
     static final class PendingLock {
