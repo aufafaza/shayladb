@@ -1,6 +1,7 @@
 package mdbms.concurrency;
 
 import java.util.Objects;
+import java.util.List;
 import java.util.function.Consumer;
 import java.util.function.IntFunction;
 
@@ -41,7 +42,16 @@ public class LockBasedProtocol implements ConcurrencyProtocol {
     
     @Override 
     public AccessStatus requestWrite(Transaction tx, DataItem data) {
-        return handleResult(tx, lockManager.acquireLock(tx, data, Locktype.EXCLUSIVE));
+        if (tx == null || data == null) {
+            throw new IllegalArgumentException("Transaction and data are required");
+        }
+        Locktype type = data.isTableRange() ? Locktype.INTENT_EXCLUSIVE : Locktype.EXCLUSIVE;
+        return handleResult(tx, lockManager.acquireLock(tx, data, type));
+    }
+
+    @Override
+    public AccessStatus requestWriteBatch(Transaction tx, List<DataItem> dataItems) {
+        return handleResult(tx, lockManager.acquireLocks(tx, dataItems, Locktype.EXCLUSIVE));
     }
 
     @Override
@@ -57,14 +67,20 @@ public class LockBasedProtocol implements ConcurrencyProtocol {
         lockManager.releaseAllLocks(tx);
     }
 
+    public LockManager getLockManager() {
+        return lockManager;
+    }
+
     private AccessStatus handleResult(Transaction tx, AccessStatus result) {
-        if (result != AccessStatus.WAITING || !deadlockHandler.detectDeadlock()) {
+        if (result != AccessStatus.WAITING) {
             return result;
         }
-        Transaction victim = deadlockHandler.chooseVictim();
-        if (victim == null) return result;
-        abortVictim(victim);
-        if (victim == tx || tx.getState() != TransactionState.ACTIVE) return AccessStatus.ABORTED;
+        while (deadlockHandler.detectDeadlock()) {
+            Transaction victim = deadlockHandler.chooseVictim();
+            if (victim == null) break;
+            abortVictim(victim);
+        }
+        if (tx.getState() != TransactionState.ACTIVE) return AccessStatus.ABORTED;
         return result;
     }
 

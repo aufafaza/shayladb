@@ -22,6 +22,7 @@ public class LogManager {
     private final WalFileHandler walFileHandler;
     private final AtomicLong nextLsn = new AtomicLong(1L);
     private volatile int maxTxId = 0;
+    private final Object appendLock = new Object();
 
     public LogManager() {
         this(new WalFileHandler());
@@ -57,19 +58,21 @@ public class LogManager {
      * Mencatat peristiwa transaksi (BEGIN, COMMIT, ABORT).
      */
     public TransactionLogRecord appendTransactionLog(int txId, LogType eventType) {
-        long lsn = nextLsn.getAndIncrement();
-        Instant now = Instant.now();
-        TransactionLogRecord record = new TransactionLogRecord(lsn, txId, eventType, now);
+        TransactionLogRecord record;
+        synchronized (appendLock) {
+            long lsn = nextLsn.getAndIncrement();
+            Instant now = Instant.now();
+            record = new TransactionLogRecord(lsn, txId, eventType, now);
 
-        boolean ok = walFileHandler.append(record);
-        if (!ok) {
-            throw new RuntimeException("Gagal menulis log transaksi untuk txId=" + txId);
+            boolean ok = walFileHandler.append(record);
+            if (!ok) {
+                throw new RuntimeException("Gagal menulis log transaksi untuk txId=" + txId);
+            }
+            updateMaxTxId(txId);
         }
 
-        updateMaxTxId(txId);
-
         if (eventType == LogType.COMMIT) {
-            boolean flushed = walFileHandler.flushUpTo(lsn);
+            boolean flushed = walFileHandler.flushUpTo(record.getLsn());
             if (!flushed) {
                 throw new RuntimeException("Gagal flush log COMMIT untuk txId=" + txId);
             }
@@ -89,36 +92,68 @@ public class LogManager {
         RecordImage beforeImg,
         RecordImage afterImg
     ) {
-        long lsn = nextLsn.getAndIncrement();
-        Instant now = Instant.now();
-        DataChangeLogRecord record = new DataChangeLogRecord(lsn, txId, opType, now, table, rid, beforeImg, afterImg);
+        synchronized (appendLock) {
+            long lsn = nextLsn.getAndIncrement();
+            Instant now = Instant.now();
+            DataChangeLogRecord record = new DataChangeLogRecord(lsn, txId, opType, now, table, rid, beforeImg, afterImg);
 
-        boolean ok = walFileHandler.append(record);
-        if (!ok) {
-            throw new RuntimeException("Gagal menulis log perubahan data untuk txId=" + txId);
+            boolean ok = walFileHandler.append(record);
+            if (!ok) {
+                throw new RuntimeException("Gagal menulis log perubahan data untuk txId=" + txId);
+            }
+            updateMaxTxId(txId);
+            return record;
         }
+    }
 
-        updateMaxTxId(txId);
-        return record;
+    /**
+     * Mencatat perubahan UPDATE yang memindahkan baris dari oldRid ke newRid.
+     */
+    public DataChangeLogRecord appendRelocationLog(
+            int txId,
+            String table,
+            RowId oldRid,
+            RowId newRid,
+            RecordImage beforeImg,
+            RecordImage afterImg) {
+        synchronized (appendLock) {
+            long lsn = nextLsn.getAndIncrement();
+            Instant now = Instant.now();
+            DataChangeLogRecord record = new DataChangeLogRecord(
+                    lsn, txId, LogType.UPDATE, now, table, oldRid, newRid, beforeImg, afterImg);
+
+            boolean ok = walFileHandler.append(record);
+            if (!ok) {
+                throw new RuntimeException("Gagal menulis log relokasi data untuk txId=" + txId);
+            }
+            updateMaxTxId(txId);
+            return record;
+        }
     }
 
     /**
      * Mencatat penanda checkpoint.
      */
     public CheckpointLogRecord appendCheckpointLog(List<Integer> activeTxIds) {
-        long lsn = nextLsn.getAndIncrement();
-        Instant now = Instant.now();
-        CheckpointLogRecord record = new CheckpointLogRecord(lsn, now, activeTxIds);
+        CheckpointLogRecord record;
+        synchronized (appendLock) {
+            long lsn = nextLsn.getAndIncrement();
+            Instant now = Instant.now();
+            record = new CheckpointLogRecord(lsn, now, activeTxIds);
 
-        boolean ok = walFileHandler.append(record);
-        if (!ok) {
-            throw new RuntimeException("Gagal menulis log checkpoint");
+            boolean ok = walFileHandler.append(record);
+            if (!ok) {
+                throw new RuntimeException("Gagal menulis log checkpoint");
+            }
         }
 
-        walFileHandler.flushUpTo(lsn);
+        boolean flushed = walFileHandler.flushUpTo(record.getLsn());
+        if (!flushed) {
+            throw new RuntimeException("Gagal flush log checkpoint pada LSN=" + record.getLsn());
+        }
         return record;
     }
-
+    
     /**
      * Memastikan log hingga LSN tertentu telah tersimpan di disk.
      */
@@ -165,6 +200,9 @@ public class LogManager {
                 String rowIdStr = changeLog.getRowId() != null
                         ? changeLog.getRowId().blockNumber() + ":" + changeLog.getRowId().slot()
                         : "-";
+                if (changeLog.isRelocation()) {
+                    rowIdStr += "->" + changeLog.getNewRowId().blockNumber() + ":" + changeLog.getNewRowId().slot();
+                }
                 String beforeStr = changeLog.getBeforeImage() != null
                         ? changeLog.getBeforeImage().values().toString()
                         : "<ABSENT>";

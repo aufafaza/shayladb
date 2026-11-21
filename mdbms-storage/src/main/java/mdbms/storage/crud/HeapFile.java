@@ -55,8 +55,14 @@ public class HeapFile{
     }
 
     public RowId reserve(List<Object> values){
+        return reserve(values, NO_LSN);
+    }
+
+    // sama kayak reserve tapi halaman tempat slot dipesan ditandai LSN dari pemanggil
+    public RowId reserve(List<Object> values, long pageLsn){
         byte[] record = serializer.serialize(values, schema);
         int bytes = record.length;
+        validateRecordSize(bytes);
 
         Block block = pool.pin(fileName, findBlockWithSpace(bytes));
 
@@ -70,11 +76,16 @@ public class HeapFile{
             return new RowId(schema.tableName(), block.blockNumber, slot);
 
         } finally{
-            pool.unpin(block, dirty, NO_LSN);
+            pool.unpin(block, dirty, pageLsn);
         }
     }
 
     public void releaseReservation(RowId rowId){
+        releaseReservation(rowId, NO_LSN);
+    }
+
+    // sama kayak releaseReservation tapi halamannya ditandai LSN dari pemanggil
+    public void releaseReservation(RowId rowId, long pageLsn){
         Block block = pool.pin(fileName, rowId.blockNumber());
 
         boolean dirty = false;
@@ -85,13 +96,20 @@ public class HeapFile{
             dirty = true;
 
         } finally{
-            pool.unpin(block, dirty, NO_LSN);
+            pool.unpin(block, dirty, pageLsn);
         }
     }
 
     public RowId insert(List<Object> values){
+        return insert(values, NO_LSN);
+    }
+
+    // sama kayak insert tapi halamannya ditandai LSN log perubahan ini biar WAL di flush dulu sebelum halaman ditulis
+    public RowId insert(List<Object> values, long pageLsn){
         byte[] record = serializer.serialize(values, schema);
         int bytes = record.length;
+        validateRecordSize(bytes);
+
         Block block = pool.pin(fileName, findBlockWithSpace(bytes));
 
         try{
@@ -102,15 +120,22 @@ public class HeapFile{
             return new RowId(schema.tableName(), block.blockNumber, slot);
 
         } finally{
-            pool.unpin(block, true, NO_LSN);
+            pool.unpin(block, true, pageLsn);
         }
     }
 
     // taruh baris di RowId tertentu, false kalau slot nya udah berisi baris yang persis sama jadi ga ada yang berubah
     // block atau slot yang belum ada dibikin dulu biar redo setelah crash tetap jalan walau halamannya belum sempat ke disk
     public boolean insertAt(RowId rowId, List<Object> values){
+        return insertAt(rowId, values, NO_LSN);
+    }
+
+    // sama kayak insertAt tapi halamannya ditandai LSN log perubahan ini
+    public boolean insertAt(RowId rowId, List<Object> values, long pageLsn){
         byte[] record = serializer.serialize(values, schema);
         int bytes = record.length;
+        validateRecordSize(bytes);
+
         while (blockCount() <= rowId.blockNumber()){
             appendEmptyPage();
         }
@@ -145,13 +170,19 @@ public class HeapFile{
             return true;
 
         } finally{
-            pool.unpin(block, dirty, NO_LSN);
+            pool.unpin(block, dirty, pageLsn);
         }
     }
 
     // ganti isi baris di tempat, kalau ga muat baris baru di insert dulu baru yang lama dihapus biar data ga hilang kalau gagal
     public Row update(RowId rowId, List<Object> values){
+        return update(rowId, values, NO_LSN);
+    }
+
+    // sama kayak update tapi semua halaman yang berubah ditandai LSN log perubahan ini, termasuk halaman tujuan kalau pindah
+    public Row update(RowId rowId, List<Object> values, long pageLsn){
         byte[] record = serializer.serialize(values, schema);
+        validateRecordSize(record.length);
         Block block = pool.pin(fileName, rowId.blockNumber());
         boolean dirty = false;
 
@@ -167,15 +198,15 @@ public class HeapFile{
             }
 
         } finally{
-            pool.unpin(block, dirty, NO_LSN);
+            pool.unpin(block, dirty, pageLsn);
         }
 
-        RowId moved = insert(values);
+        RowId moved = insert(values, pageLsn);
         try{
-            delete(rowId);
+            delete(rowId, pageLsn);
         } catch (RuntimeException e){
             try{
-                delete(moved);
+                delete(moved, pageLsn);
             } catch (RuntimeException cleanup){
                 e.addSuppressed(cleanup);
             }
@@ -185,7 +216,53 @@ public class HeapFile{
         return new Row(moved, values);
     }
 
+    // true kalau isi baru muat di slot yang sama, ga ngubah apa apa
+    // hasil nya bisa basi kalau ruang halaman keburu dipakai, jadi tetap pakai updateInPlace yang bisa nolak
+    public boolean canUpdateInPlace(RowId rowId, List<Object> values){
+        byte[] record = serializer.serialize(values, schema);
+        Block block = pool.pin(fileName, rowId.blockNumber());
+
+        try{
+            SlottedPage page = SlottedPage.of(block.data);
+            return page.canReplace(rowId.slot(), record.length);
+
+        } finally{
+            pool.unpin(block, false, NO_LSN);
+        }
+    }
+
+    // ganti isi baris di slot yang sama, false kalau ga muat dan halaman ga diubah sama sekali
+    // ga pernah mindahin baris sendiri biar relokasi bisa dikunci dan dicatat dulu sama pemanggil
+    public boolean updateInPlace(RowId rowId, List<Object> values){
+        return updateInPlace(rowId, values, NO_LSN);
+    }
+
+    // sama kayak updateInPlace tapi halamannya ditandai LSN log perubahan ini
+    public boolean updateInPlace(RowId rowId, List<Object> values, long pageLsn){
+        byte[] record = serializer.serialize(values, schema);
+        Block block = pool.pin(fileName, rowId.blockNumber());
+        boolean dirty = false;
+
+        try{
+            SlottedPage page = SlottedPage.of(block.data);
+            if (!page.replaceRecord(rowId.slot(), record)){
+                return false;
+            }
+            writeBack(block, page);
+            dirty = true;
+            return true;
+
+        } finally{
+            pool.unpin(block, dirty, pageLsn);
+        }
+    }
+
     public Row delete(RowId rowId){
+        return delete(rowId, NO_LSN);
+    }
+
+    // sama kayak delete tapi halamannya ditandai LSN log perubahan ini
+    public Row delete(RowId rowId, long pageLsn){
         Block block = pool.pin(fileName, rowId.blockNumber());
         boolean dirty = false;
 
@@ -208,12 +285,17 @@ public class HeapFile{
             return new Row(rowId, values);
 
         } finally{
-            pool.unpin(block, dirty, NO_LSN);
+            pool.unpin(block, dirty, pageLsn);
         }
     }
 
     // hapus baris kalau masih ada, null kalau block slot atau barisnya udah ga ada jadi aman diulang sama redo dan undo FRM
     public Row deleteIfPresent(RowId rowId){
+        return deleteIfPresent(rowId, NO_LSN);
+    }
+
+    // sama kayak deleteIfPresent tapi halamannya ditandai LSN log perubahan ini
+    public Row deleteIfPresent(RowId rowId, long pageLsn){
         if (rowId.blockNumber() >= blockCount()){
             return null;
         }
@@ -236,7 +318,7 @@ public class HeapFile{
             return new Row(rowId, values);
 
         } finally{
-            pool.unpin(block, dirty, NO_LSN);
+            pool.unpin(block, dirty, pageLsn);
         }
     }
 
@@ -255,29 +337,63 @@ public class HeapFile{
         return rowCount;
     }
 
+    // lepas semua slot yang masih dipesan dan balikin jumlahnya, cuma aman dipanggil pas ga ada transaksi aktif
+    // slot dipesan yang ikut ke disk sebelum crash bakal nyangkut, kalau ga dilepas ruangnya kepake selamanya
+    // ruang bekas baris yang dihapus juga ditahan sebagai slot dipesan, jadi baru bisa dipakai lagi abis dilepas di sini
+    public int releaseAllReservations(){
+        int released = 0;
+        for (int blockNumber = 0; blockNumber < blockCount(); blockNumber++){
+            Block block = pool.pin(fileName, blockNumber);
+            boolean dirty = false;
+            try{
+                SlottedPage page = SlottedPage.of(block.data);
+                for (int slot = 0; slot < page.slotCount(); slot++){
+                    if (page.isReserved(slot)){
+                        page.releaseReservation(slot);
+                        released++;
+                        dirty = true;
+                    }
+                }
+                if (dirty){
+                    writeBack(block, page);
+                }
+            } finally{
+                pool.unpin(block, dirty, NO_LSN);
+            }
+        }
+        return released;
+    }
+
     public int blockCount(){
         return pool.blockCount(fileName);
     }
 
-    private int findBlockWithSpace(int requiredBytes){
-        int blockCount = blockCount();
-        if (blockCount == 0) return appendEmptyPage();
+    private static void validateRecordSize(int bytes){
+        if (bytes > SlottedPage.MAX_RECORD_SIZE){
+            throw new StorageException(
+                StorageErrorCode.SCHEMA_VIOLATION,
+                "Record size " + bytes + " bytes exceeds maximum row size of " + SlottedPage.MAX_RECORD_SIZE + " bytes"
+            );
+        }
+    }
 
-        int blockNumber = blockCount - 1;
+    private int findBlockWithSpace(int requiredBytes){
+        for (int blockNumber = blockCount() - 1; blockNumber >= 0; blockNumber--){
+            if (hasSpace(blockNumber, requiredBytes)) return blockNumber;
+        }
+
+        return appendEmptyPage();
+    }
+
+    private boolean hasSpace(int blockNumber, int requiredBytes){
         Block block = pool.pin(fileName, blockNumber);
-        boolean hasSpace;
 
         try{
-            SlottedPage page = SlottedPage.of(block.data);
-            hasSpace = page.hasSpace(requiredBytes);
+            return SlottedPage.of(block.data).hasSpace(requiredBytes);
 
         } finally{
             pool.unpin(block, false, NO_LSN);
         }
-
-        if (hasSpace) return blockNumber;
-        
-        return appendEmptyPage();
     }
 
     // tambah block baru lalu isi header SlottedPage kosong, pin dari appendBlock langsung dilepas

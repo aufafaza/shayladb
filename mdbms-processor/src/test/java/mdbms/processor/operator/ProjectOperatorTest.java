@@ -8,6 +8,8 @@ import java.util.List;
 import mdbms.models.query.ColumnReference;
 import mdbms.processor.IResultRow;
 import mdbms.processor.exception.AmbiguousColumnException;
+import mdbms.processor.mocks.MockOperator;
+
 import org.junit.jupiter.api.Test;
 
 class ProjectOperatorTest {

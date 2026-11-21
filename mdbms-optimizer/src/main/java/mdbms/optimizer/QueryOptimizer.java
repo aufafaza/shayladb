@@ -14,10 +14,6 @@ import mdbms.optimizer.binder.IQueryValidator;
 import mdbms.optimizer.cost.ICostEstimator;
 import mdbms.optimizer.parser.ShaylaParser;
 import mdbms.optimizer.rule.IOptimizationRule;
-import mdbms.optimizer.rule.JoinConversionRule;
-import mdbms.optimizer.rule.JoinOrderingRule;
-import mdbms.optimizer.rule.SelectionPushDownRule;
-import mdbms.optimizer.rule.ProjectionPushDownRule;
 import mdbms.optimizer.cost.CardinalityEstimator;
 import mdbms.optimizer.cost.SystemCostEstimator;
 import mdbms.optimizer.rule.OptimizationContext;
@@ -33,8 +29,7 @@ public class QueryOptimizer implements IQueryOptimizer {
 
     public QueryOptimizer(ISchemaCatalog schemaCatalog, ShaylaParser parser) {
         this(schemaCatalog, parser, new QueryValidator(schemaCatalog),
-            List.of(new SelectionPushDownRule(), new JoinConversionRule(), new JoinOrderingRule(),
-                new ProjectionPushDownRule()), null);
+            RuleBasedOptimizer.defaultRules(), null);
     }
 
     public QueryOptimizer(
@@ -75,6 +70,18 @@ public class QueryOptimizer implements IQueryOptimizer {
         OptimizationContext context = new OptimizationContext(bindings, schemaCatalog, statistics, costEstimator);
         QueryTree result = new RuleBasedOptimizer(rules).optimize(query.getQueryTree(), context);
         return new ParsedQuery(query.rawQuery(), result, query.targetTables());
+    }
+
+    /** QO-15: plan before and after optimization with their total costs, for EXPLAIN and the driver. */
+    @Override
+    public String explainQuery(String query) {
+        QueryPlanPrinter printer = new QueryPlanPrinter();
+        ParsedQuery parsed = parseQuery(query);
+        // render the original plan before optimizing so later rewrites cannot leak into it
+        String before = printer.printPlan(parsed.getQueryTree(), getCost(parsed));
+        ParsedQuery optimized = optimizeQuery(parsed);
+        String after = printer.printPlan(optimized.getQueryTree(), getCost(optimized));
+        return "Before optimization\n" + before + "\nAfter optimization\n" + after;
     }
 
     /** Estimates the complete supplied plan and refreshes each node's local cost. */

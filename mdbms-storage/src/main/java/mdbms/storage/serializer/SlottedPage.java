@@ -13,6 +13,7 @@ public final class SlottedPage {
     private static final int VERSION = 1;
     private static final int HEADER_SIZE = 16;
     private static final int SLOT_SIZE = 12;
+    public static final int MAX_RECORD_SIZE = PAGE_SIZE - HEADER_SIZE - SLOT_SIZE;
     private static final int DELETED = 0;
     private static final int RESERVED = 1;
     private static final int OCCUPIED = 2;
@@ -179,15 +180,25 @@ public final class SlottedPage {
         if (data == null || data.length == 0) {
             throw new StorageException(StorageErrorCode.SCHEMA_VIOLATION, "Record data must not be empty");
         }
-        byte[] previous = records.get(slot);
-        if (previous == null) {
-            throw new StorageException(StorageErrorCode.SLOT_UNAVAILABLE, "Slot contains no active record");
-        }
-        if (usedBytes() - previous.length + data.length > PAGE_SIZE) {
+        if (!canReplace(slot, data.length)) {
             return false;
         }
         records.set(slot, data.clone());
         return true;
+    }
+
+    // true kalau record aktif di slot ini bisa diganti record sepanjang length tanpa pindah slot
+    // dipakai buat nentuin UPDATE perlu relokasi atau ga sebelum ada yang diubah
+    public boolean canReplace(int slot, int length) {
+        checkSlot(slot);
+        if (length <= 0) {
+            throw new StorageException(StorageErrorCode.SCHEMA_VIOLATION, "Record length must be positive");
+        }
+        byte[] previous = records.get(slot);
+        if (previous == null) {
+            throw new StorageException(StorageErrorCode.SLOT_UNAVAILABLE, "Slot contains no active record");
+        }
+        return usedBytes() - previous.length + length <= PAGE_SIZE;
     }
 
     public byte[] readRecord(int slot) {
@@ -199,12 +210,17 @@ public final class SlottedPage {
         return record.clone();
     }
 
+    // hapus record tapi ruangnya tetap ditahan jadi slot dipesan sepanjang record lama
+    // biar undo DELETE atau relokasi yang di abort pasti muat lagi di RowId asalnya walau transaksi lain lagi nyari ruang
+    // ruangnya baru balik lewat releaseReservation pas ga ada transaksi aktif
     public void deleteRecord(int slot) {
         checkSlot(slot);
-        if (records.get(slot) == null) {
+        byte[] record = records.get(slot);
+        if (record == null) {
             throw new StorageException(StorageErrorCode.SLOT_UNAVAILABLE, "Slot contains no record");
         }
         records.set(slot, null);
+        reservations.set(slot, record.length);
     }
 
     // menyusun seluruh halaman jadi data biner

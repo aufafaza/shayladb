@@ -76,6 +76,31 @@ class SlottedPageTest {
         assertThrows(StorageException.class, () -> page.readRecord(10));
     }
 
+    // delete nahan ruang record lama sampai dilepas, jadi record yang sama pasti muat lagi di slot asalnya
+    @Test
+    void deleteHoldsSpaceUntilReleased() {
+        SlottedPage page = new SlottedPage();
+        int deleted = page.reserveSlot(100);
+        int other = page.reserveSlot(SlottedPage.PAGE_SIZE - 16 - 24 - 100);
+        page.writeSlot(deleted, new byte[100]);
+        page.writeSlot(other, new byte[SlottedPage.PAGE_SIZE - 16 - 24 - 100]);
+
+        page.deleteRecord(deleted);
+        assertFalse(page.isOccupied(deleted));
+        assertTrue(page.isReserved(deleted));
+        assertFalse(page.hasSpace(1));
+
+        SlottedPage restored = new SlottedPage(page.toBytes());
+        assertTrue(restored.isReserved(deleted));
+        assertFalse(restored.hasSpace(1));
+        restored.writeSlot(deleted, new byte[100]);
+        assertTrue(restored.isOccupied(deleted));
+
+        page.releaseReservation(deleted);
+        assertFalse(page.isReserved(deleted));
+        assertTrue(page.hasSpace(1));
+    }
+
     // memastikan halaman penuh dan direktori rusak ditolak dengan aman
     @Test
     void fullPageAndCorruptDirectoryFailSafely() {
@@ -153,7 +178,9 @@ class SlottedPageTest {
                         () -> page.reserveSlotAt(oldSlot, 0)).getCode());
         assertArrayEquals(before, page.toBytes());
 
-        assertTrue(page.reserveSlotAt(oldSlot, 3));
+        // slot bekas delete masih nahan ruangnya, jadi record lama bisa langsung ditulis balik
+        assertFalse(page.reserveSlotAt(oldSlot, 3));
+        assertTrue(page.isReserved(oldSlot));
         assertFalse(page.isOccupied(oldSlot));
         page.writeSlot(oldSlot, new byte[] {6, 7, 8});
         assertEquals(3, page.slotCount());
@@ -172,6 +199,7 @@ class SlottedPageTest {
         page.writeSlot(deleted, new byte[] {1, 2});
         page.writeSlot(active, new byte[SlottedPage.PAGE_SIZE - 16 - 24 - 2]);
         page.deleteRecord(deleted);
+        page.releaseReservation(deleted);
         byte[] before = page.toBytes();
 
         assertFalse(page.reserveSlotAt(deleted, 3));
@@ -226,6 +254,7 @@ class SlottedPageTest {
         page.deleteRecord(changed);
         assertThrows(StorageException.class,
                 () -> page.replaceRecord(changed, new byte[] {1}));
+        page.releaseReservation(changed);
         assertTrue(page.reserveSlotAt(changed, 1));
         assertThrows(StorageException.class,
                 () -> page.replaceRecord(changed, new byte[] {1}));

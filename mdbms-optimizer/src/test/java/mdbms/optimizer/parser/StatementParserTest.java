@@ -124,6 +124,15 @@ class StatementParserTest {
     }
 
     @Test
+    void insertAcceptsNegativeNumericLiterals() {
+        List<ExpressionTree> values = parse("INSERT INTO a VALUES (-1, -2.5)").getInsertValues();
+
+        assertEquals(List.of("-1", "-2.5"), values.stream().map(v -> v.getRoot().getValue()).toList());
+        assertEquals(List.of(ExpressionNode.Type.INTEGER_LITERAL, ExpressionNode.Type.REAL_LITERAL),
+            values.stream().map(v -> v.getRoot().getType()).toList());
+    }
+
+    @Test
     void deleteRetainsCompleteWherePredicate() {
         QueryTree tree = parse("DELETE FROM siswa WHERE siswa.id = 1 AND (umur + 1 >= 18);");
 
@@ -263,7 +272,7 @@ class StatementParserTest {
         assertError(";", ";");
         assertError("SELECT * FROM a", "SELECT");
         assertError("something a", "something");
-        assertError("CREATE TABLE a (id INT)", "TABLE");
+        assertError("CREATE VIEW a AS SELECT id FROM b", "VIEW");
         assertError("ROLLBACK", "ROLLBACK");
         assertError("START TRANSACTION", "START");
     }
@@ -308,7 +317,6 @@ class StatementParserTest {
         assertError("INSERT INTO a VALUES (other.id)", "other");
         assertError("INSERT INTO a VALUES (1 + 2)", "1");
         assertError("INSERT INTO a VALUES (NULL)", "NULL");
-        assertError("INSERT INTO a VALUES (-1)", "-");
         assertError("INSERT INTO a VALUES (1 = 1)", "=");
     }
 
@@ -370,6 +378,21 @@ class StatementParserTest {
         QuerySyntaxException missingIndexColumn = assertError("CREATE INDEX idx\nON a(\n)", ")");
         assertEquals(3, missingIndexColumn.getLine());
         assertEquals(1, missingIndexColumn.getColumn());
+    }
+
+    // Menerima DDL tabel dan menolak jenis DDL yang belum didukung.
+    @Test
+    void acceptsTableDdlAndRejectsUnsupportedDdl() {
+        assertEquals(QueryNodeType.CREATE_TABLE, parse("CREATE TABLE t (id INTEGER);").getNodeType());
+
+        QuerySyntaxException createView = assertThrows(QuerySyntaxException.class,
+            () -> parse("CREATE VIEW v;"));
+        assertTrue(createView.getMessage().contains("Unsupported statement 'CREATE VIEW'"), createView.getMessage());
+
+        assertEquals(QueryNodeType.DROP_TABLE, parse("DROP TABLE t;").getNodeType());
+
+        QuerySyntaxException alter = assertThrows(QuerySyntaxException.class, () -> parse("ALTER TABLE t;"));
+        assertTrue(alter.getMessage().contains("Unsupported statement 'ALTER'"), alter.getMessage());
     }
 
     private QueryTree parse(String sql) {

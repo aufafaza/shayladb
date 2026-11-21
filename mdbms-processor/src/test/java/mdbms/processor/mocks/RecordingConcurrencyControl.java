@@ -1,4 +1,4 @@
-package mdbms.processor.operator;
+package mdbms.processor.mocks;
 
 import java.util.List;
 import mdbms.api.IConcurrencyControl;
@@ -6,15 +6,16 @@ import mdbms.models.data.DataItem;
 import mdbms.models.transaction.AccessStatus;
 import mdbms.models.transaction.Operation;
 import mdbms.models.transaction.Transaction;
+import mdbms.models.transaction.WriteContext;
 
-final class RecordingConcurrencyControl implements IConcurrencyControl {
-    int commitCalls;
-    int committedTransactionId;
-    RuntimeException commitFailure;
-    int abortCalls;
-    int abortedTransactionId;
-    String abortReason;
-    RuntimeException abortFailure;
+public final class RecordingConcurrencyControl implements IConcurrencyControl {
+    public int commitCalls;
+    public int committedTransactionId;
+    public RuntimeException commitFailure;
+    public int abortCalls;
+    public int abortedTransactionId;
+    public String abortReason;
+    public RuntimeException abortFailure;
 
     @Override
     public int beginTransaction() {
@@ -52,6 +53,11 @@ final class RecordingConcurrencyControl implements IConcurrencyControl {
 
     @Override
     public AccessStatus requestWrite(int txId, DataItem data) {
+        throw new UnsupportedOperationException("Not used in this test");
+    }
+
+    @Override
+    public WriteContext requestWriteWithContext(int txId, DataItem data, Object oldVal, Object newVal) {
         throw new UnsupportedOperationException("Not used in this test");
     }
 

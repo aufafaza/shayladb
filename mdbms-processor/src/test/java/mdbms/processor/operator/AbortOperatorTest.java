@@ -2,6 +2,11 @@ package mdbms.processor.operator;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+
+import mdbms.processor.exception.TransactionCompletionException;
+import mdbms.processor.mocks.RecordingConcurrencyControl;
 
 import org.junit.jupiter.api.Test;
 
@@ -22,13 +27,17 @@ class AbortOperatorTest {
     }
 
     @Test
-    void returnsFailureMessageWhenAbortThrows() {
+    void abortFailureFailsQuery() {
         RecordingConcurrencyControl concurrencyControl = new RecordingConcurrencyControl();
-        concurrencyControl.abortFailure = new IllegalStateException("transaction is closed");
+        IllegalStateException cause = new IllegalStateException("transaction is closed");
+        concurrencyControl.abortFailure = cause;
         AbortOperator operator = new AbortOperator(concurrencyControl, 42);
 
         operator.open();
-        assertNull(operator.next());
+
+        // gagal harus dilempar biar QP ngembaliin hasil gagal ke klien
+        TransactionCompletionException failure = assertThrows(TransactionCompletionException.class, operator::next);
+        assertSame(cause, failure.getCause());
         assertEquals(1, concurrencyControl.abortCalls);
         assertEquals("ABORT failed: transaction is closed", operator.getMessage());
         assertNull(operator.next());

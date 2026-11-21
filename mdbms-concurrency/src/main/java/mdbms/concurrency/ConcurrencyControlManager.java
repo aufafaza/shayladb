@@ -8,6 +8,9 @@ import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.locks.LockSupport;
+import java.util.function.LongFunction;
+import java.util.function.Supplier;
 
 import mdbms.api.IConcurrencyControl;
 import mdbms.api.IFailureRecoveryManager;
@@ -19,6 +22,7 @@ import mdbms.models.transaction.AccessStatus;
 import mdbms.models.transaction.Operation;
 import mdbms.models.transaction.Transaction;
 import mdbms.models.transaction.TransactionState;
+import mdbms.models.transaction.WriteContext;
 
 /**
  * CC1 transaction manager and facade. It owns transaction lifecycle and
@@ -32,7 +36,12 @@ public final class ConcurrencyControlManager implements IConcurrencyControl {
     private final Object lifecycleMonitor = new Object();
     private volatile ConcurrencyProtocol protocol;
     private volatile boolean isRecovered = true;
-    private boolean acceptingTransactions = true;
+    private volatile boolean acceptingTransactions = true;
+    private volatile boolean stopping;
+    private volatile String failureReason;
+
+    private static final long RELOCATION_WAITING = -1L;
+    private static final long RELOCATION_ABORTED = -2L;
 
     /** Uses timestamp ordering when no startup configuration is supplied. */
     public ConcurrencyControlManager() {
@@ -70,33 +79,85 @@ public final class ConcurrencyControlManager implements IConcurrencyControl {
     /** Returns a stable display name for startup diagnostics and monitoring. */
     public String getActiveProtocolName() { return protocol.getClass().getSimpleName(); }
 
-    /** Prevents new transactions from starting; existing transactions may finish. */
+    /** Wait for a begin call already inside the admission gate to finish. */
+    public void awaitAdmissionStopped() {
+        synchronized (lifecycleMonitor) {
+            if (acceptingTransactions && !stopping) throw new IllegalStateException("Admission is still open");
+        }
+    }
+
+    public void stopTransactions() {
+        synchronized (lifecycleMonitor) {
+            stopping = true;
+            acceptingTransactions = false;
+            lifecycleMonitor.notifyAll();
+        }
+    }
+
+    @Override public boolean isStopping() { return stopping; }
+
     public void pauseTransactions() {
         synchronized (lifecycleMonitor) {
             acceptingTransactions = false;
+            lifecycleMonitor.notifyAll();
         }
     }
 
     /** Allows new transactions after a checkpoint or maintenance operation. */
     public void resumeTransactions() {
         synchronized (lifecycleMonitor) {
+            if (stopping) throw new IllegalStateException("Engine is stopping");
+            if (failureReason != null) {
+                throw new IllegalStateException("Engine is in failed state: " + failureReason);
+            }
+            if (!isRecovered) throw new IllegalStateException("Recovery has not completed");
             acceptingTransactions = true;
             lifecycleMonitor.notifyAll();
         }
     }
 
-    /** Blocks until all transactions have completed while the barrier is active. */
+    // tunggu sampai semua transaksi selesai, langsung gagal kalau engine udah failed biar checkpoint ga nunggu selamanya
     public void awaitNoActiveTransactions() throws InterruptedException {
         synchronized (lifecycleMonitor) {
-            while (!activeTransactions.isEmpty()) lifecycleMonitor.wait();
+            while (!activeTransactions.isEmpty()) {
+                requireNotFailed();
+                if (stopping) throw new IllegalStateException("Engine is stopping");
+                lifecycleMonitor.wait(50);
+            }
         }
+    }
+
+    // true kalau ada transaksi yang hasil akhirnya ga pasti, engine harus restart dan crash recovery yang nentuin
+    public boolean isFailed() {
+        return failureReason != null;
+    }
+
+    // alasan engine masuk failed state, null kalau engine masih sehat
+    public String getFailureReason() {
+        return failureReason;
     }
 
     public int getActiveTransactionCount() { return activeTransactions.size(); }
 
+    public int getLockCount() {
+        if (protocol instanceof LockBasedProtocol lockBased) {
+            return lockBased.getLockManager().getLockTableSnapshot().values().stream()
+                    .mapToInt(java.util.List::size)
+                    .sum();
+        }
+        return 0;
+    }
+
+    public int getWaitingRequestCount() {
+        if (protocol instanceof LockBasedProtocol lockBased) {
+            return lockBased.getLockManager().getWaitingRequestsSnapshot().size();
+        }
+        return 0;
+    }
+
     public boolean isAcceptingTransactions() {
         synchronized (lifecycleMonitor) {
-            return acceptingTransactions;
+            return acceptingTransactions && !stopping;
         }
     }
 
@@ -114,10 +175,30 @@ public final class ConcurrencyControlManager implements IConcurrencyControl {
             }
             return;
         }
-        RecoveryResult result = frm.recoverOnStartup();
-        if (result == null || !result.isSuccess()) {
-            throw new IllegalStateException("Failure recovery did not complete");
+        try {
+            initAfterRecovery(frm.recoverOnStartup());
+        } catch (RuntimeException failure) {
+            enterFailedState("Failure recovery did not complete: " + failure.getMessage());
+            throw failure;
         }
+    }
+
+    public void initAfterRecovery(RecoveryResult result) {
+        synchronized (lifecycleMonitor) {
+            isRecovered = false;
+        }
+        if (result == null || !result.isSuccess()) {
+            String detail = result == null ? "no result" : result.getMessage();
+            enterFailedState("Failure recovery did not complete: " + detail);
+            throw new IllegalStateException("Failure recovery did not complete: " + detail);
+        }
+        if (frm == null) {
+            synchronized (lifecycleMonitor) {
+                isRecovered = true;
+            }
+            return;
+        }
+
         transactionCounter.updateAndGet(current -> Math.max(current, result.getMaxTxId() + 1));
         long now = System.currentTimeMillis();
         timestampCounter.updateAndGet(current -> Math.max(now, current + 1));
@@ -134,8 +215,9 @@ public final class ConcurrencyControlManager implements IConcurrencyControl {
     @Override
     public int beginTransaction() {
         synchronized (lifecycleMonitor) {
+            requireNotFailed();
             if (!isRecovered) throw new IllegalStateException("Recovery has not completed");
-            if (!acceptingTransactions) throw new IllegalStateException("Transaction admission is paused");
+            if (stopping || !acceptingTransactions) throw new IllegalStateException("Transaction admission is paused");
             int id = transactionCounter.getAndIncrement();
             long now = System.currentTimeMillis();
             long ts = timestampCounter.updateAndGet(prev -> Math.max(now, prev + 1));
@@ -157,16 +239,20 @@ public final class ConcurrencyControlManager implements IConcurrencyControl {
         synchronized (tx) {
             requireState(tx, TransactionState.ACTIVE);
             tx.setState(TransactionState.PARTIALLY_COMMITTED);
+            RuntimeException commitFailure = null;
             boolean logged;
             try {
                 logged = persistCommitLog(txId);
             } catch (RuntimeException failure) {
-                failAndAbort(tx, "Unable to persist commit log");
-                throw failure;
+                commitFailure = failure;
+                logged = false;
             }
             if (!logged) {
-                failAndAbort(tx, "Unable to persist commit log");
-                throw new IllegalStateException("Unable to persist commit log for transaction " + txId);
+                IllegalStateException failure = new IllegalStateException(
+                        "Unable to persist commit log for transaction " + txId, commitFailure);
+                // commit belum pasti durable jadi coba rollback, kalau rollback ditolak hasilnya ga pasti dan engine failed
+                failAndAbort(tx, "Unable to persist commit log", failure);
+                throw failure;
             }
             protocol.releaseResources(tx);
             tx.setState(TransactionState.COMMITTED);
@@ -184,6 +270,9 @@ public final class ConcurrencyControlManager implements IConcurrencyControl {
             if (tx.getState() == TransactionState.COMMITTED || tx.getState() == TransactionState.ABORTED) {
                 return;
             }
+            if (tx.getState() == TransactionState.FAILED && isFailed()) {
+                throw new IllegalStateException("Transaction " + txId + " is in doubt, engine failed: " + failureReason);
+            }
             if (tx.getState() != TransactionState.FAILED) tx.setState(TransactionState.FAILED);
             failAndAbort(tx, reason);
         }
@@ -194,25 +283,157 @@ public final class ConcurrencyControlManager implements IConcurrencyControl {
         return request(txId, data, false);
     }
 
-    @Override
+   @Override
     public AccessStatus requestWrite(int txId, DataItem data, Object oldVal, Object newVal) {
-        AccessStatus status = request(txId, data, true);
-        if (status == AccessStatus.GRANTED && frm != null && (oldVal != null || newVal != null)) {
-            LogType opType = (oldVal == null) ? LogType.INSERT : (newVal == null ? LogType.DELETE : LogType.UPDATE);
-            RecordImage beforeImg = toRecordImage(oldVal);
-            RecordImage afterImg = toRecordImage(newVal);
-            RecoveryResult result = frm.writeDataLog(txId, opType, data.tableName(), data.rowId(), beforeImg, afterImg);
-            if (result == null || !result.isSuccess()) {
-                throw new IllegalStateException("Unable to persist " + opType.toString().toLowerCase() +" log for transaction " + txId);
-            }
+        return requestWriteWithContext(txId, data, oldVal, newVal).getStatus();
+    }
+
+    @Override
+    public WriteContext requestWriteWithContext(int txId, DataItem data, Object oldVal, Object newVal) {
+        Objects.requireNonNull(data, "data");
+        Transaction tx = activeTransactions.get(txId);
+        if (tx == null || tx.getState() != TransactionState.ACTIVE) {
+            return WriteContext.denied(txId, AccessStatus.ABORTED, data.tableName(), data.rowId());
         }
-        return status;
+        synchronized (tx) {
+            AccessStatus status = request(txId, data, true);
+            if (status != AccessStatus.GRANTED) {
+                return WriteContext.denied(txId, status, data.tableName(), data.rowId());
+            }
+            long lsn = 0L;
+            if (frm != null && (oldVal != null || newVal != null)) {
+                try {
+                    lsn = persistDataLog(txId, data, oldVal, newVal);
+                } catch (RuntimeException failure) {
+                    if (activeTransactions.containsKey(txId)) {
+                        failAndAbort(tx, "Unable to persist data log");
+                    }
+                    throw failure;
+                }
+
+            }
+            return new WriteContext(txId, AccessStatus.GRANTED, lsn, data.tableName(), data.rowId());
+        }
+
     }
 
     @Override
     public AccessStatus requestWrite(int txId, DataItem data) {
         return request(txId, data, true);
     }
+
+    /**
+     * Acquires both row identities and writes the relocation log before the
+     * caller is allowed to change storage.
+     */
+    public AccessStatus requestRelocation(
+            int txId,
+            DataItem oldItem,
+            DataItem newItem,
+            Object oldValues,
+            Object newValues) {
+        Objects.requireNonNull(oldItem, "oldItem");
+        Objects.requireNonNull(newItem, "newItem");
+        Transaction tx = activeTransactions.get(txId);
+        if (tx == null) return AccessStatus.ABORTED;
+        synchronized (tx) {
+            if (tx.getState() != TransactionState.ACTIVE) return AccessStatus.ABORTED;
+            return prepareRelocationLocked(tx, oldItem, newItem, oldValues, newValues);
+        }
+    }
+
+    /**
+     * Runs a relocation as one CCM operation. Holding the transaction monitor
+     * across the callback prevents commit/abort from releasing protection
+     * between the WAL preparation and the physical move.
+     */
+    @Override
+    public <T> T executeRelocation(
+            int txId,
+            DataItem oldItem,
+            DataItem newItem,
+            Object oldValues,
+            Object newValues,
+            Supplier<T> physicalChange) {
+        Objects.requireNonNull(oldItem, "oldItem");
+        Objects.requireNonNull(newItem, "newItem");
+        Objects.requireNonNull(physicalChange, "physicalChange");
+        Transaction tx = requireTransaction(txId);
+
+        for (;;) {
+            synchronized (tx) {
+                if (tx.getState() != TransactionState.ACTIVE) {
+                    throw new IllegalStateException("Transaction " + txId + " is " + tx.getState());
+                }
+                AccessStatus status = prepareRelocationLocked(
+                        tx, oldItem, newItem, oldValues, newValues);
+                if (status == AccessStatus.WAITING) {
+                    // Release the transaction monitor while waiting so the
+                    // other transaction can commit and release its locks.
+                } else if (status == AccessStatus.ABORTED) {
+                    throw new IllegalStateException("Relocation was aborted for transaction " + txId);
+                } else {
+                    try {
+                        return physicalChange.get();
+                    } catch (RuntimeException failure) {
+                        if (activeTransactions.containsKey(txId)) {
+                            failAndAbort(tx, "Relocation failed");
+                        }
+                        throw failure;
+                    }
+                }
+            }
+            LockSupport.parkNanos(10_000_000L);
+            if (stopping || Thread.currentThread().isInterrupted()) {
+                abortTransaction(txId, "Relocation cancelled");
+                throw new IllegalStateException("Relocation cancelled for transaction " + txId);
+            }
+        }
+    }
+
+    @Override
+    public <T> T executeRelocation(
+            int txId,
+            DataItem oldItem,
+            DataItem newItem,
+            Object oldValues,
+            Object newValues,
+            LongFunction<T> physicalChange) { // [CHANGED]
+        Objects.requireNonNull(oldItem, "oldItem");
+        Objects.requireNonNull(newItem, "newItem");
+        Objects.requireNonNull(physicalChange, "physicalChange");
+        Transaction tx = requireTransaction(txId);
+
+        for (;;) {
+            synchronized (tx) {
+                if (tx.getState() != TransactionState.ACTIVE) {
+                    throw new IllegalStateException("Transaction " + txId + " is " + tx.getState());
+                }
+                long relocationLsn = prepareRelocationAndGetLsnLocked(
+                        tx, oldItem, newItem, oldValues, newValues); // [CHANGED]
+                if (relocationLsn == RELOCATION_WAITING) {
+                    // Release the transaction monitor while waiting
+                } else if (relocationLsn == RELOCATION_ABORTED) {
+                    throw new IllegalStateException("Relocation was aborted for transaction " + txId);
+                } else {
+                    try {
+                        return physicalChange.apply(relocationLsn); // [CHANGED] Pass WAL LSN to storage mutation
+                    } catch (RuntimeException failure) {
+                        if (activeTransactions.containsKey(txId)) {
+                            failAndAbort(tx, "Relocation failed");
+                        }
+                        throw failure;
+                    }
+                }
+            }
+            LockSupport.parkNanos(10_000_000L);
+            if (stopping || Thread.currentThread().isInterrupted()) {
+                abortTransaction(txId, "Relocation cancelled");
+                throw new IllegalStateException("Relocation cancelled for transaction " + txId);
+            }
+        }
+    }
+
 
     @Override
     public Transaction getTransaction(int txId) { return activeTransactions.get(txId); }
@@ -255,13 +476,131 @@ public final class ConcurrencyControlManager implements IConcurrencyControl {
         return result != null && result.isSuccess() && frm.flushLogUpTo(result.getLsn());
     }
 
+    private AccessStatus prepareRelocationLocked(
+            Transaction tx,
+            DataItem oldItem,
+            DataItem newItem,
+            Object oldValues,
+            Object newValues) {
+        long res = prepareRelocationAndGetLsnLocked(tx, oldItem, newItem, oldValues, newValues);
+        if (res == RELOCATION_WAITING) return AccessStatus.WAITING;
+        if (res == RELOCATION_ABORTED) return AccessStatus.ABORTED;
+        return AccessStatus.GRANTED;
+    }
+
+    private long persistDataLog(int txId, DataItem data, Object oldVal, Object newVal) {
+        LogType opType = (oldVal == null) ? LogType.INSERT
+                : (newVal == null ? LogType.DELETE : LogType.UPDATE);
+        RecoveryResult result = frm.writeDataLog(
+                txId,
+                opType,
+                data.tableName(),
+                data.rowId(),
+                toRecordImage(oldVal),
+                toRecordImage(newVal));
+        if (result == null || !result.isSuccess()
+                || !frm.flushLogUpTo(result.getLsn())) {
+            throw new IllegalStateException(
+                    "Unable to persist " + opType.toString().toLowerCase()
+                            + " log for transaction " + txId);
+        }
+        return result.getLsn();
+    }
+
+    private long prepareRelocationAndGetLsnLocked(
+            Transaction tx,
+            DataItem oldItem,
+            DataItem newItem,
+            Object oldValues,
+            Object newValues) {
+        if (oldItem.equals(newItem)) {
+            AccessStatus status = protocol.requestWrite(tx, oldItem);
+            if (status == AccessStatus.ABORTED && tx.getState() == TransactionState.ACTIVE) {
+                failAndAbort(tx, "Protocol aborted relocation");
+                return RELOCATION_ABORTED;
+            }
+            if (status == AccessStatus.WAITING) return RELOCATION_WAITING;
+            if (status == AccessStatus.ABORTED) return RELOCATION_ABORTED;
+            if (frm == null) return 0L;
+            try {
+                return persistDataLog(tx.getId(), oldItem, oldValues, newValues); // [CHANGED] Return LSN
+            } catch (RuntimeException failure) {
+                failAndAbort(tx, "Unable to persist relocation log");
+                throw failure;
+            }
+        }
+
+        AccessStatus status = protocol.requestWriteBatch(tx, List.of(oldItem, newItem));
+        if (status == AccessStatus.ABORTED && tx.getState() == TransactionState.ACTIVE) {
+            failAndAbort(tx, "Protocol aborted relocation");
+            return RELOCATION_ABORTED;
+        }
+        if (status == AccessStatus.WAITING) return RELOCATION_WAITING;
+        if (status == AccessStatus.ABORTED) return RELOCATION_ABORTED;
+        if (frm == null) return 0L;
+
+        try {
+            return persistRelocationLog(tx.getId(), oldItem, newItem, oldValues, newValues); // [CHANGED] Return LSN
+        } catch (RuntimeException failure) {
+            failAndAbort(tx, "Unable to persist relocation log");
+            throw failure;
+        }
+    }
+
+    private long persistRelocationLog(
+            int txId,
+            DataItem oldItem,
+            DataItem newItem,
+            Object oldValues,
+            Object newValues) {
+        RecoveryResult result = frm.writeRelocationLog(
+                txId,
+                oldItem.tableName(),
+                oldItem.rowId(),
+                newItem.rowId(),
+                toRecordImage(oldValues),
+                toRecordImage(newValues));
+        if (result == null || !result.isSuccess() || result.getLsn() < 0
+                || !frm.flushLogUpTo(result.getLsn())) {
+            throw new IllegalStateException(
+                    "Unable to persist relocation log for transaction " + txId);
+        }
+        return result.getLsn();
+    }
+
     private void failAndAbort(Transaction tx, String reason) {
+        failAndAbort(tx, reason, null);
+    }
+
+    // rollback dulu baru lepas akses, kalau rollback gagal lock tetap dipegang dan engine masuk failed state
+    // cause dipakai buat nyimpen error asli biar ga ketimpa error rollback
+    private void failAndAbort(Transaction tx, String reason, RuntimeException cause) {
         synchronized (tx) {
+            if (tx.getState() == TransactionState.ABORTED || tx.getState() == TransactionState.COMMITTED) {
+                return;
+            }
             if (tx.getState() != TransactionState.FAILED) tx.setState(TransactionState.FAILED);
+            RuntimeException rollbackFailure = null;
             if (frm != null) {
-                RecoveryResult rollback = frm.rollbackTransaction(tx.getId());
+                RecoveryResult rollback;
+                RuntimeException rollbackError = null;
+                try {
+                    rollback = frm.rollbackTransaction(tx.getId());
+                } catch (RuntimeException e) {
+                    rollback = null;
+                    rollbackError = e;
+                }
                 if (rollback == null || !rollback.isSuccess()) {
-                    throw new IllegalStateException("Rollback failed for transaction " + tx.getId());
+                    String detail = rollback != null ? rollback.getMessage()
+                            : rollbackError != null ? rollbackError.getMessage() : "no result";
+                    enterFailedState("Rollback failed for transaction " + tx.getId() + " after " + reason + ", " + detail);
+                    IllegalStateException failure = new IllegalStateException(
+                            "Rollback failed for transaction " + tx.getId() + ", engine moved to failed state", rollbackError);
+                    if (cause != null) {
+                        cause.addSuppressed(failure);
+                        throw cause;
+                    }
+                    throw failure;
                 }
             }
             protocol.releaseResources(tx);
@@ -270,6 +609,24 @@ public final class ConcurrencyControlManager implements IConcurrencyControl {
             synchronized (lifecycleMonitor) {
                 lifecycleMonitor.notifyAll();
             }
+            if (rollbackFailure != null) {
+                throw rollbackFailure;
+            }
+        }
+    }
+
+    // tandai engine failed, transaksi baru ditolak dan yang lagi nunggu checkpoint dibangunin
+    private void enterFailedState(String reason) {
+        synchronized (lifecycleMonitor) {
+            if (failureReason == null) failureReason = reason;
+            acceptingTransactions = false;
+            lifecycleMonitor.notifyAll();
+        }
+    }
+
+    private void requireNotFailed() {
+        if (failureReason != null) {
+            throw new IllegalStateException("Engine is in failed state, restart required: " + failureReason);
         }
     }
 

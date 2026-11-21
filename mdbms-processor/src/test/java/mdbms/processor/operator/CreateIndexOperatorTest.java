@@ -6,7 +6,8 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import java.util.List;
 import mdbms.models.schema.IndexInfo;
 import mdbms.models.schema.IndexType;
-import mdbms.processor.IResultRow;
+import mdbms.processor.mocks.MockSchemaCatalog;
+
 import org.junit.jupiter.api.Test;
 
 class CreateIndexOperatorTest {
@@ -18,10 +19,10 @@ class CreateIndexOperatorTest {
         CreateIndexOperator operator = new CreateIndexOperator(catalog, indexInfo);
 
         operator.open();
-        IResultRow result = operator.next();
+        assertNull(operator.next());
 
         assertEquals(List.of(indexInfo), catalog.getIndexes("users"));
-        assertEquals("Index users_id_idx created on users(id)", result.get("message"));
+        assertEquals("Index users_id_idx created on users(id)", operator.getMessage());
         assertNull(operator.next());
     }
 }

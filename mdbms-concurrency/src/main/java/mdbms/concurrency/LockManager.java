@@ -3,6 +3,7 @@ package mdbms.concurrency;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.Iterator;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -16,30 +17,52 @@ public class LockManager {
     private final Map<Transaction, PendingLock> waitingRequests = new HashMap<>();
 
     public synchronized AccessStatus acquireLock(Transaction tx, DataItem data, Locktype type) {
-        if (tx == null || data == null || type == null) {
+        if (data == null) throw new IllegalArgumentException("Transaction, data, and lock type are required");
+        return acquireLocks(tx, List.of(data), type);
+    }
+
+    /**
+     * Acquires locks for a multi-item operation atomically. The preflight pass
+     * is important: a relocation must never hold the old-row lock while still
+     * waiting to protect the destination row.
+     */
+    public synchronized AccessStatus acquireLocks(
+            Transaction tx, List<DataItem> dataItems, Locktype type) {
+        if (tx == null || dataItems == null || type == null) {
             throw new IllegalArgumentException("Transaction, data, and lock type are required");
         }
         if (tx.getState() != TransactionState.ACTIVE) return AccessStatus.ABORTED;
 
-        ArrayList<Lock> locks = lockTable.get(data);
-        Lock owned = findLock(locks, tx);
-        if (owned != null) {
-            if (owned.getLocktype() == Locktype.EXCLUSIVE || type == Locktype.SHARED) {
-                waitingRequests.remove(tx);
-                return AccessStatus.GRANTED;
+        if (dataItems == null || dataItems.isEmpty()) {
+            throw new IllegalArgumentException("At least one data item is required");
+        }
+
+        List<DataItem> uniqueItems = dataItems.stream().distinct().toList();
+        DataItem blockedItem = null;
+        for (DataItem data : uniqueItems) {
+            if (data == null) throw new IllegalArgumentException("Data items must not contain null");
+            ArrayList<Lock> locks = lockTable.get(data);
+            if (!isCompatible(locks, tx, type)) {
+                blockedItem = data;
+                break;
             }
-            return upgradeLock(tx, data);
+        }
+        if (blockedItem != null) {
+            waitingRequests.put(tx, new PendingLock(blockedItem, type));
+            return AccessStatus.WAITING;
         }
 
-        if (isCompatible(locks, tx, type)) {
-            lockTable.computeIfAbsent(data, ignored -> new ArrayList<>())
-                    .add(new Lock(tx, data, type));
-            waitingRequests.remove(tx);
-            return AccessStatus.GRANTED;
+        for (DataItem data : uniqueItems) {
+            ArrayList<Lock> locks = lockTable.computeIfAbsent(data, ignored -> new ArrayList<>());
+            Lock owned = findLock(locks, tx);
+            if (owned == null) {
+                locks.add(new Lock(tx, data, type));
+            } else if (type == Locktype.EXCLUSIVE || owned.getLocktype() != type) {
+                owned.setLocktype(Locktype.EXCLUSIVE);
+            }
         }
-
-        waitingRequests.put(tx, new PendingLock(data, type));
-        return AccessStatus.WAITING;
+        waitingRequests.remove(tx);
+        return AccessStatus.GRANTED;
     }
 
     public synchronized void releaseAllLocks(Transaction tx) {
@@ -77,13 +100,13 @@ public class LockManager {
         return AccessStatus.WAITING;
     }
 
-    synchronized Map<DataItem, ArrayList<Lock>> getLockTableSnapshot() {
+    public synchronized Map<DataItem, ArrayList<Lock>> getLockTableSnapshot() {
         Map<DataItem, ArrayList<Lock>> snapshot = new HashMap<>();
         lockTable.forEach((data, locks) -> snapshot.put(data, new ArrayList<>(locks)));
         return snapshot;
     }
 
-    synchronized Map<Transaction, PendingLock> getWaitingRequestsSnapshot() {
+    public synchronized Map<Transaction, PendingLock> getWaitingRequestsSnapshot() {
         return new HashMap<>(waitingRequests);
     }
 
@@ -98,13 +121,15 @@ public class LockManager {
     private static boolean isCompatible(ArrayList<Lock> locks, Transaction tx, Locktype requested) {
         if (locks == null) return true;
         for (Lock lock : locks) {
-            if (lock.getTransaction() != tx
-                    && (requested == Locktype.EXCLUSIVE
-                    || lock.getLocktype() == Locktype.EXCLUSIVE)) {
+            if (lock.getTransaction() != tx && conflicts(lock.getLocktype(), requested)) {
                 return false;
             }
         }
         return true;
+    }
+
+    static boolean conflicts(Locktype held, Locktype requested) {
+        return held != requested || held == Locktype.EXCLUSIVE;
     }
 
     static final class PendingLock {

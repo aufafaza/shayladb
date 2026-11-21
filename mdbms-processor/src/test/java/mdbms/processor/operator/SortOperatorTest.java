@@ -6,6 +6,8 @@ import java.util.List;
 
 import org.junit.jupiter.api.Test;
 
+import mdbms.processor.mocks.IntegerRowUtility;
+
 class SortOperatorTest {
     @Test
     void sortAscending() {
@@ -31,23 +33,24 @@ class SortOperatorTest {
 
     @Test
     void sortMultipleColumns() {
-        IQueryOperator input = IntegerRowUtility.source(3, 1, 2);
+        // group = value % 3, jadi 1 dan 4 sama-sama group 1 dan diurutkan value DESC
+        IQueryOperator input = IntegerRowUtility.source(1, 4, 2);
 
         SortOperator operator = new SortOperator(input, List.of(
                 new SortOperator.SortKey(null, "group", true),
                 new SortOperator.SortKey(null, "value", false)));
 
-        assertEquals(List.of(2, 3, 1), IntegerRowUtility.collect(operator));
+        assertEquals(List.of(4, 1, 2), IntegerRowUtility.collect(operator));
     }
 
     @Test
     void sortMultipleColumnsAscending() {
-        IQueryOperator input = IntegerRowUtility.source(9, 2, 5);
+        IQueryOperator input = IntegerRowUtility.source(1, 2, 3, 4, 5, 6, 7, 8, 9);
 
         SortOperator operator = new SortOperator(input, List.of(
                 new SortOperator.SortKey(null, "group", true),
                 new SortOperator.SortKey(null, "value", true)));
 
-        assertEquals(List.of(2, 5, 9), IntegerRowUtility.collect(operator));
+        assertEquals(List.of(3, 6, 9, 1, 4, 7, 2, 5, 8), IntegerRowUtility.collect(operator));
     }
 }

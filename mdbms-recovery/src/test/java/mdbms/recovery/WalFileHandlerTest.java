@@ -160,4 +160,109 @@ class WalFileHandlerTest {
         assertThrows(IllegalStateException.class, recoveryHandler::readAll);
         recoveryHandler.close();
     }
+
+    @Test
+    void testEscapedPipeCharacterRoundTrip() {
+        Instant now = Instant.now();
+        RowId rid = new RowId("students", 0, 2);
+        RecordImage img = new RecordImage(List.of(102, "Andi|Budi\\Citra", 95));
+        DataChangeLogRecord rec = new DataChangeLogRecord(
+                1L, 7, LogType.INSERT, now, "students", rid, null, img);
+
+        assertTrue(walHandler.append(rec));
+        assertTrue(walHandler.flushUpTo(1L));
+        walHandler.close();
+
+        WalFileHandler reopened = new WalFileHandler(logPath);
+        try {
+            List<LogRecord> records = reopened.readAll();
+            assertEquals(1, records.size());
+            DataChangeLogRecord parsed = assertInstanceOf(DataChangeLogRecord.class, records.get(0));
+            assertEquals("Andi|Budi\\Citra", parsed.getAfterImage().values().get(1));
+        } finally {
+            reopened.close();
+        }
+    }
+
+    @Test
+    void testFlushUpToSucceedsAfterRestartWithoutNewAppend() {
+        Instant now = Instant.now();
+        assertTrue(walHandler.append(new TransactionLogRecord(1L, 1, LogType.BEGIN, now)));
+        assertTrue(walHandler.append(new TransactionLogRecord(2L, 1, LogType.COMMIT, now)));
+        assertTrue(walHandler.flushUpTo(2L));
+        walHandler.close();
+
+        WalFileHandler reopened = new WalFileHandler(logPath);
+        try {
+            List<LogRecord> records = reopened.readAll();
+            assertEquals(2, records.size());
+            assertTrue(reopened.flushUpTo(2L));
+        } finally {
+            reopened.close();
+        }
+    }
+
+    @Test
+    void testAppendAndReadRelocationUpdateLog() {
+        Instant now = Instant.now();
+        RowId oldRid = new RowId("students", 0, 1);
+        RowId newRid = new RowId("students", 1, 0);
+        RecordImage before = new RecordImage(List.of(101, "Short", 80));
+        RecordImage after = new RecordImage(List.of(101, "VeryLongUpdatedStringValue", 95));
+
+        DataChangeLogRecord relocRec = new DataChangeLogRecord(
+                1L, 7, LogType.UPDATE, now, "students", oldRid, newRid, before, after);
+
+        assertTrue(walHandler.append(relocRec));
+        assertTrue(walHandler.flushUpTo(1L));
+        walHandler.close();
+
+        WalFileHandler reopened = new WalFileHandler(logPath);
+        try {
+            List<LogRecord> records = reopened.readAll();
+            assertEquals(1, records.size());
+            DataChangeLogRecord parsed = assertInstanceOf(DataChangeLogRecord.class, records.get(0));
+            assertTrue(parsed.isRelocation());
+            assertEquals(oldRid, parsed.getRowId());
+            assertEquals(newRid, parsed.getNewRowId());
+            assertEquals(before.values(), parsed.getBeforeImage().values());
+            assertEquals(after.values(), parsed.getAfterImage().values());
+        } finally {
+            reopened.close();
+        }
+    }
+
+    @Test
+    void testFlushUpToRejectsUnwrittenLsn() {
+        DataChangeLogRecord rec = new DataChangeLogRecord(
+                1L, 1, LogType.INSERT, Instant.now(), "users",
+                new RowId("users", 0, 0), null, new RecordImage(List.of(1, "A")));
+        assertTrue(walHandler.append(rec));
+        assertFalse(walHandler.flushUpTo(2L), "WAL tidak boleh mengklaim flush untuk LSN yang belum ditulis");
+        assertTrue(walHandler.flushUpTo(1L));
+    }
+
+    @Test
+    void testInterruptedThreadDoesNotCloseSharedWalChannel() {
+        DataChangeLogRecord rec1 = new DataChangeLogRecord(
+                1L, 1, LogType.INSERT, Instant.now(), "users",
+                new RowId("users", 0, 0), null, new RecordImage(List.of(1, "A")));
+        DataChangeLogRecord rec2 = new DataChangeLogRecord(
+                2L, 2, LogType.INSERT, Instant.now(), "users",
+                new RowId("users", 0, 1), null, new RecordImage(List.of(2, "B")));
+
+        Thread.currentThread().interrupt();
+        try {
+            assertTrue(walHandler.append(rec1), "Append tetap harus sukses meski thread ter-interrupt");
+            assertTrue(walHandler.flushUpTo(1L), "Flush WAL tetap harus sukses meski thread ter-interrupt");
+            assertTrue(Thread.currentThread().isInterrupted(), "Status interrupt thread harus tetap dipertahankan");
+        } finally {
+            Thread.interrupted(); // bersihkan status interrupt setelah pengujian
+        }
+
+        // Channel bersama harus tetap terbuka & sehat untuk transaksi berikutnya
+        assertTrue(walHandler.append(rec2));
+        assertTrue(walHandler.flushUpTo(2L));
+        assertEquals(2, walHandler.readAll().size());
+    }
 }
