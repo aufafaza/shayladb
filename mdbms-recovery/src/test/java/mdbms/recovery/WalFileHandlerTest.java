@@ -201,4 +201,34 @@ class WalFileHandlerTest {
             reopened.close();
         }
     }
+
+    @Test
+    void testAppendAndReadRelocationUpdateLog() {
+        Instant now = Instant.now();
+        RowId oldRid = new RowId("students", 0, 1);
+        RowId newRid = new RowId("students", 1, 0);
+        RecordImage before = new RecordImage(List.of(101, "Short", 80));
+        RecordImage after = new RecordImage(List.of(101, "VeryLongUpdatedStringValue", 95));
+
+        DataChangeLogRecord relocRec = new DataChangeLogRecord(
+                1L, 7, LogType.UPDATE, now, "students", oldRid, newRid, before, after);
+
+        assertTrue(walHandler.append(relocRec));
+        assertTrue(walHandler.flushUpTo(1L));
+        walHandler.close();
+
+        WalFileHandler reopened = new WalFileHandler(logPath);
+        try {
+            List<LogRecord> records = reopened.readAll();
+            assertEquals(1, records.size());
+            DataChangeLogRecord parsed = assertInstanceOf(DataChangeLogRecord.class, records.get(0));
+            assertTrue(parsed.isRelocation());
+            assertEquals(oldRid, parsed.getRowId());
+            assertEquals(newRid, parsed.getNewRowId());
+            assertEquals(before.values(), parsed.getBeforeImage().values());
+            assertEquals(after.values(), parsed.getAfterImage().values());
+        } finally {
+            reopened.close();
+        }
+    }
 }

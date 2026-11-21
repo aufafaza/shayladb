@@ -42,7 +42,13 @@ public class RecordApplier {
                 if (afterImg == null || afterImg.values() == null) {
                     yield false;
                 }
-                dataAccess.updateByRowId(rid, afterImg.values());
+                if (record.isRelocation()) {
+                    // Redo relokasi: pastikan oldRid bersih dan newRid terpasang dengan afterImg
+                    applyIdempotentDelete(rid);
+                    applyIdempotentInsert(record.getTable(), record.getNewRowId(), afterImg);
+                } else {
+                    dataAccess.updateByRowId(rid, afterImg.values());
+                }
                 yield true;
             }
             case DELETE -> {
@@ -65,7 +71,12 @@ public class RecordApplier {
                 if (beforeImg == null || beforeImg.values() == null) {
                     yield false;
                 }
-                dataAccess.updateByRowId(rid, beforeImg.values());
+                if (record.isRelocation()) {
+                    applyIdempotentDeleteAndRelease(record.getNewRowId());
+                    applyIdempotentInsert(record.getTable(), rid, beforeImg);
+                } else {
+                    dataAccess.updateByRowId(rid, beforeImg.values());
+                }
                 yield true;
             }
             case INSERT -> {
@@ -135,6 +146,34 @@ public class RecordApplier {
                 throw e;
             }
         }
+    }
+
+    private void applyIdempotentDeleteAndRelease(RowId rid) {
+        Row deleted = null;
+        try {
+            deleted = dataAccess.deleteByRowId(rid);
+        } catch (RuntimeException e) {
+            if (!isMissingSlotOrRowError(e)) {
+                throw e;
+            }
+        }
+        if (deleted == null) {
+            try {
+                dataAccess.releaseRowId(rid);
+            } catch (RuntimeException e) {
+                if (!isMissingSlotOrRowError(e) && !isNotReservedError(e)) {
+                    throw e;
+                }
+            }
+        }
+    }
+
+    private boolean isNotReservedError(RuntimeException e) {
+        if (hasIoOrCorruptionCause(e)) {
+            return false;
+        }
+        String msg = e.getMessage() == null ? "" : e.getMessage().toLowerCase();
+        return msg.contains("not reserved") || msg.contains("no reservation");
     }
 
     private boolean isMissingSlotOrRowError(RuntimeException e) {
