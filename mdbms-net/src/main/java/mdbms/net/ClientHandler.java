@@ -53,6 +53,9 @@ public class ClientHandler implements Runnable {
                     return;
                 }
             }
+        } catch (ProtocolException e) {
+            cli.printResult(new ExecutionResult(false, null, null, -1,
+                    "Error: " + FramedJsonProtocol.messageOrDefault(e.getMessage(), "Telnet request rejected")));
         } catch (SocketTimeoutException e) {
             cli.printResult(new ExecutionResult(false, null, null, 0,
                     "Error: request timed out after 30 seconds"));

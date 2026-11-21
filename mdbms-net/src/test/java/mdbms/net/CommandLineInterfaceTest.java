@@ -2,6 +2,8 @@ package mdbms.net;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
@@ -89,6 +91,22 @@ class CommandLineInterfaceTest {
                 new TestSocket("SELECT * FROM users__\b\b;".getBytes(StandardCharsets.UTF_8)));
 
         assertEquals("SELECT * FROM users;", cli.readQuery());
+    }
+
+    @Test
+    void readQueryRejectsOversizedTelnetQuery() throws IOException {
+        ByteArrayOutputStream input = new ByteArrayOutputStream();
+        input.write(new byte[] {(byte) 255, (byte) 253, 1});
+        input.write("X".repeat(17).getBytes(StandardCharsets.UTF_8));
+
+        TestSocket socket = new TestSocket(input.toByteArray());
+        TelnetHandler handler = new TelnetHandler(socket);
+        CommandLineInterface cli = new CommandLineInterface(socket, handler, 16);
+
+        ProtocolException error = assertThrows(ProtocolException.class, cli::readQuery);
+
+        assertEquals("REQUEST_TOO_LARGE", error.code());
+        assertTrue(error.closeConnection());
     }
 
     @Test
@@ -190,7 +208,8 @@ class CommandLineInterfaceTest {
 
         cli.printExecutionTime(10001000);
         String newline = System.lineSeparator();
-        assertEquals(String.join(newline, "Time: " + (10001000 / 1000.0) + " ms") + newline, socket.outputAsString());
+        assertEquals(String.join(newline, "Time: " + (10001000 / 1_000_000.0) + " ms") + newline,
+                socket.outputAsString());
     }
 
     private static final class TestSocket extends Socket {
