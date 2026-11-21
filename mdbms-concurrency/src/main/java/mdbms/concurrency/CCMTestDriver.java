@@ -355,9 +355,9 @@ public class CCMTestDriver {
         Transaction t1RestartObj = ccm.getTransaction(tx1Restart);
         require(t1RestartObj.getTimestamp() > t2Obj.getTimestamp(),
                 "Transaksi yang dijalankan ulang mendapat timestamp baru yang lebih besar");
-        assertStatus(AccessStatus.GRANTED, runInTxThread(() -> ccm.requestWrite(tx1Restart, itemA)));
-
+        assertStatus(AccessStatus.WAITING, runInTxThread(() -> ccm.requestWrite(tx1Restart, itemA)));
         ccm.commitTransaction(tx2);
+        assertStatus(AccessStatus.GRANTED, runInTxThread(() -> ccm.requestWrite(tx1Restart, itemA)));
         ccm.commitTransaction(tx1Restart);
         printScheduleAndVerify(List.of(
                 new Operation(t2Obj, OperationType.WRITE, itemA),
