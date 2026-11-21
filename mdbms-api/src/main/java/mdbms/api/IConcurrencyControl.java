@@ -9,6 +9,9 @@ import mdbms.models.transaction.Operation;
 import mdbms.models.transaction.Transaction;
 
 public interface IConcurrencyControl {
+    /** Cooperative cancellation used while closing the engine. */
+    default boolean isStopping() { return false; }
+
     int beginTransaction();
 
     void commitTransaction(int txId);
