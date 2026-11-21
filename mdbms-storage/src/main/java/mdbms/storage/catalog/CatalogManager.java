@@ -175,16 +175,48 @@ public final class CatalogManager {
         }
     }
     public void dropTable(String table){
+        dropTable(table, DropBehavior.RESTRICT);
+    }
+
+    public void validateDrop(String table, DropBehavior behavior) {
+        Objects.requireNonNull(behavior, "behavior");
+        lock.readLock().lock();
+        try {
+            getSchema(table);
+            if (behavior == DropBehavior.RESTRICT) {
+                for (TableSchema schema : schemas.values()) {
+                    if (!schema.tableName().equalsIgnoreCase(table) && schema.foreignKeys().stream()
+                            .anyMatch(key -> key.referencedTable().equalsIgnoreCase(table))) {
+                        throw new StorageException(StorageErrorCode.SCHEMA_VIOLATION,
+                            "Cannot drop table '" + table + "': referenced by '" + schema.tableName() + "'");
+                    }
+                }
+            }
+        } finally {
+            lock.readLock().unlock();
+        }
+    }
+
+    public void dropTable(String table, DropBehavior behavior){
         lock.writeLock().lock();
         try{
+            validateDrop(table, behavior);
+            Map<String, TableSchema> schemaBackup = new LinkedHashMap<>(schemas);
             TableSchema old = schemas.remove(table);
             if(old == null) throw new StorageException(StorageErrorCode.TABLE_NOT_FOUND, "Unknown table or table does not exist: " + table);
             Map<String, IndexInfo> backup = new LinkedHashMap<>(indexes);
             indexes.values().removeIf(i -> i.tableName().equals(table));
+            if (behavior == DropBehavior.CASCADE) {
+                // CASCADE removes dependent constraints, never the referencing tables or their rows.
+                schemas.replaceAll((name, schema) -> new TableSchema(schema.tableName(), schema.columns(),
+                    schema.primaryKey(), schema.foreignKeys().stream()
+                        .filter(key -> !key.referencedTable().equalsIgnoreCase(table)).toList()));
+            }
             try{
                 persist();
             }catch(RuntimeException e){
-                schemas.put(table, old);
+                schemas.clear();
+                schemas.putAll(schemaBackup);
                 indexes.clear();
                 indexes.putAll(backup);
                 throw e;
