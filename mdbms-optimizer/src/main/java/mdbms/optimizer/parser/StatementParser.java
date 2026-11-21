@@ -99,6 +99,11 @@ public class StatementParser {
 
     private QueryTree parseCreateIndex(TokenStream stream) {
         stream.expect(TokenType.createTok);
+        // DDL selain CREATE INDEX ditolak jelas, tabel dibuat lewat perintah bootstrap schema sebelum server nyala
+        if (stream.peek().getType() != TokenType.indexTok) {
+            throw syntaxError(stream.peek(), "Unsupported statement 'CREATE " + stream.peek().getLexeme()
+                + "'; only CREATE INDEX is supported, create tables with the schema bootstrap command");
+        }
         stream.expect(TokenType.indexTok);
         String name = stream.expect(TokenType.idTok).getLexeme();
         stream.expect(TokenType.onTok);

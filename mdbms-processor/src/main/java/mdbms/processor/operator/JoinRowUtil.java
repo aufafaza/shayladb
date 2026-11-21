@@ -11,6 +11,18 @@ final class JoinRowUtil {
         for (ColumnDefinition col : schema.getColumns()) if (col.name().equals(name)) return true;
         return false;
     }
+    static ResultTableSchema combineSchema(ResultTableSchema left, ResultTableSchema right, boolean natural) {
+        ResultTableSchema schema = new ResultTableSchema();
+        for (ColumnDefinition c : left.getColumns()) {
+            schema.addColumn(left.getColumnTableOrigin(c), c);
+        }
+        for (ColumnDefinition c : right.getColumns()) {
+            if (!natural || !hasName(left, c.name())) {
+                schema.addColumn(right.getColumnTableOrigin(c), c);
+            }
+        }
+        return schema;
+    }
     static ResultRow combine(IResultRow left, IResultRow right, boolean natural) {
         ResultTableSchema schema = new ResultTableSchema();
         for (ColumnDefinition c : left.getSchema().getColumns()) {
