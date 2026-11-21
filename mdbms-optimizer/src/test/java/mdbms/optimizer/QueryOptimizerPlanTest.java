@@ -7,7 +7,6 @@ import mdbms.models.schema.DataType;
 import mdbms.models.schema.TableSchema;
 import mdbms.optimizer.exception.QuerySemanticException;
 import mdbms.optimizer.exception.QuerySyntaxException;
-import mdbms.optimizer.lexer.ShaylaLexer;
 import mdbms.optimizer.parser.ShaylaParser;
 import org.junit.jupiter.api.Test;
 import static org.junit.jupiter.api.Assertions.*;
@@ -21,7 +20,7 @@ class QueryOptimizerPlanTest {
         catalog.addTable(new TableSchema("takes", List.of(
             new ColumnDefinition("id", DataType.INTEGER, 4, false),
             new ColumnDefinition("code", DataType.VARCHAR, 10, false)), List.of(), List.of()));
-        return new QueryOptimizer(catalog, new ShaylaParser(new ShaylaLexer("")));
+        return new QueryOptimizer(catalog, new ShaylaParser());
     }
 
     @Test

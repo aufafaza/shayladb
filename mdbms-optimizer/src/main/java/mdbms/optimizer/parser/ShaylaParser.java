@@ -15,20 +15,17 @@ import mdbms.optimizer.lexer.TokenStream;
 import mdbms.optimizer.lexer.TokenType;
 
 public class ShaylaParser implements IQueryParser {
-    private final ShaylaLexer lexer;
-
-    public ShaylaParser(ShaylaLexer lexer) {
-        this.lexer = Objects.requireNonNull(lexer, "lexer");
-    }
-
     @Override
     public QueryTree parseToTree(String sql) {
-        // sql is source text
-        // note that sekarang  returned treenya msh unbound and unoptimized.
-        lexer.setInput(sql);
+        return parseToTree(sql, new QueryErrorCollector());
+    }
+
+    /** The caller owns this collector and must not share it across concurrent requests. */
+    public QueryTree parseToTree(String sql, QueryErrorCollector collector) {
+        Objects.requireNonNull(collector, "collector");
+        ShaylaLexer lexer = createLexer(sql, collector);
         String source = lexer.getInput();
-        QueryErrorCollector collector = lexer.getErrorCollector();
-        int previousErrors = collector == null ? 0 : collector.getAllExceptions().size();
+        int previousErrors = collector.getAllExceptions().size();
         TokenStream stream = lexer.tokenizeToStream();
         rejectLexicalErrors(stream, collector, previousErrors, source);
 
@@ -40,6 +37,10 @@ public class ShaylaParser implements IQueryParser {
         stream.match(TokenType.semicolon);
         stream.expect(TokenType.EOF);
         return tree;
+    }
+
+    protected ShaylaLexer createLexer(String sql, QueryErrorCollector collector) {
+        return new ShaylaLexer(sql, collector);
     }
 
     public void printQueryTree(QueryTree tree) {
@@ -61,7 +62,7 @@ public class ShaylaParser implements IQueryParser {
                 }
             }
         }
-        // Unknown symbols are tokens in the shared lexer, even without a collector.
+        // Unknown symbols must be rejected before dispatching to a statement parser.
         for (Token token : stream.getTokens()) {
             if (token.getType() == TokenType.UNKNOWN) {
                 QueryLexicalException exception = new QueryLexicalException(

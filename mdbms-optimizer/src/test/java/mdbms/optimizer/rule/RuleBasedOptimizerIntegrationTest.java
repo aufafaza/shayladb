@@ -19,7 +19,6 @@ import mdbms.optimizer.binder.BindingContext;
 import mdbms.optimizer.binder.QueryBinder;
 import mdbms.optimizer.cost.CardinalityEstimator;
 import mdbms.optimizer.cost.SystemCostEstimator;
-import mdbms.optimizer.lexer.ShaylaLexer;
 import mdbms.optimizer.parser.ShaylaParser;
 import org.junit.jupiter.api.Test;
 
@@ -57,7 +56,7 @@ class RuleBasedOptimizerIntegrationTest {
 
     private static Run run(String sql) {
         IndexedCatalog catalog = catalog();
-        QueryTree tree = new ShaylaParser(new ShaylaLexer("")).parseToTree(sql);
+        QueryTree tree = new ShaylaParser().parseToTree(sql);
         BindingContext bindings = new QueryBinder(catalog).bind(tree);
         SystemCostEstimator estimator = new SystemCostEstimator(catalog, new CardinalityEstimator());
         OptimizationContext context = new OptimizationContext(bindings, catalog, catalog, estimator);
@@ -144,7 +143,7 @@ class RuleBasedOptimizerIntegrationTest {
     @Test
     void originalTreeIsLeftUntouched() {
         String sql = "SELECT students.name FROM students, takes WHERE students.id = takes.nim AND students.id = 7";
-        QueryTree fresh = new ShaylaParser(new ShaylaLexer("")).parseToTree(sql);
+        QueryTree fresh = new ShaylaParser().parseToTree(sql);
         new QueryBinder(catalog()).bind(fresh);
 
         Run run = run(sql);

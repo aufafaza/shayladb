@@ -43,13 +43,12 @@ class SortOperatorTest {
 
     @Test
     void sortMultipleColumnsAscending() {
-        // group: 9 -> 0, 2 -> 2, 5 -> 2
-        IQueryOperator input = IntegerRowUtility.source(9, 2, 5);
+        IQueryOperator input = IntegerRowUtility.source(1, 2, 3, 4, 5, 6, 7, 8, 9);
 
         SortOperator operator = new SortOperator(input, List.of(
                 new SortOperator.SortKey(null, "group", true),
                 new SortOperator.SortKey(null, "value", true)));
 
-        assertEquals(List.of(9, 2, 5), IntegerRowUtility.collect(operator));
+        assertEquals(List.of(3, 6, 9, 1, 4, 7, 2, 5, 8), IntegerRowUtility.collect(operator));
     }
 }

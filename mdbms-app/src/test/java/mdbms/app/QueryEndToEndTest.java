@@ -114,7 +114,7 @@ class QueryEndToEndTest {
     }
 
     private QueryProcessor processorFor(StorageManager manager) {
-        QueryOptimizer optimizer = new QueryOptimizer(manager, new ShaylaParser(new ShaylaLexer(""))) {
+        QueryOptimizer optimizer = new QueryOptimizer(manager, new ShaylaParser()) {
             @Override public ParsedQuery optimizeQuery(ParsedQuery query) { return query; }
         };
         return new QueryProcessor(optimizer, manager, manager, recovery, concurrency);
