@@ -7,6 +7,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
+import java.io.IOException;
+import java.io.UncheckedIOException;
 import mdbms.api.IDataAccess;
 import mdbms.api.IDurableStorage;
 import mdbms.models.access.BufferStats;
@@ -79,13 +81,14 @@ class CrashRecoveryManagerTest {
         assertEquals(List.of(3L), rollbackManager.undoneLsns);
         assertEquals(1, durableStorage.flushCount);
         assertEquals(LogType.ABORT, logManager.readLogs(2).get(1).getType());
+        assertEquals(1, durableStorage.rebuildCount);
     }
 
     @Test
     void undoesActiveChangesInReverseLsnOrderAndFlushesAbort() {
         TestDurableStorage durableStorage = new TestDurableStorage();
         TestRollbackManager rollbackManager = new TestRollbackManager(logManager, true);
-        CrashRecoveryManager recoveryManager = recoveryManager(rollbackManager, null, durableStorage);
+        CrashRecoveryManager recoveryManager = recoveryManager(rollbackManager, new TestDataAccess(), durableStorage);
         logManager.appendTransactionLog(7, LogType.BEGIN);
         appendUpdate(7, "first");
         appendUpdate(7, "second");
@@ -106,7 +109,7 @@ class CrashRecoveryManagerTest {
         CheckpointManager checkpointManager =
                 new CheckpointManager(logManager, null, null, null, null);
         CrashRecoveryManager recoveryManager =
-                new CrashRecoveryManager(logManager, null, checkpointManager, dataAccess, null);
+                new CrashRecoveryManager(logManager, null, checkpointManager, dataAccess, new TestDurableStorage());
 
         appendUpdate(1, "before-checkpoint");
         logManager.appendTransactionLog(1, LogType.COMMIT);
@@ -125,7 +128,7 @@ class CrashRecoveryManagerTest {
         TestDurableStorage durableStorage = new TestDurableStorage();
         TestRollbackManager rollbackManager = new TestRollbackManager(logManager, true);
         CrashRecoveryManager recoveryManager =
-                recoveryManager(rollbackManager, null, durableStorage);
+                recoveryManager(rollbackManager, new TestDataAccess(), durableStorage);
 
         logManager.appendTransactionLog(4, LogType.BEGIN);
         logManager.appendDataLog(4, LogType.INSERT, "users", null, null, new RecordImage(List.of("A")));
@@ -145,7 +148,7 @@ class CrashRecoveryManagerTest {
         TestDurableStorage durableStorage = new TestDurableStorage();
         TestRollbackManager rollbackManager = new TestRollbackManager(logManager, false);
         CrashRecoveryManager recoveryManager =
-                recoveryManager(rollbackManager, null, durableStorage);
+                recoveryManager(rollbackManager, new TestDataAccess(), durableStorage);
         appendUpdate(5, "uncommitted");
 
         RecoveryResult result = recoveryManager.performCrashRecovery();
@@ -160,7 +163,7 @@ class CrashRecoveryManagerTest {
     @Test
     void usesRecordApplierForUndoWhenRollbackManagerIsAbsent() {
         TestDataAccess dataAccess = new TestDataAccess();
-        CrashRecoveryManager recoveryManager = recoveryManager(null, dataAccess, null);
+        CrashRecoveryManager recoveryManager = recoveryManager(null, dataAccess, new TestDurableStorage());
         appendUpdate(6, "uncommitted");
 
         RecoveryResult result = recoveryManager.performCrashRecovery();
@@ -204,10 +207,20 @@ class CrashRecoveryManagerTest {
 
     private static final class TestDurableStorage implements IDurableStorage {
         private int flushCount;
+        private int rebuildCount;
 
         @Override
         public void flushBuffer() {
             flushCount++;
+        }
+
+        @Override
+        public void invalidateAndReload(java.util.Set<String> affectedFiles) {
+        }
+
+        @Override
+        public void rebuildIndexesAndReloadCatalog() {
+            rebuildCount++;
         }
 
         @Override
@@ -218,6 +231,7 @@ class CrashRecoveryManagerTest {
 
     private static final class TestDataAccess implements IDataAccess {
         private final List<List<Object>> updatedValues = new ArrayList<>();
+        private boolean throwIoOnUpdate = false;
 
         @Override
         public Rows readBlock(DataRetrieval request) {
@@ -254,6 +268,9 @@ class CrashRecoveryManagerTest {
 
         @Override
         public Row updateByRowId(RowId rowId, List<Object> values) {
+            if (throwIoOnUpdate) {
+                throw new UncheckedIOException(new IOException("Simulated disk I/O error during redo"));
+            }
             updatedValues.add(new ArrayList<>(values));
             return null;
         }
@@ -277,5 +294,33 @@ class CrashRecoveryManagerTest {
                 boolean highInclusive) {
             return List.of();
         }
+    }
+
+    @Test
+    void missingStorageServicesReturnFailure() {
+        appendUpdate(1, "committed");
+        logManager.appendTransactionLog(1, LogType.COMMIT);
+
+        CrashRecoveryManager missingDataAccess = recoveryManager(null, null, new TestDurableStorage());
+        assertFalse(missingDataAccess.performCrashRecovery().isSuccess());
+
+        CrashRecoveryManager missingDurableStorage = recoveryManager(null, new TestDataAccess(), null);
+        assertFalse(missingDurableStorage.performCrashRecovery().isSuccess());
+    }
+
+    @Test
+    void ioExceptionDuringRedoReturnsFailure() {
+        TestDataAccess failingDataAccess = new TestDataAccess();
+        failingDataAccess.throwIoOnUpdate = true;
+        TestDurableStorage durableStorage = new TestDurableStorage();
+        CrashRecoveryManager recoveryManager = recoveryManager(null, failingDataAccess, durableStorage);
+
+        appendUpdate(1, "committed");
+        logManager.appendTransactionLog(1, LogType.COMMIT);
+
+        RecoveryResult result = recoveryManager.performCrashRecovery();
+
+        assertFalse(result.isSuccess());
+        assertEquals(0, durableStorage.flushCount);
     }
 }

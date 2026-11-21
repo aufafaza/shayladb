@@ -115,10 +115,13 @@ public class LogManager {
             throw new RuntimeException("Gagal menulis log checkpoint");
         }
 
-        walFileHandler.flushUpTo(lsn);
+        boolean flushed = walFileHandler.flushUpTo(lsn);
+        if (!flushed) {
+            throw new RuntimeException("Gagal flush log checkpoint pada LSN=" + lsn);
+        }
         return record;
     }
-
+    
     /**
      * Memastikan log hingga LSN tertentu telah tersimpan di disk.
      */
