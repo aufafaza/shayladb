@@ -10,6 +10,9 @@ import mdbms.net.InteractiveDBMSServer;
 public final class Main {
     public static void main(String[] args) throws IOException {
         System.out.println("mDBMS 0.1.0-SNAPSHOT");
+        if (args.length > 0 && args[0].equals(SchemaBootstrapCommand.NAME)) {
+            System.exit(SchemaBootstrapCommand.run(args, System.out, System.err));
+        }
 
         DBMSConfig cfg = new DBMSConfig();
         DBMS dbms = new DBMS(cfg);

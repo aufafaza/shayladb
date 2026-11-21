@@ -14,8 +14,8 @@ public interface IDurableStorage{
         throw new UnsupportedOperationException(getClass().getSimpleName() + " does not support invalidateAndReload");
     }
 
-    // dipanggil sekali setelah recovery sebelum engine terima query, muat ulang katalog, lepas slot dipesan yang nyangkut, lalu bangun ulang index dari heap
-    // index diperlakuin sebagai data turunan jadi ga dicatat di WAL, default nya gagal biar recovery ga lanjut dengan index basi
+    // muat ulang katalog lalu bangun ulang index dari isi heap setelah recovery, wajib selesai sebelum engine terima query
+    // default nya gagal biar recovery ga lanjut dengan index yang belum disamain
     default void rebuildIndexesAndReloadCatalog() {
         throw new UnsupportedOperationException(getClass().getSimpleName() + " does not support rebuildIndexesAndReloadCatalog");
     }

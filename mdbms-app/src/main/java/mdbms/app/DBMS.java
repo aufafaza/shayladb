@@ -16,6 +16,7 @@ import mdbms.optimizer.lexer.ShaylaLexer;
 import mdbms.optimizer.parser.ShaylaParser;
 import mdbms.processor.QueryProcessor;
 import mdbms.recovery.FailureRecoveryManager;
+import mdbms.storage.SampleDataLoader;
 import mdbms.storage.StorageManager;
 
 public class DBMS {
@@ -46,6 +47,7 @@ public class DBMS {
         if (running) return;
         ConcurrencyProtocol protocol = createProtocol(cfg.getConcurrencyAlgorithm());
         recoverOnStartup();
+        loadSampleData();
         concurrencyControl = new ConcurrencyControlManager(protocol, frm);
         System.out.println("Concurrency protocol: " + ((ConcurrencyControlManager) concurrencyControl).getActiveProtocolName());
         processor = new QueryProcessor(
@@ -78,6 +80,15 @@ public class DBMS {
         if (!result.isSuccess()) {
             throw new IllegalStateException("Recovery failed: " + result.getMessage());
         }
+    }
+
+    // isi database contoh SM14 kalau katalog masih kosong, dijalanin setelah recovery dan sebelum transaksi diterima
+    // langsung di flush biar data contoh udah aman di disk walau server mati sebelum shutdown
+    private void loadSampleData(){
+        if (!(storage instanceof IDataAccess data) || !(storage instanceof ISchemaCatalog catalog)) return;
+        if (!catalog.listTable().isEmpty()) return;
+        new SampleDataLoader(data, catalog).loadIfEmpty();
+        storage.flushBuffer();
     }
 
     private static IDurableStorage createStorage(DBMSConfig cfg, IFailureRecoveryManager frm){
