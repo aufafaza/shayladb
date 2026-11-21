@@ -101,9 +101,9 @@ public class UpdateOperator extends QueryUnaryOperator implements IWriteOperator
                 RowId destination = dataAccess.reserveRowId(tableName, newValues, 0L);
                 try {
                     concurrencyControlManager.executeRelocation(transactionId, item,
-                            new DataItem(tableName, destination), oldValues, newValues, relocationLsn -> { // [CHANGED]
-                                dataAccess.insertAt(destination, newValues, relocationLsn); // [CHANGED]
-                                dataAccess.deleteByRowId(current.rowId(), relocationLsn); // [CHANGED]
+                            new DataItem(tableName, destination), oldValues, newValues, relocationLsn -> { 
+                                dataAccess.insertAt(destination, newValues, relocationLsn);
+                                dataAccess.deleteByRowId(current.rowId(), relocationLsn);
                                 return null;
                             });
                 } catch (RuntimeException failure) {
