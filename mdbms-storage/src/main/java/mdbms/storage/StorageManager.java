@@ -37,8 +37,13 @@ import mdbms.storage.serializer.SlottedPage;
 import mdbms.storage.catalog.CatalogManager;
 import mdbms.storage.statistics.StatisticsManager;
 import mdbms.storage.index.IndexManager;
+import mdbms.storage.index.KeyNormalizer;
 
 public final class StorageManager implements IDataAccess, ISchemaCatalog, IStatisticsProvider, IDurableStorage{
+    private static final KeyNormalizer KEY_NORMALIZER = new KeyNormalizer();
+    // perubahan tanpa log, kayak redo undo FRM yang catatannya udah ada di disk
+    private static final long NO_LSN = 0;
+
     private final BufferPool bufferPool;
     private final IRecordSerializer serializer;
     private final CatalogManager catalog;
@@ -95,11 +100,12 @@ public final class StorageManager implements IDataAccess, ISchemaCatalog, IStati
         if (request.conditions() == null || request.conditions().isEmpty()){
             List<Object> values = toPositional(schema, request.values());
             validateRow(schema, values);
+            checkPrimaryKey(request.table(), values, null);
 
             RowId rowId = heapFile.insert(values);
             Row newRow = new Row(rowId, values);
             try{
-                afterWrite(request.table(), null, newRow);
+                afterWrite(request.table(), null, newRow, NO_LSN);
                 result.add(rowId);
                 return result;
                 
@@ -128,6 +134,7 @@ public final class StorageManager implements IDataAccess, ISchemaCatalog, IStati
             }
 
             validateRow(schema, newValues);
+            checkPrimaryKey(request.table(), newValues, oldRow.rowId());
             Row newRow = updateByRowId(oldRow.rowId(), newValues);
             result.add(newRow.rowId());
         }
@@ -171,37 +178,53 @@ public final class StorageManager implements IDataAccess, ISchemaCatalog, IStati
 
     @Override
     public RowId reserveRowId(String table, List<Object> values){
+        return reserveRowId(table, values, NO_LSN);
+    }
+
+    @Override
+    public RowId reserveRowId(String table, List<Object> values, long pageLsn){
         TableSchema schema = requireSchema(table);
         validateRow(schema, values);
         HeapFile heapFile = heapFileOf(table);
 
-        return heapFile.reserve(values);
+        return heapFile.reserve(values, pageLsn);
     }
 
     @Override
     public void releaseRowId(RowId rowId){
+        releaseRowId(rowId, NO_LSN);
+    }
+
+    @Override
+    public void releaseRowId(RowId rowId, long pageLsn){
         HeapFile heapFile = heapFileOf(rowId.tableName());
-        heapFile.releaseReservation(rowId);
+        heapFile.releaseReservation(rowId, pageLsn);
     }
 
     // taruh baris di RowId hasil reserveRowId atau dari redo FRM, kalau barisnya udah ada dengan isi sama dianggap beres
     // heap cuma dibalikin kalau baris nya memang baru dimasukin di panggilan ini
     @Override
     public void insertAt(RowId rowId, List<Object> values){
+        insertAt(rowId, values, NO_LSN);
+    }
+
+    // halaman heap yang berubah ditandai LSN log perubahan dari CCM, 0 berarti ga ada log kayak redo FRM
+    @Override
+    public void insertAt(RowId rowId, List<Object> values, long pageLsn){
         TableSchema schema = requireSchema(rowId.tableName());
 
         validateRow(schema, values);
 
         HeapFile heapFile = heapFileOf(rowId.tableName());
-        boolean inserted = heapFile.insertAt(rowId, values);
+        boolean inserted = heapFile.insertAt(rowId, values, pageLsn);
 
         Row newRow = new Row(rowId, new ArrayList<>(values));
 
         try{
-            afterWrite(rowId.tableName(), null, newRow);
+            afterWrite(rowId.tableName(), null, newRow, pageLsn);
         } catch (RuntimeException e){
             if (inserted){
-                undo(e, () -> heapFile.delete(rowId));
+                undo(e, () -> heapFile.delete(rowId, pageLsn));
             }
             throw e;
         }
@@ -209,6 +232,11 @@ public final class StorageManager implements IDataAccess, ISchemaCatalog, IStati
 
     @Override
     public Row updateByRowId(RowId rowId, List<Object> values){
+        return updateByRowId(rowId, values, NO_LSN);
+    }
+
+    @Override
+    public Row updateByRowId(RowId rowId, List<Object> values, long pageLsn){
         TableSchema schema = requireSchema(rowId.tableName());
 
         validateRow(schema, values);
@@ -216,18 +244,18 @@ public final class StorageManager implements IDataAccess, ISchemaCatalog, IStati
         HeapFile heapFile = heapFileOf(rowId.tableName());
 
         Row oldRow = heapFile.fetch(rowId);
-        Row newRow = heapFile.update(rowId, values);
+        Row newRow = heapFile.update(rowId, values, pageLsn);
 
         try{
-            afterWrite(rowId.tableName(), oldRow, newRow);
+            afterWrite(rowId.tableName(), oldRow, newRow, pageLsn);
             return newRow;
         } catch (RuntimeException e){
             if (newRow.rowId().equals(oldRow.rowId())){
-                undo(e, () -> heapFile.update(oldRow.rowId(), oldRow.values()));
+                undo(e, () -> heapFile.update(oldRow.rowId(), oldRow.values(), pageLsn));
             } else{
                 undo(e, () -> {
-                    heapFile.delete(newRow.rowId());
-                    heapFile.insertAt(oldRow.rowId(), oldRow.values());
+                    heapFile.delete(newRow.rowId(), pageLsn);
+                    heapFile.insertAt(oldRow.rowId(), oldRow.values(), pageLsn);
                 });
             }
 
@@ -250,6 +278,11 @@ public final class StorageManager implements IDataAccess, ISchemaCatalog, IStati
     // bisa false walau canUpdateInPlace tadi true kalau ruang halaman keburu dipakai, pemanggil lanjut lewat relokasi
     @Override
     public boolean updateInPlace(RowId rowId, List<Object> values){
+        return updateInPlace(rowId, values, NO_LSN);
+    }
+
+    @Override
+    public boolean updateInPlace(RowId rowId, List<Object> values, long pageLsn){
         TableSchema schema = requireSchema(rowId.tableName());
 
         validateRow(schema, values);
@@ -257,15 +290,15 @@ public final class StorageManager implements IDataAccess, ISchemaCatalog, IStati
         HeapFile heapFile = heapFileOf(rowId.tableName());
 
         Row oldRow = heapFile.fetch(rowId);
-        if (!heapFile.updateInPlace(rowId, values)){
+        if (!heapFile.updateInPlace(rowId, values, pageLsn)){
             return false;
         }
 
         try{
-            afterWrite(rowId.tableName(), oldRow, new Row(rowId, new ArrayList<>(values)));
+            afterWrite(rowId.tableName(), oldRow, new Row(rowId, new ArrayList<>(values)), pageLsn);
             return true;
         } catch (RuntimeException e){
-            undo(e, () -> heapFile.updateInPlace(oldRow.rowId(), oldRow.values()));
+            undo(e, () -> heapFile.updateInPlace(oldRow.rowId(), oldRow.values(), pageLsn));
             throw e;
         }
     }
@@ -274,20 +307,99 @@ public final class StorageManager implements IDataAccess, ISchemaCatalog, IStati
     // dibikin aman diulang biar redo DELETE dan undo INSERT dari FRM ga gagal walau perubahannya udah sampai disk
     @Override
     public Row deleteByRowId(RowId rowId){
+        return deleteByRowId(rowId, NO_LSN);
+    }
+
+    @Override
+    public Row deleteByRowId(RowId rowId, long pageLsn){
         HeapFile heapFile = heapFileOf(rowId.tableName());
 
-        Row oldRow = heapFile.deleteIfPresent(rowId);
+        Row oldRow = heapFile.deleteIfPresent(rowId, pageLsn);
         if (oldRow == null){
             return null;
         }
 
         try{
-            afterWrite(rowId.tableName(), oldRow, null);
+            afterWrite(rowId.tableName(), oldRow, null, pageLsn);
             return oldRow;
         } catch (RuntimeException e){
-            undo(e, () -> heapFile.insertAt(oldRow.rowId(), oldRow.values()));
+            undo(e, () -> heapFile.insertAt(oldRow.rowId(), oldRow.values(), pageLsn));
             throw e;
         }
+    }
+
+    // tolak kalau ada baris lain yang nilai primary key nya sama, baris ignoreRowId dilewatin buat UPDATE
+    // kandidat diambil lewat index kolom primary key pertama kalau ada, kalau ga ada scan heap
+    // dua transaksi yang barengan masukin key sama masih bisa lolos karena CCM ngunci per baris bukan per nilai key
+    @Override
+    public void checkPrimaryKey(String table, List<Object> values, RowId ignoreRowId){
+        TableSchema schema = requireSchema(table);
+        // validasi biasa duluan biar nilai yang salah tipe atau kepanjangan tetap dapet pesan error yang sama kayak sebelumnya
+        validateRow(schema, values);
+        if (schema.primaryKey().isEmpty()){
+            return;
+        }
+
+        List<ColumnDefinition> keyColumns = new ArrayList<>();
+        List<Integer> keyPositions = new ArrayList<>();
+        for (String name : schema.primaryKey()){
+            int position = columnIndex(schema, name);
+            keyColumns.add(schema.columns().get(position));
+            keyPositions.add(position);
+        }
+
+        List<Object> key = primaryKeyOf(values, keyColumns, keyPositions);
+        if (key.contains(null)){
+            return;
+        }
+
+        for (Row candidate : primaryKeyCandidates(table, keyColumns.get(0).name(), key.get(0))){
+            if (candidate.rowId().equals(ignoreRowId)){
+                continue;
+            }
+            if (key.equals(primaryKeyOf(candidate.values(), keyColumns, keyPositions))){
+                throw new StorageException(
+                    StorageErrorCode.DUPLICATE_KEY,
+                    "Duplicate primary key " + schema.primaryKey() + " = " + key + " in table " + table
+                );
+            }
+        }
+    }
+
+    // nilai kolom primary key yang udah dinormalisasi biar CHAR yang beda spasi akhir atau INTEGER beda tipe Java tetap kebandingin bener
+    private static List<Object> primaryKeyOf(List<Object> values, List<ColumnDefinition> keyColumns, List<Integer> keyPositions){
+        List<Object> key = new ArrayList<>();
+        for (int i = 0; i < keyColumns.size(); i++){
+            int position = keyPositions.get(i);
+            Object value = position < values.size() ? values.get(position) : null;
+            key.add(KEY_NORMALIZER.normalize(value, keyColumns.get(i)));
+        }
+        return key;
+    }
+
+    // baris yang mungkin punya primary key sama, lewat index kolom pertama kalau ada biar ga perlu scan semua
+    private List<Row> primaryKeyCandidates(String table, String firstKeyColumn, Object firstKey){
+        List<Row> candidates = new ArrayList<>();
+        for (IndexInfo info : catalog.getIndexes(table)){
+            if (info.columnName().equalsIgnoreCase(firstKeyColumn)){
+                HeapFile heapFile = heapFileOf(table);
+                for (RowId rowId : indexManager.search(info.indexName(), firstKey)){
+                    try{
+                        candidates.add(heapFile.fetch(rowId));
+                    } catch (StorageException e){
+                        // entri index yang barisnya udah ga ada dilewatin aja, bukan duplikat
+                    }
+                }
+                return candidates;
+            }
+        }
+
+        try (RowIterator iterator = heapFileOf(table).scan()){
+            while (iterator.hasNext()){
+                candidates.add(iterator.next());
+            }
+        }
+        return candidates;
     }
 
     @Override
@@ -627,17 +739,18 @@ public final class StorageManager implements IDataAccess, ISchemaCatalog, IStati
     }
 
     // samain semua index tabel dengan perubahan baris lalu catat perubahannya ke statistik secara eager
-    private void afterWrite(String table, Row oldRow, Row newRow){
+    // halaman index yang berubah ditandai LSN yang sama dengan halaman heap nya
+    private void afterWrite(String table, Row oldRow, Row newRow, long pageLsn){
         TableSchema schema = requireSchema(table);
 
         if (oldRow == null){
-            indexManager.onInsert(newRow, schema);
+            indexManager.onInsert(newRow, schema, pageLsn);
             statistics.recordWrite(table, 1);
         } else if (newRow == null){
-            indexManager.onDelete(oldRow, schema);
+            indexManager.onDelete(oldRow, schema, pageLsn);
             statistics.recordWrite(table, -1);
         } else{
-            indexManager.onUpdate(oldRow, newRow, schema);
+            indexManager.onUpdate(oldRow, newRow, schema, pageLsn);
             statistics.recordWrite(table, 0);
         }
     }

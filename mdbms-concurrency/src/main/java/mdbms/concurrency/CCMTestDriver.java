@@ -42,26 +42,37 @@ public class CCMTestDriver {
 
     public static void main(String[] args) {
         CCMTestDriver driver = new CCMTestDriver();
+        driver.runAll();
+    }
 
-        driver.setUp(new LockBasedProtocol());
-        System.out.println("Protokol Aktif: " + driver.ccm.getActiveProtocolName());
-        driver.testConcurrentBegin();
-        driver.testConcurrentReadWrite();
-        driver.testLockUpgrade();
-        driver.testDeadlockTwoTransactions();
-        driver.testDeadlockThreeTransactions();
-        driver.testWaitingWithoutCycle();
-        driver.tearDown();
+    public void runAll() {
+        setUp(new LockBasedProtocol());
+        System.out.println("Protokol Aktif: " + ccm.getActiveProtocolName());
+        testConcurrentBegin();
+        testConcurrentReadWrite();
+        testLockUpgrade();
+        testDeadlockTwoTransactions();
+        testDeadlockThreeTransactions();
+        testWaitingWithoutCycle();
+        tearDown();
 
-        driver.setUp(new TimestampsBasedProtocol());
-        System.out.println("Protokol Aktif: " + driver.ccm.getActiveProtocolName());
-        driver.testConcurrentBegin();
-        driver.testConcurrentReadWriteTimestamp();
-        driver.testTimestampViolation();
-        driver.testSerializableSchedule();
-        driver.tearDown();
+        setUp(new TimestampsBasedProtocol());
+        System.out.println("Protokol Aktif: " + ccm.getActiveProtocolName());
+        testConcurrentBegin();
+        testConcurrentReadWriteTimestamp();
+        testTimestampViolation();
+        testSerializableSchedule();
+        tearDown();
 
-        driver.printReport();
+        printReport();
+    }
+
+    public List<String> getReport() {
+        return List.copyOf(report);
+    }
+
+    public long getFailedCount() {
+        return report.stream().filter(line -> line.startsWith("[FAIL]")).count();
     }
 
     public void require(boolean condition, String message){
@@ -79,6 +90,15 @@ public class CCMTestDriver {
     public void assertCleanState() {
         require(ccm.getActiveTransactions().isEmpty(),
                 "Tidak ada transaksi aktif tersisa");
+    }
+
+    private AccessStatus runOp(int txId, OperationType opType, DataItem item) {
+        AccessStatus status = runInTxThread(() -> opType == OperationType.READ
+                ? ccm.requestRead(txId, item)
+                : ccm.requestWrite(txId, item));
+        String itemStr = item != null ? item.tableName() : "";
+        System.out.println("  [OP] T" + txId + " " + opType + "(" + itemStr + ") -> " + status);
+        return status;
     }
 
     private AccessStatus runInTxThread(java.util.concurrent.Callable<AccessStatus> task) {
@@ -174,14 +194,14 @@ public class CCMTestDriver {
         Transaction t2Obj = ccm.getTransaction(tx2);
         DataItem itemA = new DataItem("A", null);
 
-        AccessStatus tx1Read = runInTxThread(() -> ccm.requestRead(tx1, itemA));
-        AccessStatus tx2Read = runInTxThread(() -> ccm.requestRead(tx2, itemA));
+        AccessStatus tx1Read = runOp(tx1, OperationType.READ, itemA);
+        AccessStatus tx2Read = runOp(tx2, OperationType.READ, itemA);
         require(tx1Read == AccessStatus.GRANTED && tx2Read == AccessStatus.GRANTED,
                 "Dua read bersamaan diizinkan (Shared Lock)");
 
         int tx3 = ccm.beginTransaction();
         Transaction t3Obj = ccm.getTransaction(tx3);
-        AccessStatus waitingStatus = runInTxThread(() -> ccm.requestWrite(tx3, itemA));
+        AccessStatus waitingStatus = runOp(tx3, OperationType.WRITE, itemA);
         assertStatus(AccessStatus.WAITING, waitingStatus);
         require(ccm.getTransaction(tx3) != null,
                 "T3 tetap aktif ketika lock belum tersedia");
@@ -189,7 +209,7 @@ public class CCMTestDriver {
         ccm.commitTransaction(tx1);
         ccm.commitTransaction(tx2);
 
-        AccessStatus retryStatus = runInTxThread(() -> ccm.requestWrite(tx3, itemA));
+        AccessStatus retryStatus = runOp(tx3, OperationType.WRITE, itemA);
         assertStatus(AccessStatus.GRANTED, retryStatus);
 
         ccm.commitTransaction(tx3);
@@ -208,13 +228,13 @@ public class CCMTestDriver {
         Transaction t1Obj = ccm.getTransaction(tx1);
         DataItem itemA = new DataItem("users", null);
 
-        AccessStatus readStatus = runInTxThread(() -> ccm.requestRead(tx1, itemA));
+        AccessStatus readStatus = runOp(tx1, OperationType.READ, itemA);
         assertStatus(AccessStatus.GRANTED, readStatus);
 
-        AccessStatus writeStatus = runInTxThread(() -> ccm.requestWrite(tx1, itemA));
+        AccessStatus writeStatus = runOp(tx1, OperationType.WRITE, itemA);
         assertStatus(AccessStatus.GRANTED, writeStatus);
 
-        AccessStatus weakerStatus = runInTxThread(() -> ccm.requestRead(tx1, itemA));
+        AccessStatus weakerStatus = runOp(tx1, OperationType.READ, itemA);
         assertStatus(AccessStatus.GRANTED, weakerStatus);
 
         ccm.commitTransaction(tx1);
@@ -241,14 +261,14 @@ public class CCMTestDriver {
         DataItem itemA = new DataItem("A", null);
         DataItem itemB = new DataItem("B", null);
 
-        assertStatus(AccessStatus.GRANTED, runInTxThread(() -> ccm.requestWrite(tx1, itemA)));
-        assertStatus(AccessStatus.GRANTED, runInTxThread(() -> ccm.requestWrite(tx2, itemB)));
-        assertStatus(AccessStatus.WAITING, runInTxThread(() -> ccm.requestWrite(tx1, itemB)));
-        assertStatus(AccessStatus.ABORTED, runInTxThread(() -> ccm.requestWrite(tx2, itemA)));
+        assertStatus(AccessStatus.GRANTED, runOp(tx1, OperationType.WRITE, itemA));
+        assertStatus(AccessStatus.GRANTED, runOp(tx2, OperationType.WRITE, itemB));
+        assertStatus(AccessStatus.WAITING, runOp(tx1, OperationType.WRITE, itemB));
+        assertStatus(AccessStatus.ABORTED, runOp(tx2, OperationType.WRITE, itemA));
         require(ccm.getTransaction(tx2) == null,
                 "Transaksi yang dipilih sebagai victim sudah di-abort");
 
-        assertStatus(AccessStatus.ABORTED, ccm.requestRead(tx2, itemA));
+        assertStatus(AccessStatus.ABORTED, runOp(tx2, OperationType.READ, itemA));
         try {
             ccm.commitTransaction(tx2);
             require(false, "Commit setelah aborted harus ditolak");
@@ -256,7 +276,7 @@ public class CCMTestDriver {
             require(true, "Commit pada transaksi yang sudah aborted ditolak");
         }
 
-        assertStatus(AccessStatus.GRANTED, runInTxThread(() -> ccm.requestWrite(tx1, itemB)));
+        assertStatus(AccessStatus.GRANTED, runOp(tx1, OperationType.WRITE, itemB));
         ccm.commitTransaction(tx1);
         printScheduleAndVerify(List.of(
                 new Operation(t1Obj, OperationType.WRITE, itemA),
@@ -280,18 +300,18 @@ public class CCMTestDriver {
         DataItem itemB = new DataItem("B", null);
         DataItem itemC = new DataItem("C", null);
 
-        assertStatus(AccessStatus.GRANTED, runInTxThread(() -> ccm.requestWrite(tx1, itemA)));
-        assertStatus(AccessStatus.GRANTED, runInTxThread(() -> ccm.requestWrite(tx2, itemB)));
-        assertStatus(AccessStatus.GRANTED, runInTxThread(() -> ccm.requestWrite(tx3, itemC)));
+        assertStatus(AccessStatus.GRANTED, runOp(tx1, OperationType.WRITE, itemA));
+        assertStatus(AccessStatus.GRANTED, runOp(tx2, OperationType.WRITE, itemB));
+        assertStatus(AccessStatus.GRANTED, runOp(tx3, OperationType.WRITE, itemC));
 
-        assertStatus(AccessStatus.WAITING, runInTxThread(() -> ccm.requestWrite(tx1, itemB)));
-        assertStatus(AccessStatus.WAITING, runInTxThread(() -> ccm.requestWrite(tx2, itemC)));
-        assertStatus(AccessStatus.ABORTED, runInTxThread(() -> ccm.requestWrite(tx3, itemA)));
+        assertStatus(AccessStatus.WAITING, runOp(tx1, OperationType.WRITE, itemB));
+        assertStatus(AccessStatus.WAITING, runOp(tx2, OperationType.WRITE, itemC));
+        assertStatus(AccessStatus.ABORTED, runOp(tx3, OperationType.WRITE, itemA));
         require(ccm.getTransaction(tx3) == null, "Victim T3 di-abort pada deadlock 3 transaksi");
 
-        assertStatus(AccessStatus.GRANTED, runInTxThread(() -> ccm.requestWrite(tx2, itemC)));
+        assertStatus(AccessStatus.GRANTED, runOp(tx2, OperationType.WRITE, itemC));
         ccm.commitTransaction(tx2);
-        assertStatus(AccessStatus.GRANTED, runInTxThread(() -> ccm.requestWrite(tx1, itemB)));
+        assertStatus(AccessStatus.GRANTED, runOp(tx1, OperationType.WRITE, itemB));
         ccm.commitTransaction(tx1);
 
         printScheduleAndVerify(List.of(
@@ -312,13 +332,13 @@ public class CCMTestDriver {
         Transaction t2Obj = ccm.getTransaction(tx2);
         DataItem itemA = new DataItem("A", null);
 
-        assertStatus(AccessStatus.GRANTED, runInTxThread(() -> ccm.requestWrite(tx1, itemA)));
-        assertStatus(AccessStatus.WAITING, runInTxThread(() -> ccm.requestWrite(tx2, itemA)));
+        assertStatus(AccessStatus.GRANTED, runOp(tx1, OperationType.WRITE, itemA));
+        assertStatus(AccessStatus.WAITING, runOp(tx2, OperationType.WRITE, itemA));
         require(ccm.getTransaction(tx1) != null && ccm.getTransaction(tx2) != null,
                 "Transaksi yang menunggu tanpa membentuk siklus tidak dibatalkan");
 
         ccm.commitTransaction(tx1);
-        assertStatus(AccessStatus.GRANTED, runInTxThread(() -> ccm.requestWrite(tx2, itemA)));
+        assertStatus(AccessStatus.GRANTED, runOp(tx2, OperationType.WRITE, itemA));
         ccm.commitTransaction(tx2);
 
         printScheduleAndVerify(List.of(
@@ -343,9 +363,9 @@ public class CCMTestDriver {
 
         DataItem itemA = new DataItem("A", null);
 
-        assertStatus(AccessStatus.GRANTED, runInTxThread(() -> ccm.requestWrite(tx2, itemA)));
+        assertStatus(AccessStatus.GRANTED, runOp(tx2, OperationType.WRITE, itemA));
 
-        AccessStatus tx1Write = runInTxThread(() -> ccm.requestWrite(tx1, itemA));
+        AccessStatus tx1Write = runOp(tx1, OperationType.WRITE, itemA);
         assertStatus(AccessStatus.ABORTED, tx1Write);
         require(ccm.getTransaction(tx1) == null,
                 "Transaksi T1 di-abort setelah pelanggaran timestamp");
@@ -355,9 +375,9 @@ public class CCMTestDriver {
         Transaction t1RestartObj = ccm.getTransaction(tx1Restart);
         require(t1RestartObj.getTimestamp() > t2Obj.getTimestamp(),
                 "Transaksi yang dijalankan ulang mendapat timestamp baru yang lebih besar");
-        assertStatus(AccessStatus.GRANTED, runInTxThread(() -> ccm.requestWrite(tx1Restart, itemA)));
-
+        assertStatus(AccessStatus.WAITING, runOp(tx1Restart, OperationType.WRITE, itemA));
         ccm.commitTransaction(tx2);
+        assertStatus(AccessStatus.GRANTED, runOp(tx1Restart, OperationType.WRITE, itemA));
         ccm.commitTransaction(tx1Restart);
         printScheduleAndVerify(List.of(
                 new Operation(t2Obj, OperationType.WRITE, itemA),
@@ -377,9 +397,9 @@ public class CCMTestDriver {
         Transaction t2Obj = ccm.getTransaction(tx2);
         DataItem itemA = new DataItem("A", null);
 
-        assertStatus(AccessStatus.GRANTED, runInTxThread(() -> ccm.requestRead(tx1, itemA)));
-        assertStatus(AccessStatus.GRANTED, runInTxThread(() -> ccm.requestRead(tx2, itemA)));
-        assertStatus(AccessStatus.GRANTED, runInTxThread(() -> ccm.requestWrite(tx2, itemA)));
+        assertStatus(AccessStatus.GRANTED, runOp(tx1, OperationType.READ, itemA));
+        assertStatus(AccessStatus.GRANTED, runOp(tx2, OperationType.READ, itemA));
+        assertStatus(AccessStatus.GRANTED, runOp(tx2, OperationType.WRITE, itemA));
 
         ccm.commitTransaction(tx1);
         ccm.commitTransaction(tx2);
