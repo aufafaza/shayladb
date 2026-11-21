@@ -126,6 +126,12 @@ final class MockDataAccess implements IDataAccess {
         return updated;
     }
 
+    @Override public boolean canUpdateInPlace(RowId rowId, List<Object> values) { return true; }
+
+    @Override public boolean updateInPlace(RowId rowId, List<Object> values) {
+        return updateByRowId(rowId, values) != null;
+    }
+
     @Override
     public Row deleteByRowId(RowId rowId) {
         Row deleted = rows.remove(rowId);
