@@ -8,7 +8,10 @@ import mdbms.api.IConcurrencyControl;
 import mdbms.api.IQueryProcessor;
 import mdbms.models.query.ExecutionResult;
 
-/** Executes one connection using either the interactive telnet or framed raw protocol. */
+/**
+ * Executes one connection using either the interactive telnet or framed raw
+ * protocol.
+ */
 public class ClientHandler implements Runnable {
     enum Mode {
         FRAMED_JSON,
@@ -62,7 +65,7 @@ public class ClientHandler implements Runnable {
     }
 
     private void runTelnet(CommandLineInterface cli) throws IOException {
-        clientSocket.setSoTimeout(FramedJsonProtocol.REQUEST_TIMEOUT_MILLIS);
+        clientSocket.setSoTimeout(CommandLineInterface.TELNET_REQUEST_TIMEOUT_MILLIS);
         try {
             String query;
             while ((query = cli.readQuery()) != null) {
@@ -75,7 +78,8 @@ public class ClientHandler implements Runnable {
                     "Error: " + FramedJsonProtocol.messageOrDefault(e.getMessage(), "Telnet request rejected")));
         } catch (SocketTimeoutException e) {
             cli.printResult(new ExecutionResult(false, null, null, 0,
-                    "Error: request timed out after 30 seconds"));
+                    "Error: request timed out after " + CommandLineInterface.TELNET_REQUEST_TIMEOUT_MILLIS / 1000
+                            + " seconds"));
         }
     }
 
@@ -158,7 +162,8 @@ public class ClientHandler implements Runnable {
             txId = autoCommit ? concurrencyControl.beginTransaction() : session.getCurrentTxId();
         } catch (IllegalStateException e) {
             return new ExecutionResult(false, null, null, 0,
-                    "Transaction admission rejected: " + FramedJsonProtocol.messageOrDefault(e.getMessage(), "unavailable"));
+                    "Transaction admission rejected: "
+                            + FramedJsonProtocol.messageOrDefault(e.getMessage(), "unavailable"));
         }
 
         try {
@@ -173,7 +178,8 @@ public class ClientHandler implements Runnable {
             } else if (autoCommit) {
                 concurrencyControl.commitTransaction(txId);
             }
-            return result == null ? new ExecutionResult(false, null, null, 0, "Query processor returned no result") : result;
+            return result == null ? new ExecutionResult(false, null, null, 0, "Query processor returned no result")
+                    : result;
         } catch (Exception e) {
             abortIfActive(txId, "Failed to execute query: " + e.getMessage());
             session.clearTransaction();
