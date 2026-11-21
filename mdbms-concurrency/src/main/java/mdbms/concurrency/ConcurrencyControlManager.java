@@ -150,6 +150,18 @@ public final class ConcurrencyControlManager implements IConcurrencyControl {
      * Completes crash recovery before accepting new transactions. Recovery is
      * deliberately explicit so the composition root can initialize FRM once.
      */
+    public void initAfterRecovery() {
+        synchronized (lifecycleMonitor) {
+            isRecovered = false;
+        }
+        if (frm == null) {
+            synchronized (lifecycleMonitor) {
+                isRecovered = true;
+            }
+            return;
+        }
+        initAfterRecovery(frm.recoverOnStartup());
+    }
 
     public void initAfterRecovery(RecoveryResult result) {
         synchronized (lifecycleMonitor) {

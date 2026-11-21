@@ -507,7 +507,9 @@ class ConcurrencyControlManagerTest {
         private boolean rollbackSucceeds = true;
         private RuntimeException commitLogFailure;
         private RuntimeException rollbackFailure;
-        private final List<LogType> transactionLogs = new ArrayList<>();
+        private IntConsumer onRollback;
+        private final List<LogType> transactionLogsType = new ArrayList<>();
+        private final List<LogRecord> transactionLog = new ArrayList<>();
         private final List<Integer> rolledBack = new ArrayList<>();
         private final List<String> events;
 
@@ -521,7 +523,8 @@ class ConcurrencyControlManagerTest {
 
         @Override
         public RecoveryResult writeTransactionLog(int txId, LogType eventType) {
-            transactionLogs.add(eventType);
+            transactionLogsType.add(eventType);
+            transactionLog.add(new TransactionLogRecord(transactionLogsType.size(), txId, eventType, Instant.now()));
             events.add("log " + eventType);
             if (eventType == LogType.COMMIT && commitLogFailure != null) throw commitLogFailure;
             return result(logSucceeds);
@@ -558,9 +561,13 @@ class ConcurrencyControlManagerTest {
         public RecoveryResult rollbackTransaction(int txId) {
             rolledBack.add(txId);
             events.add("rollback " + txId);
+            if (onRollback != null) {
+                onRollback.accept(txId);
+            }
             if (rollbackFailure != null) throw rollbackFailure;
             if (!rollbackSucceeds) return result(false);
-            transactionLogs.add(LogType.ABORT);
+            transactionLogsType.add(LogType.ABORT);
+            transactionLog.add(new TransactionLogRecord(transactionLogsType.size(), txId, LogType.ABORT, Instant.now()));
             return result(rollbackSucceeds);
         }
 
