@@ -29,6 +29,9 @@ final class QueryTreeRewrites {
             node.getProjectionColumns(),
             node.isNaturalJoin()
         );
+        if (node.getTableAlias() != null) copy.setTableAlias(node.getTableAlias());
+        if (node.getTableDefinition() != null) copy.setTableDefinition(node.getTableDefinition());
+        if (node.getNodeType() == QueryNodeType.DROP_TABLE) copy.setDropBehavior(node.getDropBehavior());
         if (node.getNodeType() == QueryNodeType.SORT) {
             copy.setOrderByClauses(node.getOrderByClauses());
         }
