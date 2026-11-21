@@ -125,8 +125,21 @@ class ExpressionParserArithmeticTest {
     }
 
     @Test
-    void unsupportedOperatorsAndUnarySignsAreNotSilentlyAddedToTheGrammar() {
-        assertSyntaxError("-18", 1, 1, "-");
+    void unaryMinusFoldsNumericLiteralsAndNegatesOtherOperands() {
+        assertExpression("-18", "-18");
+        assertExpression("-2.5", "-2.5");
+        assertExpression("-(-5)", "5");
+        assertExpression("5 - -3", "(- 5 -3)");
+        assertExpression("-umur", "(- 0 umur)");
+        assertExpression("-umur * 2", "(* (- 0 umur) 2)");
+        assertExpression("-(a + 1)", "(- 0 (+ a 1))");
+        assertEquals(ExpressionNode.Type.INTEGER_LITERAL, parser.parseExpression(stream("-18")).getRoot().getType());
+        assertEquals(ExpressionNode.Type.REAL_LITERAL, parser.parseExpression(stream("-2.5")).getRoot().getType());
+        assertSyntaxError("-", 1, 2, "");
+    }
+
+    @Test
+    void unsupportedOperatorsAndUnaryPlusAreNotSilentlyAddedToTheGrammar() {
         assertSyntaxError("+18", 1, 1, "+");
         assertSyntaxError("5 MOD 2", 1, 3, "MOD");
     }
