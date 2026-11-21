@@ -108,6 +108,22 @@ public final class ConcurrencyControlManager implements IConcurrencyControl {
 
     public int getActiveTransactionCount() { return activeTransactions.size(); }
 
+    public int getLockCount() {
+        if (protocol instanceof LockBasedProtocol lockBased) {
+            return lockBased.getLockManager().getLockTableSnapshot().values().stream()
+                    .mapToInt(java.util.List::size)
+                    .sum();
+        }
+        return 0;
+    }
+
+    public int getWaitingRequestCount() {
+        if (protocol instanceof LockBasedProtocol lockBased) {
+            return lockBased.getLockManager().getWaitingRequestsSnapshot().size();
+        }
+        return 0;
+    }
+
     public boolean isAcceptingTransactions() {
         synchronized (lifecycleMonitor) {
             return acceptingTransactions;
@@ -286,6 +302,7 @@ public final class ConcurrencyControlManager implements IConcurrencyControl {
     private void failAndAbort(Transaction tx, String reason, RuntimeException cause) {
         synchronized (tx) {
             if (tx.getState() != TransactionState.FAILED) tx.setState(TransactionState.FAILED);
+            RuntimeException rollbackFailure = null;
             if (frm != null) {
                 RecoveryResult rollback;
                 RuntimeException rollbackError = null;
@@ -313,6 +330,9 @@ public final class ConcurrencyControlManager implements IConcurrencyControl {
             activeTransactions.remove(tx.getId(), tx);
             synchronized (lifecycleMonitor) {
                 lifecycleMonitor.notifyAll();
+            }
+            if (rollbackFailure != null) {
+                throw rollbackFailure;
             }
         }
     }

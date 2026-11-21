@@ -17,7 +17,6 @@ import mdbms.models.schema.ColumnDefinition;
 import mdbms.models.transaction.Transaction;
 import mdbms.models.transaction.TransactionState;
 import mdbms.processor.exception.QueryExecutionException;
-import mdbms.processor.exception.TransactionAbortedException;
 import mdbms.processor.operator.IQueryMessage;
 import mdbms.processor.operator.IQueryOperator;
 import mdbms.processor.operator.IRowProducingOperator;
@@ -49,10 +48,7 @@ public class QueryProcessor implements IQueryProcessor {
         if (explain.matches()) {
             return new ExecutionResult(true, List.of(), List.of(), 0, queryOptimizer.explainQuery(explain.group(1)));
         }
-        ParsedQuery parsedQuery = queryOptimizer.parseQuery(query);
-        ParsedQuery optimizedQuery = queryOptimizer.optimizeQuery(parsedQuery);
-        IQueryOperator translatedQuery = planTranslator.translate(optimizedQuery, txId);
-
+        IQueryOperator translatedQuery = null;
         List<String> columns = new ArrayList<>();
         List<List<Object>> rows = new ArrayList<>();
         try {
@@ -91,11 +87,9 @@ public class QueryProcessor implements IQueryProcessor {
                 rows.add(row);
             }
         } catch (QueryExecutionException e) {
-            abortIfActive(txId);
             ExecutionResult executionResult = new ExecutionResult(false, null, null, 0, "Error: " + e.getMessage());
             return executionResult;
         } catch (Exception e) {
-            abortIfActive(txId);
             return new ExecutionResult(false, columns, rows, 0, "Error: " + e.getMessage());
         } finally {
             if (translatedQuery != null) translatedQuery.close();
