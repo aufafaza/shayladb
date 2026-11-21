@@ -32,6 +32,11 @@ class DBMSTest {
     private boolean recoverySucceeds;
     private boolean checkpointSucceeds;
     private boolean missingRecoveryResult;
+    private boolean closeFails;
+    private boolean rollbackFails;
+    private java.util.concurrent.CountDownLatch checkpointEntered;
+    private java.util.concurrent.CountDownLatch releaseCheckpoint;
+    private final java.util.concurrent.CountDownLatch storageClosed = new java.util.concurrent.CountDownLatch(1);
     private int recoveredMaxTxId;
     private DBMSConfig cfg;
 
@@ -49,6 +54,10 @@ class DBMSTest {
                 (proxy, method, args) -> {
                     if (method.getName().equals("listTable")) return List.of("fixture");
                     calls.add(method.getName());
+                    if (method.getName().equals("close")) {
+                        storageClosed.countDown();
+                        if (closeFails) throw new IllegalStateException("flush failed");
+                    }
                     return null;
                 });
         IFailureRecoveryManager frm = (IFailureRecoveryManager) Proxy.newProxyInstance(
@@ -56,10 +65,15 @@ class DBMSTest {
                 new Class<?>[] {IFailureRecoveryManager.class},
                 (proxy, method, args) -> {
                     calls.add(method.getName());
+                    if (method.getName().equals("createCheckpoint") && checkpointEntered != null) {
+                        checkpointEntered.countDown();
+                        releaseCheckpoint.await();
+                    }
                     return switch (method.getName()) {
                         case "recoverOnStartup" -> missingRecoveryResult ? null
                                 : new RecoveryResult(recoverySucceeds, 1L, recoveredMaxTxId, "stub");
                         case "createCheckpoint" -> new RecoveryResult(checkpointSucceeds, 1L, recoveredMaxTxId, "stub");
+                        case "rollbackTransaction" -> new RecoveryResult(!rollbackFails, 1L, recoveredMaxTxId, "rollback stub");
                         case "flushLogUpTo" -> true;
                         default -> new RecoveryResult(true, 1L, recoveredMaxTxId, "stub");
                     };
@@ -133,7 +147,8 @@ class DBMSTest {
 
         assertThrows(IllegalStateException.class, dbms::shutdown);
         assertEquals(List.of("createCheckpoint"), calls);
-        assertTrue(dbms.isRunning());
+        assertFalse(dbms.isRunning());
+        assertThrows(IllegalStateException.class, dbms::shutdown);
     }
 
     @Test
@@ -144,7 +159,7 @@ class DBMSTest {
 
         dbms.shutdown();
 
-        assertEquals(List.of("createCheckpoint", "flushBuffer"), calls);
+        assertEquals(List.of("createCheckpoint", "close"), calls);
     }
 
     @Test
@@ -156,15 +171,62 @@ class DBMSTest {
         dbms.shutdown();
         dbms.shutdown();
 
-        assertEquals(List.of("createCheckpoint", "flushBuffer"), calls);
+        assertEquals(List.of("createCheckpoint", "close"), calls);
     }
 
     @Test
     void shutdownBeforeStartDoesNothing() {
         DBMS dbms = withStubs(cfg);
 
-        assertDoesNotThrow(dbms::shutdown);
+        assertDoesNotThrow(() -> { dbms.shutdown(); });
         assertTrue(calls.isEmpty());
+    }
+
+    @Test
+    void flushFailureClosesAdmissionAndRemainsVisibleOnRepeatedShutdown() {
+        DBMS dbms = withStubs(cfg);
+        dbms.start();
+        var concurrency = dbms.getConcurrencyControl();
+        closeFails = true;
+        assertThrows(IllegalStateException.class, dbms::shutdown);
+        assertFalse(dbms.isRunning());
+        assertNull(dbms.getQueryProcessor());
+        assertThrows(IllegalStateException.class, concurrency::beginTransaction);
+        assertThrows(IllegalStateException.class, dbms::shutdown);
+    }
+
+    @Test
+    void rollbackFailurePreventsCheckpointAndSuccessfulShutdown() {
+        DBMS dbms = withStubs(cfg);
+        dbms.start();
+        dbms.getConcurrencyControl().beginTransaction();
+        rollbackFails = true;
+        calls.clear();
+        assertThrows(IllegalStateException.class, dbms::shutdown);
+        assertFalse(calls.contains("createCheckpoint"));
+        assertFalse(calls.contains("close"));
+        assertFalse(dbms.isRunning());
+        assertThrows(IllegalStateException.class, dbms::shutdown);
+    }
+
+    @Test
+    void timeoutIsVisibleWhileCheckpointIoFinishesWithoutBeingInterrupted() throws Exception {
+        DBMS dbms = withStubs(cfg);
+        dbms.start();
+        checkpointEntered = new java.util.concurrent.CountDownLatch(1);
+        releaseCheckpoint = new java.util.concurrent.CountDownLatch(1);
+        dbms.startCheckpointScheduler(1, java.util.concurrent.TimeUnit.MILLISECONDS);
+        try {
+            assertTrue(checkpointEntered.await(2, java.util.concurrent.TimeUnit.SECONDS));
+            IllegalStateException failure = assertThrows(IllegalStateException.class,
+                    () -> dbms.shutdown(50, java.util.concurrent.TimeUnit.MILLISECONDS));
+            assertTrue(failure.getMessage().contains("timed out"));
+            assertFalse(dbms.isRunning());
+        } finally {
+            releaseCheckpoint.countDown();
+        }
+        assertTrue(storageClosed.await(2, java.util.concurrent.TimeUnit.SECONDS));
+        assertThrows(IllegalStateException.class, dbms::shutdown);
     }
 
     @Test
