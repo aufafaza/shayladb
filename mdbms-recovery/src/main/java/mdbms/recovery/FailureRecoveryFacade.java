@@ -52,7 +52,7 @@ public class FailureRecoveryFacade implements IFailureRecoveryManager {
             logManager,
             rollbackManager,
             checkpointManager,
-            dataAccess,
+            recordApplier,
             durableStorage
         );
     }

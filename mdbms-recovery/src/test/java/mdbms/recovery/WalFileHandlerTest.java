@@ -160,4 +160,45 @@ class WalFileHandlerTest {
         assertThrows(IllegalStateException.class, recoveryHandler::readAll);
         recoveryHandler.close();
     }
+
+    @Test
+    void testEscapedPipeCharacterRoundTrip() {
+        Instant now = Instant.now();
+        RowId rid = new RowId("students", 0, 2);
+        RecordImage img = new RecordImage(List.of(102, "Andi|Budi\\Citra", 95));
+        DataChangeLogRecord rec = new DataChangeLogRecord(
+                1L, 7, LogType.INSERT, now, "students", rid, null, img);
+
+        assertTrue(walHandler.append(rec));
+        assertTrue(walHandler.flushUpTo(1L));
+        walHandler.close();
+
+        WalFileHandler reopened = new WalFileHandler(logPath);
+        try {
+            List<LogRecord> records = reopened.readAll();
+            assertEquals(1, records.size());
+            DataChangeLogRecord parsed = assertInstanceOf(DataChangeLogRecord.class, records.get(0));
+            assertEquals("Andi|Budi\\Citra", parsed.getAfterImage().values().get(1));
+        } finally {
+            reopened.close();
+        }
+    }
+
+    @Test
+    void testFlushUpToSucceedsAfterRestartWithoutNewAppend() {
+        Instant now = Instant.now();
+        assertTrue(walHandler.append(new TransactionLogRecord(1L, 1, LogType.BEGIN, now)));
+        assertTrue(walHandler.append(new TransactionLogRecord(2L, 1, LogType.COMMIT, now)));
+        assertTrue(walHandler.flushUpTo(2L));
+        walHandler.close();
+
+        WalFileHandler reopened = new WalFileHandler(logPath);
+        try {
+            List<LogRecord> records = reopened.readAll();
+            assertEquals(2, records.size());
+            assertTrue(reopened.flushUpTo(2L));
+        } finally {
+            reopened.close();
+        }
+    }
 }
