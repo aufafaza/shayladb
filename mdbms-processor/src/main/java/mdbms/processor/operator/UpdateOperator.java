@@ -113,6 +113,7 @@ public class UpdateOperator extends QueryUnaryOperator implements IWriteOperator
                     throw failure;
                 }
             }
+            affectedRows++;
         }
         return null;
     }
