@@ -41,6 +41,21 @@ public final class BinaryRecordSerializer implements IRecordSerializer {
         return out.toByteArray();
     }
 
+    public static long maximumSerializedSize(TableSchema schema) {
+        long size = 0;
+
+        for (ColumnDefinition column : columns(schema)) {
+            size += 1; // null marker
+            size += switch (column.type()) {
+                case INTEGER, FLOAT -> 4;
+                case CHAR -> column.length();
+                case VARCHAR -> 2L + column.length();
+            };
+        }
+
+        return size;
+    }
+
     // membaca data biner jadi isi baris
     @Override
     public List<Object> deserialize(byte[] data, TableSchema schema) {
@@ -90,7 +105,7 @@ public final class BinaryRecordSerializer implements IRecordSerializer {
     }
 
     // mengecek skema lalu mengambil daftar kolomnya
-    private List<ColumnDefinition> columns(TableSchema schema) {
+    private static List<ColumnDefinition> columns(TableSchema schema) {
         if (schema == null || schema.tableName() == null || schema.tableName().isBlank() || schema.columns() == null || schema.columns().isEmpty()) {
             throw new StorageException(StorageErrorCode.SCHEMA_VIOLATION, "Missing schema columns");
         }

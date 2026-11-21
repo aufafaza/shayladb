@@ -13,6 +13,7 @@ public final class SlottedPage {
     private static final int VERSION = 1;
     private static final int HEADER_SIZE = 16;
     private static final int SLOT_SIZE = 12;
+    public static final int MAX_RECORD_SIZE = PAGE_SIZE - HEADER_SIZE - SLOT_SIZE;
     private static final int DELETED = 0;
     private static final int RESERVED = 1;
     private static final int OCCUPIED = 2;
