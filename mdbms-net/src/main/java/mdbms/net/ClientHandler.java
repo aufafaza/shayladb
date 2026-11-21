@@ -7,8 +7,13 @@ import java.net.SocketTimeoutException;
 import mdbms.api.IConcurrencyControl;
 import mdbms.api.IQueryProcessor;
 import mdbms.models.query.ExecutionResult;
+import mdbms.models.transaction.Transaction;
+import mdbms.models.transaction.TransactionState;
 
-/** Executes one connection using either the interactive telnet or framed raw protocol. */
+/**
+ * Executes one connection using either the interactive telnet or framed raw
+ * protocol.
+ */
 public class ClientHandler implements Runnable {
     enum Mode {
         FRAMED_JSON,
@@ -62,7 +67,7 @@ public class ClientHandler implements Runnable {
     }
 
     private void runTelnet(CommandLineInterface cli) throws IOException {
-        clientSocket.setSoTimeout(FramedJsonProtocol.REQUEST_TIMEOUT_MILLIS);
+        clientSocket.setSoTimeout(CommandLineInterface.TELNET_REQUEST_TIMEOUT_MILLIS);
         try {
             String query;
             while ((query = cli.readQuery()) != null) {
@@ -75,7 +80,8 @@ public class ClientHandler implements Runnable {
                     "Error: " + FramedJsonProtocol.messageOrDefault(e.getMessage(), "Telnet request rejected")));
         } catch (SocketTimeoutException e) {
             cli.printResult(new ExecutionResult(false, null, null, 0,
-                    "Error: request timed out after 30 seconds"));
+                    "Error: request timed out after " + CommandLineInterface.TELNET_REQUEST_TIMEOUT_MILLIS / 1000
+                            + " seconds"));
         }
     }
 
@@ -152,31 +158,119 @@ public class ClientHandler implements Runnable {
     }
 
     private ExecutionResult executeQuery(String query, String command) {
+        if (command.equals("BEGIN")) {
+            return beginTransaction();
+        }
+        if (command.equals("COMMIT")) {
+            return commitTransaction();
+        }
+        if (command.equals("ABORT")) {
+            return abortTransaction();
+        }
+        return executeStatement(query);
+    }
+
+    private ExecutionResult beginTransaction() {
+        try {
+            int txId = concurrencyControl.beginTransaction();
+            session.beginTransaction(txId);
+            return new ExecutionResult(true, null, null, -1, "BEGIN transaction " + txId);
+        } catch (RuntimeException e) {
+            return new ExecutionResult(false, null, null, 0,
+                    "Transaction admission rejected: "
+                            + FramedJsonProtocol.messageOrDefault(e.getMessage(), "unavailable"));
+        }
+    }
+
+    private ExecutionResult commitTransaction() {
+        int txId = session.getCurrentTxId();
+        try {
+            concurrencyControl.commitTransaction(txId);
+            session.clearTransaction();
+            return new ExecutionResult(true, null, null, -1, "COMMIT transaction " + txId);
+        } catch (RuntimeException e) {
+            session.clearTransaction();
+            return new ExecutionResult(false, null, null, 0,
+                    "COMMIT failed: "
+                            + FramedJsonProtocol.messageOrDefault(e.getMessage(), "unable to commit transaction"));
+        }
+    }
+
+    private ExecutionResult abortTransaction() {
+        int txId = session.getCurrentTxId();
+        try {
+            concurrencyControl.abortTransaction(txId, "ABORT requested by client");
+            session.clearTransaction();
+            return new ExecutionResult(true, null, null, -1, "ABORT transaction " + txId);
+        } catch (RuntimeException e) {
+            session.clearTransaction();
+            return new ExecutionResult(false, null, null, 0,
+                    "ABORT failed: "
+                            + FramedJsonProtocol.messageOrDefault(e.getMessage(), "unable to abort transaction"));
+        }
+    }
+
+    private ExecutionResult executeStatement(String query) {
         boolean autoCommit = !session.isTransacting();
         int txId;
         try {
             txId = autoCommit ? concurrencyControl.beginTransaction() : session.getCurrentTxId();
-        } catch (IllegalStateException e) {
+        } catch (RuntimeException e) {
             return new ExecutionResult(false, null, null, 0,
-                    "Transaction admission rejected: " + FramedJsonProtocol.messageOrDefault(e.getMessage(), "unavailable"));
+                    "Transaction admission rejected: "
+                            + FramedJsonProtocol.messageOrDefault(e.getMessage(), "unavailable"));
         }
+        if (autoCommit) {
+            session.beginTransaction(txId);
+        }
+        session.markInFlight(txId);
 
         try {
             ExecutionResult result = processor.executeQuery(query, txId);
-            if (result == null || !result.success()) {
-                abortIfActive(txId, "Query execution failed");
+            if (session.isDisconnected()) {
                 session.clearTransaction();
-            } else if (command.equals("BEGIN")) {
-                session.beginTransaction(txId);
-            } else if (command.equals("COMMIT") || command.equals("ABORT")) {
-                session.clearTransaction();
-            } else if (autoCommit) {
-                concurrencyControl.commitTransaction(txId);
+                return result == null
+                        ? new ExecutionResult(false, null, null, 0, "Client disconnected")
+                        : result;
             }
-            return result == null ? new ExecutionResult(false, null, null, 0, "Query processor returned no result") : result;
-        } catch (Exception e) {
-            abortIfActive(txId, "Failed to execute query: " + e.getMessage());
+            if (result == null) {
+                RuntimeException rollbackFailure = abortIfActive(txId, "Query processor returned no result");
+                session.clearTransaction();
+                if (rollbackFailure != null) {
+                    return new ExecutionResult(false, null, null, 0,
+                            "ROLLBACK failed: " + rollbackFailure.getMessage());
+                }
+                return new ExecutionResult(false, null, null, 0, "Query processor returned no result");
+            }
+            if (!result.success()) {
+                RuntimeException rollbackFailure = abortIfActive(txId, "Query execution failed");
+                session.clearTransaction();
+                if (rollbackFailure != null) {
+                    return new ExecutionResult(false, null, null, 0,
+                            "ROLLBACK failed: " + rollbackFailure.getMessage());
+                }
+                return result;
+            }
+
+            if (autoCommit) {
+                try {
+                    concurrencyControl.commitTransaction(txId);
+                    session.clearTransaction();
+                } catch (RuntimeException e) {
+                    session.clearTransaction();
+                    return new ExecutionResult(false, null, null, 0,
+                            "COMMIT failed: " + FramedJsonProtocol.messageOrDefault(e.getMessage(),
+                                    "unable to commit transaction"));
+                }
+            }
+            return result;
+        } catch (RuntimeException e) {
+            RuntimeException rollbackFailure = abortIfActive(txId, "Failed to execute query: " + e.getMessage());
             session.clearTransaction();
+            if (rollbackFailure != null) {
+                return new ExecutionResult(false, null, null, 0,
+                        "ROLLBACK failed: " + rollbackFailure.getMessage());
+            }
             return new ExecutionResult(false, null, null, 0,
                     FramedJsonProtocol.messageOrDefault(e.getMessage(), "Query execution failed"));
         }
@@ -191,24 +285,42 @@ public class ClientHandler implements Runnable {
         return parts[0].toUpperCase();
     }
 
-    private void abortIfActive(int txId, String reason) {
+    private RuntimeException abortIfActive(int txId, String reason) {
         try {
-            concurrencyControl.abortTransaction(txId, reason);
+            Transaction tx = concurrencyControl.getTransaction(txId);
+            if (tx != null && tx.getState() == TransactionState.ACTIVE) {
+                concurrencyControl.abortTransaction(txId, reason);
+            }
+            return null;
+        } catch (RuntimeException e) {
+            return e;
+        }
+    }
+
+    public void disconnect() {
+        session.markDisconnected();
+        int txId = session.getInFlightTxId();
+        if (txId == 0) {
+            txId = session.isTransacting() ? session.getCurrentTxId() : 0;
+        }
+        if (txId != 0) {
+            try {
+                concurrencyControl.abortTransaction(txId, "Client disconnected");
+            } catch (RuntimeException e) {
+                System.err.println("[ERROR] Could not abort transaction " + txId + ": " + e.getMessage());
+            } finally {
+                session.clearTransaction();
+            }
+        }
+        try {
+            clientSocket.close();
         } catch (Exception ignored) {
-            // QueryProcessor may already have aborted and removed the transaction.
+            // Socket cleanup is best-effort; transaction resolution is attempted above.
         }
     }
 
     private void closeSession() {
-        if (session.isTransacting()) {
-            int txId = session.getCurrentTxId();
-            try {
-                concurrencyControl.abortTransaction(txId, "Client disconnected");
-            } catch (Exception e) {
-                System.err.println("[ERROR] Could not abort transaction " + txId + ": " + e.getMessage());
-            }
-            session.clearTransaction();
-        }
+        disconnect();
 
         sessionManager.removeSession(session.getSessionId());
         try {

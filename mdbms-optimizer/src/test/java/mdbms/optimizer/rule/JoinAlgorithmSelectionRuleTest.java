@@ -22,7 +22,6 @@ import mdbms.optimizer.binder.BindingContext;
 import mdbms.optimizer.binder.QueryBinder;
 import mdbms.optimizer.cost.CardinalityEstimator;
 import mdbms.optimizer.cost.SystemCostEstimator;
-import mdbms.optimizer.lexer.ShaylaLexer;
 import mdbms.optimizer.parser.ShaylaParser;
 import org.junit.jupiter.api.Test;
 
@@ -61,7 +60,7 @@ class JoinAlgorithmSelectionRuleTest {
 
     private static Setup setup(String sql) {
         IndexedCatalog catalog = catalog();
-        QueryTree tree = new ShaylaParser(new ShaylaLexer("")).parseToTree(sql);
+        QueryTree tree = new ShaylaParser().parseToTree(sql);
         BindingContext bindings = new QueryBinder(catalog).bind(tree);
         SystemCostEstimator estimator = new SystemCostEstimator(catalog, new CardinalityEstimator());
         return new Setup(tree.getChildren().get(0), new OptimizationContext(bindings, catalog, catalog, estimator));
