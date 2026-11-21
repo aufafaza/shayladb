@@ -68,7 +68,7 @@ public class UpdateOperator extends QueryUnaryOperator implements IWriteOperator
         childOperator.close();
     }
 
-public IResultRow next() {
+    public IResultRow next() {
         if (done) return null;
         done = true;
         for (RowId targetId : targetRowIds) { // [CHANGED]
@@ -88,32 +88,31 @@ public IResultRow next() {
 
             if (dataAccess.canUpdateInPlace(current.rowId(), newValues)) {
                 WriteContext ctx = AccessPermission.writeWithContext(
-                        concurrencyControlManager, transactionId, item, oldValues, newValues); // [ADDED]
+                        concurrencyControlManager, transactionId, item, oldValues, newValues);
                 concurrencyControlManager.executeRelocation(transactionId, item, item, oldValues, newValues, () -> {
-                    if (!dataAccess.updateInPlace(current.rowId(), newValues, ctx.getLSN())) { // [CHANGED] Pass WAL LSN
+                    if (!dataAccess.updateInPlace(current.rowId(), newValues, ctx.getLSN())) {
                         throw new QueryExecutionException("Row no longer fits in place; retry the transaction");
                     }
                     return null;
                 });
             } else {
-                RowId destination = dataAccess.reserveRowId(tableName, newValues, 0L); // [CHANGED]
+                RowId destination = dataAccess.reserveRowId(tableName, newValues, 0L);
                 try {
                     concurrencyControlManager.executeRelocation(transactionId, item,
-                            new DataItem(tableName, destination), oldValues, newValues, () -> {
-                                dataAccess.insertAt(destination, newValues, 0L); // [CHANGED]
-                                dataAccess.deleteByRowId(current.rowId(), 0L); // [CHANGED]
+                            new DataItem(tableName, destination), oldValues, newValues, relocationLsn -> { // [CHANGED]
+                                dataAccess.insertAt(destination, newValues, relocationLsn); // [CHANGED]
+                                dataAccess.deleteByRowId(current.rowId(), relocationLsn); // [CHANGED]
                                 return null;
                             });
                 } catch (RuntimeException failure) {
                     try {
-                        dataAccess.releaseRowId(destination, 0L); // [CHANGED]
+                        dataAccess.releaseRowId(destination, 0L);
                     } catch (RuntimeException cleanupFailure) {
                         failure.addSuppressed(cleanupFailure);
                     }
                     throw failure;
                 }
             }
-            affectedRows++;
         }
         return null;
     }

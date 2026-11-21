@@ -1,6 +1,7 @@
 package mdbms.api;
 
 import java.util.List;
+import java.util.function.LongFunction;
 import java.util.function.Supplier;
 
 import mdbms.models.data.DataItem;
@@ -28,10 +29,16 @@ public interface IConcurrencyControl {
     default WriteContext requestWriteWithContext(int txId, DataItem data, Object oldVal, Object newVal) {
         return new WriteContext(txId, requestWrite(txId, data, oldVal, newVal), txId, data.tableName(), data.getRowId());
     }
-    
+
     /** Protects and logs both identities before executing the physical change. */
     default <T> T executeRelocation(int txId, DataItem oldItem, DataItem newItem,
             Object oldValues, Object newValues, Supplier<T> physicalChange) {
+        throw new UnsupportedOperationException("Transactional row updates are not supported");
+    }
+
+    // [ADDED] Overload that supplies the persisted relocation WAL LSN to the physical storage operation
+    default <T> T executeRelocation(int txId, DataItem oldItem, DataItem newItem,
+            Object oldValues, Object newValues, LongFunction<T> physicalChange) {
         throw new UnsupportedOperationException("Transactional row updates are not supported");
     }
 
