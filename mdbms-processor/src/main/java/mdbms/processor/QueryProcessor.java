@@ -13,7 +13,6 @@ import mdbms.models.query.ExecutionResult;
 import mdbms.models.query.ParsedQuery;
 import mdbms.models.schema.ColumnDefinition;
 import mdbms.processor.exception.QueryExecutionException;
-import mdbms.processor.exception.TransactionAbortedException;
 import mdbms.processor.operator.IQueryMessage;
 import mdbms.processor.operator.IQueryOperator;
 import mdbms.processor.operator.IRowProducingOperator;
@@ -75,14 +74,9 @@ public class QueryProcessor implements IQueryProcessor {
                 rows.add(row);
             }
         } catch (QueryExecutionException e) {
-            // transaksi yang dibatalkan CCM sudah dihapus CCM, abort lagi akan gagal
-            if (!(e instanceof TransactionAbortedException)) {
-                concurrencyControl.abortTransaction(txId, "Query execution failed");
-            }
             ExecutionResult executionResult = new ExecutionResult(false, null, null, 0, "Error: " + e.getMessage());
             return executionResult;
         } catch (Exception e) {
-            concurrencyControl.abortTransaction(txId, "Query execution failed");
             return new ExecutionResult(false, columns, rows, 0, "Error: " + e.getMessage());
         } finally {
             translatedQuery.close();
