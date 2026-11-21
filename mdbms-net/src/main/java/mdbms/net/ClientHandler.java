@@ -30,8 +30,7 @@ public class ClientHandler implements Runnable {
 
     @Override
     public void run() {
-        try {
-            TelnetHandler transport = new TelnetHandler(clientSocket);
+        try (TelnetHandler transport = new TelnetHandler(clientSocket)) {
             if (transport.isTelnet()) {
                 runTelnet(new CommandLineInterface(clientSocket, transport));
             } else {

@@ -10,7 +10,7 @@ import java.net.Socket;
 import java.net.SocketTimeoutException;
 import java.nio.charset.StandardCharsets;
 
-public class TelnetHandler {
+public class TelnetHandler implements AutoCloseable {
     private final class TelnetDataInputStream extends InputStream {
         @Override
         public int read() throws IOException {
@@ -86,6 +86,11 @@ public class TelnetHandler {
             pendingCodeUnit = second;
         }
         return first;
+    }
+
+    @Override
+    public void close() throws IOException {
+        characterReader.close();
     }
 
     private int readCodeUnit() throws IOException {
