@@ -4,6 +4,7 @@ import java.io.BufferedReader;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.nio.ByteBuffer;
+import java.nio.channels.ClosedByInterruptException;
 import java.nio.channels.FileChannel;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -52,6 +53,7 @@ public class WalFileHandler {
 
     private void initChannel() {
         synchronized (ioLock) {
+            boolean interrupted = Thread.interrupted();
             try {
                 if (logFilePath.getParent() != null) {
                     Files.createDirectories(logFilePath.getParent());
@@ -60,6 +62,10 @@ public class WalFileHandler {
                 this.channel = fos.getChannel();
             } catch (IOException e) {
                 throw new RuntimeException("Gagal membuka berkas WAL: " + logFilePath, e);
+            } finally {
+                if (interrupted) {
+                    Thread.currentThread().interrupt();
+                }
             }
         }
     }
@@ -76,17 +82,34 @@ public class WalFileHandler {
         byte[] bytes = serializedLine.getBytes(StandardCharsets.UTF_8);
 
         synchronized (ioLock) {
+            boolean interrupted = Thread.interrupted();
             try {
-                if (channel == null || !channel.isOpen()) {
-                    initChannel();
+                for (int attempt = 0; attempt < 2; attempt++) {
+                    try {
+                        if (channel == null || !channel.isOpen()) {
+                            initChannel();
+                        }
+                        ByteBuffer buffer = ByteBuffer.wrap(bytes);
+                        while (buffer.hasRemaining()) {
+                            channel.write(buffer);
+                        }
+                        if (record.getLsn() > lastWrittenLsn) {
+                            lastWrittenLsn = record.getLsn();
+                        }
+                        return true;
+                    } catch (ClosedByInterruptException e) {
+                        interrupted = true;
+                        Thread.interrupted();
+                        initChannel();
+                    }
                 }
-                channel.write(ByteBuffer.wrap(bytes));
-                if (record.getLsn() > lastWrittenLsn) {
-                    lastWrittenLsn = record.getLsn();
-                }
-                return true;
+                return false;
             } catch (IOException e) {
                 return false;
+            } finally {
+                if (interrupted) {
+                    Thread.currentThread().interrupt();
+                }
             }
         }
     }
@@ -95,7 +118,7 @@ public class WalFileHandler {
      * Menyimpan data log sampai LSN tertentu ke disk fisik (fsync).
      */
     public boolean flushUpTo(long lsn) {
-        if (lsn < 0 || lsn > lastWrittenLsn) {
+        if (lsn < 0) {
             return false;
         }
         if (lsn <= flushedLsn) {
@@ -103,15 +126,35 @@ public class WalFileHandler {
         }
 
         synchronized (ioLock) {
+            if (lsn > lastWrittenLsn) {
+                return false;
+            }
+            if (lsn <= flushedLsn) {
+                return true;
+            }
+            boolean interrupted = Thread.interrupted();
             try {
-                if (channel == null || !channel.isOpen()) {
-                    return false;
+                for (int attempt = 0; attempt < 2; attempt++) {
+                    try {
+                        if (channel == null || !channel.isOpen()) {
+                            return false;
+                        }
+                        channel.force(true);
+                        flushedLsn = Math.max(flushedLsn, lastWrittenLsn);
+                        return flushedLsn >= lsn;
+                    } catch (ClosedByInterruptException e) {
+                        interrupted = true;
+                        Thread.interrupted();
+                        initChannel();
+                    }
                 }
-                channel.force(true);
-                flushedLsn = Math.max(flushedLsn, lastWrittenLsn);
-                return flushedLsn >= lsn;
+                return false;
             } catch (IOException e) {
                 return false;
+            } finally {
+                if (interrupted) {
+                    Thread.currentThread().interrupt();
+                }
             }
         }
     }
