@@ -62,6 +62,26 @@ class QueryOptimizerPlanTest {
     }
 
     @Test
+    void explainShowsBothPlansWithTheirTotalCosts() {
+        String explained = optimizer().explainQuery(
+            "SELECT students.name FROM students, takes WHERE students.id = takes.id;");
+
+        String[] parts = explained.split("\nAfter optimization\n");
+        assertEquals(2, parts.length, explained);
+        assertTrue(parts[0].startsWith("Before optimization\nTotal estimated cost: "), explained);
+        assertTrue(parts[0].contains("CARTESIAN\n"), explained);
+        assertTrue(parts[1].startsWith("Total estimated cost: "), explained);
+        assertTrue(parts[1].contains("JOIN [conditions=[(students.id = takes.id)], algorithm=BLOCK_NESTED_LOOP_JOIN]"),
+            explained);
+    }
+
+    @Test
+    void explainRejectsInvalidQueriesLikeParseQuery() {
+        assertThrows(QuerySyntaxException.class, () -> optimizer().explainQuery("SELECT FROM students;"));
+        assertThrows(QuerySemanticException.class, () -> optimizer().explainQuery("SELECT * FROM missing;"));
+    }
+
+    @Test
     void preservesWritePayloadsInPlanOutput() {
         ParsedQuery parsed = optimizer().parseQuery("UPDATE students SET name = 'Alice' WHERE id = 1;");
         String plan = new QueryPlanPrinter().printPlan(parsed.queryTree());

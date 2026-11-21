@@ -72,6 +72,18 @@ public class QueryOptimizer implements IQueryOptimizer {
         return new ParsedQuery(query.rawQuery(), result, query.targetTables());
     }
 
+    /** QO-15: plan before and after optimization with their total costs, for EXPLAIN and the driver. */
+    @Override
+    public String explainQuery(String query) {
+        QueryPlanPrinter printer = new QueryPlanPrinter();
+        ParsedQuery parsed = parseQuery(query);
+        // render the original plan before optimizing so later rewrites cannot leak into it
+        String before = printer.printPlan(parsed.getQueryTree(), getCost(parsed));
+        ParsedQuery optimized = optimizeQuery(parsed);
+        String after = printer.printPlan(optimized.getQueryTree(), getCost(optimized));
+        return "Before optimization\n" + before + "\nAfter optimization\n" + after;
+    }
+
     /** Estimates the complete supplied plan and refreshes each node's local cost. */
     @Override
     public int getCost(ParsedQuery query) {
