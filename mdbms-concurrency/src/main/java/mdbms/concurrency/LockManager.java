@@ -77,13 +77,13 @@ public class LockManager {
         return AccessStatus.WAITING;
     }
 
-    synchronized Map<DataItem, ArrayList<Lock>> getLockTableSnapshot() {
+    public synchronized Map<DataItem, ArrayList<Lock>> getLockTableSnapshot() {
         Map<DataItem, ArrayList<Lock>> snapshot = new HashMap<>();
         lockTable.forEach((data, locks) -> snapshot.put(data, new ArrayList<>(locks)));
         return snapshot;
     }
 
-    synchronized Map<Transaction, PendingLock> getWaitingRequestsSnapshot() {
+    public synchronized Map<Transaction, PendingLock> getWaitingRequestsSnapshot() {
         return new HashMap<>(waitingRequests);
     }
 

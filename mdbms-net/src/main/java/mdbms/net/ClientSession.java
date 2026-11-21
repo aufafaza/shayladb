@@ -1,33 +1,53 @@
 package mdbms.net;
 
 public class ClientSession {
-    private String sessionId;
+    private final String sessionId;
     private int currentTxId;
     private boolean isTransacting;
+    private boolean disconnected;
+    private int inFlightTxId;
 
     public ClientSession(String sessionId) {
         this.sessionId = sessionId;
     }
 
-    public String getSessionId() {
+    public synchronized String getSessionId() {
         return sessionId;
     }
 
-    public int getCurrentTxId() {
+    public synchronized int getCurrentTxId() {
         return currentTxId;
     }
 
-    public void beginTransaction(int txId) {
+    public synchronized void beginTransaction(int txId) {
         currentTxId = txId;
         isTransacting = true;
+        inFlightTxId = txId;
     }
 
-    public void clearTransaction() {
+    public synchronized void clearTransaction() {
         currentTxId = 0;
         isTransacting = false;
+        inFlightTxId = 0;
     }
 
-    public boolean isTransacting() {
+    public synchronized boolean isTransacting() {
         return isTransacting;
+    }
+
+    public synchronized void markInFlight(int txId) {
+        inFlightTxId = txId;
+    }
+
+    public synchronized int getInFlightTxId() {
+        return inFlightTxId;
+    }
+
+    public synchronized boolean isDisconnected() {
+        return disconnected;
+    }
+
+    public synchronized void markDisconnected() {
+        disconnected = true;
     }
 }

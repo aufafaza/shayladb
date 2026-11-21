@@ -101,12 +101,12 @@ public class PlanTranslator {
             case CREATE_INDEX:
                 return new CreateIndexOperator(schemaCatalog, new IndexInfo(queryTree.getIndexName(),
                         queryTree.getTableName(), queryTree.getIndexColumn().getColumnName(), IndexType.BPLUS_TREE));
-            case BEGIN:
-                return new BeginOperator(txId);
-            case COMMIT:
-                return new CommitOperator(concurrencyControl, txId);
-            case ABORT:
-                return new AbortOperator(concurrencyControl, txId);
+            // case BEGIN:
+            //     return new BeginOperator(txId);
+            // case COMMIT:
+            //     return new CommitOperator(concurrencyControl, txId);
+            // case ABORT:
+            //     return new AbortOperator(concurrencyControl, txId);
             default:
                 return emptyOperator();
         }

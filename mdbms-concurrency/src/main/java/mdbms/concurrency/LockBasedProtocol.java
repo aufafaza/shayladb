@@ -57,6 +57,10 @@ public class LockBasedProtocol implements ConcurrencyProtocol {
         lockManager.releaseAllLocks(tx);
     }
 
+    public LockManager getLockManager() {
+        return lockManager;
+    }
+
     private AccessStatus handleResult(Transaction tx, AccessStatus result) {
         if (result != AccessStatus.WAITING || !deadlockHandler.detectDeadlock()) {
             return result;
