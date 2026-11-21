@@ -135,7 +135,6 @@ public class DBMS {
         servers.add(java.util.Objects.requireNonNull(server));
     }
 
-    /** Runs a quiescent checkpoint and serializes it with shutdown's final durability work. */
     public void checkpoint() {
         try {
             maintenance.lockInterruptibly();

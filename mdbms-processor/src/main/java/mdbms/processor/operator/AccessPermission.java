@@ -13,21 +13,22 @@ final class AccessPermission {
     }
 
     static void read(IConcurrencyControl concurrencyControlManager, int transactionId, DataItem item) {
-        await(transactionId, () -> concurrencyControlManager.requestRead(transactionId, item));
+        await(concurrencyControlManager, transactionId, () -> concurrencyControlManager.requestRead(transactionId, item));
     }
 
     static void write(IConcurrencyControl concurrencyControlManager, int transactionId, DataItem item,
             List<Object> oldValues, List<Object> newValues) {
-        await(transactionId, () -> concurrencyControlManager.requestWrite(transactionId, item, oldValues, newValues));
+        await(concurrencyControlManager, transactionId, () -> concurrencyControlManager.requestWrite(transactionId, item, oldValues, newValues));
     }
 
     static void lockWrite(IConcurrencyControl concurrency, int transactionId, DataItem item) {
-        await(transactionId, () -> concurrency.requestWrite(transactionId, item));
+        await(concurrency, transactionId, () -> concurrency.requestWrite(transactionId, item));
     }
 
-    private static void await(int transactionId, Supplier<AccessStatus> request) {
+    private static void await(IConcurrencyControl concurrency, int transactionId, Supplier<AccessStatus> request) {
         AccessStatus status = request.get();
         while (status == AccessStatus.WAITING) {
+            if (concurrency.isStopping() || Thread.currentThread().isInterrupted()) throw new TransactionAbortedException(transactionId);
             LockSupport.parkNanos(10_000_000);
             status = request.get();
         }

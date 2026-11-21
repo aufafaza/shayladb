@@ -71,11 +71,11 @@ public class DBMSServer {
                         return thread;
                     },
                     new ThreadPoolExecutor.AbortPolicy());
+            sessionManager = new SessionManager();
             state = State.RUNNING;
             readyLatch.countDown();
         }
 
-        sessionManager = new SessionManager();
         IOException acceptError = null;
         try {
             while (state == State.RUNNING) {
@@ -100,7 +100,7 @@ public class DBMSServer {
             }
             synchronized (this) {
                 serverSocket = null;
-                terminate(State.STOPPED);
+                terminate(workerPool.isTerminated() ? State.STOPPED : State.FAILED);
             }
             if (acceptError != null)
                 throw acceptError;
@@ -110,12 +110,26 @@ public class DBMSServer {
     public void shutdown() throws IOException {
         IOException closeError = closeActiveSockets();
         try {
-            stoppedLatch.await(shutdownTimeoutMs + 2_000L, TimeUnit.MILLISECONDS);
+            if (!stoppedLatch.await(shutdownTimeoutMs + 2_000L, TimeUnit.MILLISECONDS)
+                    || !isWorkerPoolTerminated()) {
+                throw new IOException("Server shutdown timed out; workers are still active");
+            }
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
+            throw new IOException("Interrupted while awaiting server shutdown", e);
         }
         if (closeError != null)
             throw closeError;
+    }
+
+    /** Stops accepting connections without waiting for transaction cleanup. */
+    public synchronized void stopAccepting() throws IOException {
+        if (state == State.RUNNING) {
+            state = State.STOPPING;
+            serverSocket.close();
+        } else if (state == State.NEW) {
+            terminate(State.STOPPED);
+        }
     }
 
     public boolean isRunning() {
@@ -227,10 +241,8 @@ public class DBMSServer {
             closeError = e;
         } finally {
             clientsToClose.forEach(socket -> {
-                ClientHandler handler = activeHandlers.remove(socket);
-                if (handler != null) {
-                    handler.disconnect();
-                }
+                // The owning worker resolves its transaction in finally. Never block
+                // the shutdown caller acquiring a transaction monitor here.
                 closeQuietly(socket);
             });
         }
