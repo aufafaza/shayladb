@@ -11,9 +11,11 @@ import mdbms.models.data.RowId;
 import mdbms.models.query.ExpressionTree;
 import mdbms.models.schema.ColumnDefinition;
 import mdbms.models.schema.DataType;
+import mdbms.models.transaction.WriteContext;
 import mdbms.processor.ExpressionEvaluator;
 import mdbms.processor.IResultRow;
 import mdbms.processor.ResultRow;
+import mdbms.processor.ResultTableSchema;
 import mdbms.processor.exception.QueryExecutionException;
 
 public class UpdateOperator extends QueryUnaryOperator implements IWriteOperator {
@@ -24,10 +26,11 @@ public class UpdateOperator extends QueryUnaryOperator implements IWriteOperator
     private final String tableName;
     private final String columnName;
     private final ExpressionTree newValue;
+    private ResultTableSchema resultSchema;
     private List<String> columnNames;
     private int columnIndex;
     private DataType columnType;
-    private List<IResultRow> targetRows;
+    private List<RowId> targetRowIds;
     private int affectedRows;
     private boolean done;
 
@@ -45,20 +48,22 @@ public class UpdateOperator extends QueryUnaryOperator implements IWriteOperator
     }
 
     public void open() {
+        var schema = schemaCatalog.getTableSchema(tableName);
+        resultSchema = new ResultTableSchema(schema);
+        List<ColumnDefinition> columns = schema.columns();
         done = false;
         affectedRows = 0;
-        List<ColumnDefinition> columns = schemaCatalog.getTableSchema(tableName).columns();
         columnNames = columns.stream()
                 .map(ColumnDefinition::name)
                 .toList();
         columnIndex = columnNames.indexOf(columnName);
         columnType = columns.get(columnIndex).type();
 
-        targetRows = new ArrayList<>();
+        targetRowIds = new ArrayList<>();
         childOperator.open();
         IResultRow row;
         while ((row = childOperator.next()) != null) {
-            targetRows.add(row);
+            targetRowIds.add(row.getRowId());
         }
         childOperator.close();
     }
@@ -66,12 +71,17 @@ public class UpdateOperator extends QueryUnaryOperator implements IWriteOperator
     public IResultRow next() {
         if (done) return null;
         done = true;
-        for (IResultRow row : targetRows) {
-            DataItem item = new DataItem(tableName, row.getRowId());
+        for (RowId targetId : targetRowIds) { // [CHANGED]
+            DataItem item = new DataItem(tableName, targetId);
+            // [ADDED] Acquire write protection BEFORE re-reading row and computing newValues
             AccessPermission.lockWrite(concurrencyControlManager, transactionId, item);
-            Row current = dataAccess.fetchByRowId(row.getRowId());
+
+            Row current = dataAccess.fetchByRowId(targetId); // [CHANGED]
+            if (current == null || current.values() == null || current.values().isEmpty()) { // [ADDED]
+                continue;
+            }
             List<Object> oldValues = new ArrayList<>(current.values());
-            ResultRow protectedRow = new ResultRow(row.getSchema(), oldValues);
+            ResultRow protectedRow = new ResultRow(resultSchema, oldValues); // [CHANGED]
             protectedRow.setRowId(current.rowId());
             List<Object> newValues = new ArrayList<>(oldValues);
             newValues.set(columnIndex, ColumnTypes.toColumnType(ExpressionEvaluator.evaluate(newValue, protectedRow), columnType));
@@ -79,27 +89,27 @@ public class UpdateOperator extends QueryUnaryOperator implements IWriteOperator
             dataAccess.checkPrimaryKey(tableName, newValues, current.rowId());
 
             if (dataAccess.canUpdateInPlace(current.rowId(), newValues)) {
+                WriteContext ctx = AccessPermission.writeWithContext(
+                        concurrencyControlManager, transactionId, item, oldValues, newValues);
                 concurrencyControlManager.executeRelocation(transactionId, item, item, oldValues, newValues, () -> {
-                    if (!dataAccess.updateInPlace(current.rowId(), newValues)) {
-                        // Abort instead of committing an UPDATE log whose row would silently move.
+                    if (!dataAccess.updateInPlace(current.rowId(), newValues, ctx.getLSN())) {
                         throw new QueryExecutionException("Row no longer fits in place; retry the transaction");
                     }
                     return null;
                 });
             } else {
-                RowId destination = dataAccess.reserveRowId(tableName, newValues);
+                RowId destination = dataAccess.reserveRowId(tableName, newValues, 0L);
                 try {
                     concurrencyControlManager.executeRelocation(transactionId, item,
-                            new DataItem(tableName, destination), oldValues, newValues, () -> {
-                                dataAccess.insertAt(destination, newValues);
-                                dataAccess.deleteByRowId(current.rowId());
+                            new DataItem(tableName, destination), oldValues, newValues, relocationLsn -> { // [CHANGED]
+                                dataAccess.insertAt(destination, newValues, relocationLsn); // [CHANGED]
+                                dataAccess.deleteByRowId(current.rowId(), relocationLsn); // [CHANGED]
                                 return null;
                             });
                 } catch (RuntimeException failure) {
                     try {
-                        dataAccess.releaseRowId(destination);
+                        dataAccess.releaseRowId(destination, 0L);
                     } catch (RuntimeException cleanupFailure) {
-                        // Undo may already have released it. Preserve any other cleanup error as well.
                         failure.addSuppressed(cleanupFailure);
                     }
                     throw failure;

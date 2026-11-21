@@ -9,6 +9,7 @@ import mdbms.models.data.DataItem;
 import mdbms.models.data.RowId;
 import mdbms.models.query.ExpressionTree;
 import mdbms.models.schema.ColumnDefinition;
+import mdbms.models.transaction.WriteContext;
 import mdbms.processor.ExpressionEvaluator;
 import mdbms.processor.IResultRow;
 
@@ -46,13 +47,16 @@ public class InsertOperator implements IQueryOperator, IWriteOperator {
         // primary key duplikat ditolak sebelum ada slot yang dipesan atau log yang ditulis
         dataAccess.checkPrimaryKey(tableName, rowValues, null);
         RowId rowId = dataAccess.reserveRowId(tableName, rowValues);
+        WriteContext ctx;
         try {
-            AccessPermission.write(concurrencyControlManager, transactionId, new DataItem(tableName, rowId), null, rowValues);
+            DataItem item = new DataItem(tableName, rowId);
+            AccessPermission.lockWrite(concurrencyControlManager, transactionId, item);
+            ctx = AccessPermission.writeWithContext(concurrencyControlManager, transactionId, item, null, rowValues);
         } catch (RuntimeException e) {
             dataAccess.releaseRowId(rowId);
             throw e;
         }
-        dataAccess.insertAt(rowId, rowValues);
+        dataAccess.insert(rowId, rowValues, ctx.getLsn());
         affectedRows = 1;
         return null;
     }
