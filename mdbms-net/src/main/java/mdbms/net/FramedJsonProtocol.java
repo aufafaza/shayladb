@@ -17,6 +17,14 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 
+import com.fasterxml.jackson.core.JsonFactory;
+import com.fasterxml.jackson.core.JsonParser;
+import com.fasterxml.jackson.core.StreamReadFeature;
+import com.fasterxml.jackson.databind.DeserializationFeature;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ArrayNode;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import mdbms.models.query.ExecutionResult;
 
 /**
@@ -32,6 +40,11 @@ final class FramedJsonProtocol {
         thread.setDaemon(true);
         return thread;
     });
+    private static final ObjectMapper JSON = new ObjectMapper(
+            JsonFactory.builder()
+                    .enable(StreamReadFeature.STRICT_DUPLICATE_DETECTION)
+                    .build())
+            .enable(DeserializationFeature.FAIL_ON_TRAILING_TOKENS);
 
     private final Socket socket;
     private final InputStream input;
@@ -62,21 +75,19 @@ final class FramedJsonProtocol {
 
         byte[] payload = new byte[(int) length];
         readFully(payload, 0, payload.length, deadline);
-        return JsonCodec.parseSql(decodeUtf8(payload));
+        return parseSql(decodeUtf8(payload));
     }
 
     void writeResponse(Response response) throws IOException {
         byte[] payload;
         try {
-            payload = JsonCodec.encode(response).getBytes(StandardCharsets.UTF_8);
+            payload = encode(response);
         } catch (IllegalArgumentException e) {
-            payload = JsonCodec.encode(Response.error("SERIALIZATION_ERROR", "Could not encode query result", 0))
-                    .getBytes(StandardCharsets.UTF_8);
+            payload = encode(Response.error("SERIALIZATION_ERROR", "Could not encode query result", 0));
         }
         if (payload.length > MAX_FRAME_BYTES) {
-            payload = JsonCodec.encode(Response.error("RESPONSE_TOO_LARGE",
-                    "Response frame exceeds the " + MAX_FRAME_BYTES + " byte limit", 0))
-                    .getBytes(StandardCharsets.UTF_8);
+            payload = encode(Response.error("RESPONSE_TOO_LARGE",
+                    "Response frame exceeds the " + MAX_FRAME_BYTES + " byte limit", 0));
         }
 
         ScheduledFuture<?> closeOnSlowWrite = WRITE_WATCHDOG.schedule(this::closeQuietly,
@@ -201,260 +212,109 @@ final class FramedJsonProtocol {
         }
     }
 
-    /** A deliberately small JSON codec for the fixed protocol schema. */
-    private static final class JsonCodec {
-        static String parseSql(String json) throws ProtocolException {
-            JsonCursor cursor = new JsonCursor(json);
-            cursor.skipWhitespace();
-            cursor.expect('{');
-            boolean hasSql = false;
-            String sql = null;
-            cursor.skipWhitespace();
-            if (!cursor.consume('}')) {
-                do {
-                    cursor.skipWhitespace();
-                    String key = cursor.readString();
-                    cursor.skipWhitespace();
-                    cursor.expect(':');
-                    cursor.skipWhitespace();
-                    if ("sql".equals(key)) {
-                        if (hasSql) {
-                            throw cursor.error("Request contains duplicate sql fields");
-                        }
-                        sql = cursor.readString();
-                        hasSql = true;
-                    } else {
-                        cursor.skipValue();
-                    }
-                    cursor.skipWhitespace();
-                } while (cursor.consume(','));
-                cursor.expect('}');
+    private static String parseSql(String json) throws ProtocolException {
+        try (JsonParser parser = JSON.createParser(json)) {
+            JsonNode root = JSON.readTree(parser);
+            if (root == null || !root.isObject()) {
+                throw new ProtocolException("INVALID_REQUEST", "Request must be a JSON object", false);
             }
-            cursor.skipWhitespace();
-            if (!cursor.atEnd()) {
-                throw cursor.error("Unexpected data after request object");
+            JsonNode sql = root.get("sql");
+            if (sql == null || !sql.isTextual() || sql.textValue().isBlank()) {
+                throw new ProtocolException("INVALID_REQUEST",
+                        "Request must contain a non-empty string sql field", false);
             }
-            if (!hasSql || sql == null || sql.isBlank()) {
-                throw new ProtocolException("INVALID_REQUEST", "Request must contain a non-empty string sql field", false);
+            if (parser.nextToken() != null) {
+                throw new ProtocolException("INVALID_REQUEST", "Unexpected data after request object", false);
             }
-            return sql;
+            return sql.textValue();
+        } catch (ProtocolException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new ProtocolException("INVALID_REQUEST",
+                    "Malformed JSON request: " + messageOrDefault(e.getMessage(), "invalid JSON"), false);
         }
+    }
 
-        static String encode(Response response) {
-            StringBuilder json = new StringBuilder("{");
-            json.append("\"status\":");
-            string(json, response.status());
-            json.append(",\"elapsedMs\":").append(response.elapsedMs());
-            switch (response.status()) {
-                case "RESULT" -> {
-                    json.append(",\"columns\":");
-                    strings(json, response.columns());
-                    json.append(",\"rows\":");
-                    rows(json, response.rows());
-                    optionalField(json, "message", response.message());
+    private static byte[] encode(Response response) {
+        ObjectNode json = JSON.createObjectNode();
+        json.put("status", response.status());
+        json.put("elapsedMs", response.elapsedMs());
+
+        switch (response.status()) {
+            case "RESULT" -> {
+                if (response.columns() == null || response.rows() == null) {
+                    throw new IllegalArgumentException("RESULT fields must not be null");
                 }
-                case "EMPTY" -> {
-                    json.append(",\"columns\":[]");
-                    json.append(",\"rows\":[]");
+                ArrayNode columns = json.putArray("columns");
+                for (String column : response.columns()) {
+                    if (column == null) throw new IllegalArgumentException("Column names must not be null");
+                    columns.add(column);
                 }
-                case "WRITE" -> {
-                    json.append(",\"affectedRows\":").append(response.affectedRows());
-                    optionalField(json, "message", response.message());
-                }
-                case "OK" -> optionalField(json, "message", response.message());
-                case "ERROR" -> {
-                    field(json, "code", response.code());
-                    field(json, "message", response.message());
-                }
-                default -> throw new IllegalArgumentException("Unknown response status");
-            }
-            return json.append('}').toString();
-        }
-
-        private static void rows(StringBuilder json, List<List<Object>> rows) {
-            json.append('[');
-            for (int i = 0; i < rows.size(); i++) {
-                if (i > 0) json.append(',');
-                List<Object> row = rows.get(i);
-                if (row == null) throw new IllegalArgumentException("Rows must not contain null row lists");
-                json.append('[');
-                for (int j = 0; j < row.size(); j++) {
-                    if (j > 0) json.append(',');
-                    value(json, row.get(j));
-                }
-                json.append(']');
-            }
-            json.append(']');
-        }
-
-        private static void strings(StringBuilder json, List<String> values) {
-            json.append('[');
-            for (int i = 0; i < values.size(); i++) {
-                if (i > 0) json.append(',');
-                string(json, values.get(i));
-            }
-            json.append(']');
-        }
-
-        private static void value(StringBuilder json, Object value) {
-            if (value == null) {
-                json.append("null");
-            } else if (value instanceof String string) {
-                string(json, string);
-            } else if (value instanceof Boolean) {
-                json.append(value);
-            } else if (value instanceof Byte || value instanceof Short || value instanceof Integer || value instanceof Long) {
-                json.append(value);
-            } else if (value instanceof Float number) {
-                if (!Float.isFinite(number)) throw new IllegalArgumentException("Non-finite number");
-                json.append(number);
-            } else if (value instanceof Double number) {
-                if (!Double.isFinite(number)) throw new IllegalArgumentException("Non-finite number");
-                json.append(number);
-            } else {
-                throw new IllegalArgumentException("Unsupported result value type: " + value.getClass().getName());
-            }
-        }
-
-        private static void optionalField(StringBuilder json, String key, String value) {
-            if (value != null) field(json, key, value);
-        }
-
-        private static void field(StringBuilder json, String key, String value) {
-            json.append(',');
-            string(json, key);
-            json.append(':');
-            string(json, value == null ? "" : value);
-        }
-
-        private static void string(StringBuilder json, String value) {
-            if (value == null) throw new IllegalArgumentException("Protocol strings must not be null");
-            json.append('"');
-            for (int i = 0; i < value.length(); i++) {
-                char ch = value.charAt(i);
-                switch (ch) {
-                    case '"' -> json.append("\\\"");
-                    case '\\' -> json.append("\\\\");
-                    case '\b' -> json.append("\\b");
-                    case '\f' -> json.append("\\f");
-                    case '\n' -> json.append("\\n");
-                    case '\r' -> json.append("\\r");
-                    case '\t' -> json.append("\\t");
-                    default -> {
-                        if (ch < 0x20) json.append(String.format("\\u%04x", (int) ch));
-                        else json.append(ch);
+                ArrayNode rows = json.putArray("rows");
+                for (List<Object> row : response.rows()) {
+                    if (row == null) throw new IllegalArgumentException("Rows must not contain null row lists");
+                    ArrayNode encodedRow = rows.addArray();
+                    for (Object value : row) {
+                        addValue(encodedRow, value);
                     }
                 }
+                optionalField(json, "message", response.message());
             }
-            json.append('"');
+            case "EMPTY" -> {
+                json.putArray("columns");
+                json.putArray("rows");
+            }
+            case "WRITE" -> {
+                if (response.affectedRows() == null) {
+                    throw new IllegalArgumentException("WRITE affectedRows must not be null");
+                }
+                json.put("affectedRows", response.affectedRows());
+                optionalField(json, "message", response.message());
+            }
+            case "OK" -> optionalField(json, "message", response.message());
+            case "ERROR" -> {
+                json.put("code", response.code());
+                json.put("message", messageOrDefault(response.message(), ""));
+            }
+            default -> throw new IllegalArgumentException("Unknown response status");
         }
 
-        private static final class JsonCursor {
-            private final String text;
-            private int index;
+        try {
+            return JSON.writeValueAsBytes(json);
+        } catch (Exception e) {
+            throw new IllegalArgumentException("Could not serialize response", e);
+        }
+    }
 
-            JsonCursor(String text) { this.text = text; }
+    private static void optionalField(ObjectNode json, String key, String value) {
+        if (value != null) {
+            json.put(key, value);
+        }
+    }
 
-            boolean atEnd() { return index == text.length(); }
-
-            void skipWhitespace() {
-                while (!atEnd() && Character.isWhitespace(text.charAt(index))) index++;
-            }
-
-            boolean consume(char expected) {
-                if (!atEnd() && text.charAt(index) == expected) {
-                    index++;
-                    return true;
-                }
-                return false;
-            }
-
-            void expect(char expected) throws ProtocolException {
-                if (!consume(expected)) throw error("Expected '" + expected + "'");
-            }
-
-            String readString() throws ProtocolException {
-                expect('"');
-                StringBuilder value = new StringBuilder();
-                while (!atEnd()) {
-                    char ch = text.charAt(index++);
-                    if (ch == '"') return value.toString();
-                    if (ch < 0x20) throw error("Control character in JSON string");
-                    if (ch != '\\') {
-                        value.append(ch);
-                        continue;
-                    }
-                    if (atEnd()) throw error("Incomplete JSON escape");
-                    char escaped = text.charAt(index++);
-                    switch (escaped) {
-                        case '"', '\\', '/' -> value.append(escaped);
-                        case 'b' -> value.append('\b');
-                        case 'f' -> value.append('\f');
-                        case 'n' -> value.append('\n');
-                        case 'r' -> value.append('\r');
-                        case 't' -> value.append('\t');
-                        case 'u' -> value.append((char) readHex());
-                        default -> throw error("Invalid JSON escape");
-                    }
-                }
-                throw error("Unterminated JSON string");
-            }
-
-            void skipValue() throws ProtocolException {
-                skipWhitespace();
-                if (atEnd()) throw error("Missing JSON value");
-                char ch = text.charAt(index);
-                if (ch == '"') { readString(); return; }
-                if (ch == '{') {
-                    index++;
-                    skipWhitespace();
-                    if (consume('}')) return;
-                    do {
-                        skipWhitespace();
-                        readString();
-                        skipWhitespace();
-                        expect(':');
-                        skipValue();
-                        skipWhitespace();
-                    } while (consume(','));
-                    expect('}');
-                    return;
-                }
-                if (ch == '[') {
-                    index++;
-                    skipWhitespace();
-                    if (consume(']')) return;
-                    do {
-                        skipValue();
-                        skipWhitespace();
-                    } while (consume(','));
-                    expect(']');
-                    return;
-                }
-                int start = index;
-                while (!atEnd() && " \t\r\n,]}".indexOf(text.charAt(index)) < 0) index++;
-                if (start == index) throw error("Invalid JSON value");
-                String literal = text.substring(start, index);
-                if (!(literal.equals("true") || literal.equals("false") || literal.equals("null")
-                        || literal.matches("-?(0|[1-9][0-9]*)(\\.[0-9]+)?([eE][+-]?[0-9]+)?"))) {
-                    throw error("Invalid JSON value");
-                }
-            }
-
-            int readHex() throws ProtocolException {
-                if (index + 4 > text.length()) throw error("Incomplete unicode escape");
-                int value = 0;
-                for (int i = 0; i < 4; i++) {
-                    int digit = Character.digit(text.charAt(index++), 16);
-                    if (digit < 0) throw error("Invalid unicode escape");
-                    value = (value << 4) | digit;
-                }
-                return value;
-            }
-
-            ProtocolException error(String message) {
-                return new ProtocolException("INVALID_REQUEST", message, false);
-            }
+    private static void addValue(ArrayNode row, Object value) {
+        if (value == null) {
+            row.addNull();
+        } else if (value instanceof String string) {
+            row.add(string);
+        } else if (value instanceof Boolean bool) {
+            row.add(bool);
+        } else if (value instanceof Byte number) {
+            row.add(number);
+        } else if (value instanceof Short number) {
+            row.add(number);
+        } else if (value instanceof Integer number) {
+            row.add(number);
+        } else if (value instanceof Long number) {
+            row.add(number);
+        } else if (value instanceof Float number) {
+            if (!Float.isFinite(number)) throw new IllegalArgumentException("Non-finite number");
+            row.add(number);
+        } else if (value instanceof Double number) {
+            if (!Double.isFinite(number)) throw new IllegalArgumentException("Non-finite number");
+            row.add(number);
+        } else {
+            throw new IllegalArgumentException("Unsupported result value type: " + value.getClass().getName());
         }
     }
 }
