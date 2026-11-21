@@ -13,13 +13,10 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 import java.io.IOException;
-import java.lang.reflect.Field;
-import java.lang.reflect.Method;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.util.LinkedHashSet;
-import java.util.Map;
 
 public class CheckpointManager {
     private final LogManager logManager;
@@ -41,117 +38,142 @@ public class CheckpointManager {
     }
 
     public RecoveryResult executeCheckpoint(List<Integer> activeTxIds) {
-        logManager.flushUpTo(logManager.getCurrentLsn() - 1);
-        
-        if (storageManager != null) {
-            storageManager.flushBuffer();
+        if (storageManager == null) {
+            return new RecoveryResult(false, -1L, logManager.getMaxTxId(), "CHECKPOINT: StorageManager tidak tersedia");
         }
-        
-        CheckpointLogRecord cp = logManager.appendCheckpointLog(activeTxIds);
-        
-        return new RecoveryResult(
-            true, 
-            cp.getLsn(), 
-            logManager.getMaxTxId(), 
-            "Checkpoint created successfully"
-        );
+        try {
+            long targetLsn = logManager.getCurrentLsn() - 1;
+            if (targetLsn > 0 && !logManager.flushUpTo(targetLsn)) {
+                return new RecoveryResult(false, -1L, logManager.getMaxTxId(), "CHECKPOINT: Gagal flush WAL sebelum flush buffer");
+            }
+            storageManager.flushBuffer();
+            CheckpointLogRecord cp = logManager.appendCheckpointLog(activeTxIds);
+            return new RecoveryResult(
+                true,
+                cp.getLsn(),
+                logManager.getMaxTxId(),
+                "Checkpoint created successfully"
+            );
+        } catch (RuntimeException e) {
+            return new RecoveryResult(false, -1L, logManager.getMaxTxId(), "CHECKPOINT: " + e.getMessage());
+        }
     }
 
     public RecoveryResult recoverToPointInTime(Instant targetTimestamp) {
-        restoreSnapshot(); 
-
-        List<LogRecord> allLogs = logManager.readLogs(null);
-        
-        Set<Integer> committedTxs = new HashSet<>();
-        List<DataChangeLogRecord> recordsToRedo = new ArrayList<>();
-        long lastProcessedLsn = -1;
-
-        for (LogRecord record : allLogs) {
-            if (record.getTimestamp().isAfter(targetTimestamp)) {
-                break;
-            }
-
-            if (record.getType() == LogType.COMMIT) {
-                committedTxs.add(record.getTxId());
-            }
-            
-            if (record instanceof DataChangeLogRecord dataRecord) {
-                recordsToRedo.add(dataRecord);
-            }
-            lastProcessedLsn = record.getLsn();
+        if (storageManager == null || recordApplier == null || recordApplier.getDataAccess() == null) {
+            return new RecoveryResult(false, -1L, logManager.getMaxTxId(), "PITR: Layanan storage tidak tersedia");
         }
+        try {
+            restoreSnapshot();
+            List<LogRecord> allLogs = logManager.readLogs(null);
+            Set<Integer> committedTxs = new HashSet<>();
+            List<DataChangeLogRecord> recordsToRedo = new ArrayList<>();
+            long lastProcessedLsn = -1;
 
-        for (DataChangeLogRecord record : recordsToRedo) {
-            if (committedTxs.contains(record.getTxId())) {
-                recordApplier.redo(record);
+            for (LogRecord record : allLogs) {
+                if (record.getTimestamp().isAfter(targetTimestamp)) {
+                    break;
+                }
+                if (record.getType() == LogType.COMMIT) {
+                    committedTxs.add(record.getTxId());
+                }
+                if (record instanceof DataChangeLogRecord dataRecord) {
+                    recordsToRedo.add(dataRecord);
+                }
+                lastProcessedLsn = record.getLsn();
             }
-        }
 
-        if (storageManager != null) {
+            for (DataChangeLogRecord record : recordsToRedo) {
+                if (committedTxs.contains(record.getTxId()) && !recordApplier.redo(record)) {
+                    return new RecoveryResult(false, record.getLsn(), logManager.getMaxTxId(),
+                        "PITR: Gagal redo LSN=" + record.getLsn());
+                }
+            }
+
             storageManager.flushBuffer();
-        }
-        truncateLogAfter(lastProcessedLsn);
+            storageManager.rebuildIndexesAndReloadCatalog();
+            truncateLogAfter(lastProcessedLsn);
 
-        return new RecoveryResult(
-            true, 
-            lastProcessedLsn, 
-            logManager.getMaxTxId(), 
-            "PITR completed up to: " + targetTimestamp
-        );
+            return new RecoveryResult(true, lastProcessedLsn, logManager.getMaxTxId(),
+                "PITR completed up to: " + targetTimestamp);
+        } catch (RuntimeException e) {
+            return new RecoveryResult(false, -1L, logManager.getMaxTxId(), "PITR gagal: " + e.getMessage());
+        }
     }
 
     public RecoveryResult recoverToTransaction(int targetTxId) {
-        restoreSnapshot();
-
-        List<LogRecord> allLogs = logManager.readLogs(null);
-        Set<Integer> committedTxs = new HashSet<>();
-        List<DataChangeLogRecord> recordsToRedo = new ArrayList<>();
-        
-        long targetCommitLsn = -1;
-
-        for (LogRecord record : allLogs) {
-            if (record.getTxId() == targetTxId && record.getType() == LogType.COMMIT) {
-                targetCommitLsn = record.getLsn();
-                break;
-            }
-        }
-        
-        if (targetCommitLsn == -1) {
-            return new RecoveryResult(false, -1, logManager.getMaxTxId(), "Target transaction did not commit");
+        if (storageManager == null || recordApplier == null || recordApplier.getDataAccess() == null) {
+            return new RecoveryResult(
+                false,
+                -1L,
+                logManager.getMaxTxId(),
+                "Recovery to transaction: Layanan storage tidak tersedia"
+            );
         }
 
-        long lastProcessedLsn = -1;
+        try {
+            List<LogRecord> allLogs = logManager.readLogs(null);
+            long targetCommitLsn = -1;
 
-        for (LogRecord record : allLogs) {
-            if (record.getLsn() > targetCommitLsn) {
-                break;
+            for (LogRecord record : allLogs) {
+                if (record.getTxId() == targetTxId && record.getType() == LogType.COMMIT) {
+                    targetCommitLsn = record.getLsn();
+                    break;
+                }
             }
-            if (record.getType() == LogType.COMMIT) {
-                committedTxs.add(record.getTxId());
-            }
-            if (record instanceof DataChangeLogRecord dataRecord) {
-                recordsToRedo.add(dataRecord);
-            }
-            lastProcessedLsn = record.getLsn();
-        }
 
-        for (DataChangeLogRecord record : recordsToRedo) {
-            if (committedTxs.contains(record.getTxId())) {
-                recordApplier.redo(record);
+            if (targetCommitLsn == -1) {
+                return new RecoveryResult(false, -1, logManager.getMaxTxId(), "Target transaction did not commit");
             }
-        }
 
-        if (storageManager != null) {
+            restoreSnapshot();
+
+            Set<Integer> committedTxs = new HashSet<>();
+            List<DataChangeLogRecord> recordsToRedo = new ArrayList<>();
+            long lastProcessedLsn = -1;
+
+            for (LogRecord record : allLogs) {
+                if (record.getLsn() > targetCommitLsn) {
+                    break;
+                }
+                if (record.getType() == LogType.COMMIT) {
+                    committedTxs.add(record.getTxId());
+                }
+                if (record instanceof DataChangeLogRecord dataRecord) {
+                    recordsToRedo.add(dataRecord);
+                }
+                lastProcessedLsn = record.getLsn();
+            }
+
+            for (DataChangeLogRecord record : recordsToRedo) {
+                if (committedTxs.contains(record.getTxId()) && !recordApplier.redo(record)) {
+                    return new RecoveryResult(
+                        false,
+                        record.getLsn(),
+                        logManager.getMaxTxId(),
+                        "Recovery to transaction: Gagal redo LSN=" + record.getLsn()
+                    );
+                }
+            }
+
             storageManager.flushBuffer();
-        }
-        truncateLogAfter(lastProcessedLsn);
+            storageManager.rebuildIndexesAndReloadCatalog();
+            truncateLogAfter(lastProcessedLsn);
 
-        return new RecoveryResult(
-            true, 
-            lastProcessedLsn, 
-            logManager.getMaxTxId(), 
-            "Recovery completed up to transaction " + targetTxId
-        );
+            return new RecoveryResult(
+                true,
+                lastProcessedLsn,
+                logManager.getMaxTxId(),
+                "Recovery completed up to transaction " + targetTxId
+            );
+        } catch (RuntimeException e) {
+            return new RecoveryResult(
+                false,
+                -1L,
+                logManager.getMaxTxId(),
+                "Recovery to transaction gagal: " + e.getMessage()
+            );
+        }
     }
 
     public CheckpointLogRecord findLastCompletedCheckpoint() {
@@ -212,11 +234,14 @@ public class CheckpointManager {
     }
 
     private void restoreSnapshot() {
-        if (snapshotPath == null || dataDirectory == null) return;
+        if (snapshotPath == null || dataDirectory == null) {
+            throw new IllegalStateException("Path snapshot atau data directory tidak dikonfigurasi");
+        }
         Path snapDir = Path.of(snapshotPath).toAbsolutePath().normalize();
         Path destDir = Path.of(dataDirectory).toAbsolutePath().normalize();
-        if (!Files.exists(snapDir)) return;
-
+        if (!Files.exists(snapDir)) {
+            throw new IllegalStateException("Direktori snapshot tidak ditemukan: " + snapDir);
+        }
         Set<String> restoredFiles = new HashSet<>();
         try {
             Files.createDirectories(destDir);
@@ -235,24 +260,7 @@ public class CheckpointManager {
             }
 
             if (storageManager != null) {
-                Class<?> smClass = storageManager.getClass();
-                Field bpField = smClass.getDeclaredField("bufferPool");
-                bpField.setAccessible(true);
-                Object bufferPool = bpField.get(storageManager);
-                Method discardMethod = bufferPool.getClass().getDeclaredMethod("discardFile", String.class);
-                discardMethod.setAccessible(true);
-                for (String fileName : restoredFiles) {
-                    discardMethod.invoke(bufferPool, fileName);
-                }
-
-                Field tablesField = smClass.getDeclaredField("tables");
-                tablesField.setAccessible(true);
-                if (tablesField.get(storageManager) instanceof Map<?, ?> tablesMap) {
-                    for (Object tableName : new ArrayList<>(tablesMap.keySet())) {
-                        discardMethod.invoke(bufferPool, tableName + ".tbl");
-                    }
-                    tablesMap.clear();
-                }
+                storageManager.invalidateAndReload(restoredFiles);
             }
         } catch (Exception e) {
             throw new RuntimeException("Gagal melakukan restore snapshot", e);
