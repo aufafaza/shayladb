@@ -16,6 +16,7 @@ import mdbms.processor.exception.QueryExecutionException;
 import mdbms.processor.exception.TransactionAbortedException;
 import mdbms.processor.operator.IQueryMessage;
 import mdbms.processor.operator.IQueryOperator;
+import mdbms.processor.operator.IRowProducingOperator;
 import mdbms.processor.operator.IWriteOperator;
 
 public class QueryProcessor implements IQueryProcessor {
@@ -46,6 +47,15 @@ public class QueryProcessor implements IQueryProcessor {
             translatedQuery.open();
             boolean firstRow = true;
             ResultTableSchema tableSchema = null;
+            if (translatedQuery instanceof IRowProducingOperator) {
+                tableSchema = ((IRowProducingOperator) translatedQuery).getSchema();
+                if (tableSchema != null) {
+                    for (ColumnDefinition definition : tableSchema.getColumns()) {
+                        columns.add(definition.name());
+                    }
+                    firstRow = false;
+                }
+            }
             IResultRow resultRow;
             while ((resultRow = translatedQuery.next()) != null) {
                 // Get the schema

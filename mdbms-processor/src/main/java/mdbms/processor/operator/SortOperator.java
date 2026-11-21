@@ -4,8 +4,9 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
 import mdbms.processor.IResultRow;
+import mdbms.processor.ResultTableSchema;
 
-public class SortOperator extends QueryUnaryOperator {
+public class SortOperator extends QueryUnaryOperator implements IRowProducingOperator {
     public record SortKey(String tableName, String columnName, boolean ascending) {
         public SortKey {
             Objects.requireNonNull(columnName, "Nama kolom wajib diisi");
@@ -26,6 +27,14 @@ public class SortOperator extends QueryUnaryOperator {
         Objects.requireNonNull(sortKeys, "Kolom pengurutan wajib diisi");
         if (sortKeys.isEmpty()) throw new IllegalArgumentException("Kolom pengurutan kosong");
         this.sortKeys = List.copyOf(sortKeys);
+    }
+
+    @Override
+    public ResultTableSchema getSchema() {
+        if (childOperator instanceof IRowProducingOperator) {
+            return ((IRowProducingOperator) childOperator).getSchema();
+        }
+        return null;
     }
 
     @Override
