@@ -12,12 +12,17 @@ import java.util.Queue;
 import mdbms.models.query.ExecutionResult;
 
 public class CommandLineInterface {
+    static final int MAX_TELNET_QUERY_BYTES = FramedJsonProtocol.MAX_FRAME_BYTES;
+
     private PrintWriter writer;
     private TelnetHandler telnetHandler;
+    private final int maxTelnetQueryBytes;
 
     private boolean lastWasCR = false;
     StringBuilder inputBuffer = new StringBuilder();
     StringBuilder queryBuffer = new StringBuilder();
+    private int queryByteLength = 0;
+    private int inputByteLength = 0;
     Queue<String> queuedQuery = new ArrayDeque<>();
 
     // Queue string state
@@ -26,12 +31,17 @@ public class CommandLineInterface {
     int stringDelimiter = '\'';
 
     public CommandLineInterface(Socket socket) throws IOException {
-        this(socket, new TelnetHandler(socket));
+        this(socket, new TelnetHandler(socket), MAX_TELNET_QUERY_BYTES);
+    }
+    
+    CommandLineInterface(Socket socket, TelnetHandler telnetHandler) throws IOException {
+        this(socket, telnetHandler, MAX_TELNET_QUERY_BYTES);
     }
 
-    CommandLineInterface(Socket socket, TelnetHandler telnetHandler) throws IOException {
+    CommandLineInterface(Socket socket, TelnetHandler telnetHandler, int maxTelnetQueryBytes) throws IOException {
         this.writer = new PrintWriter(socket.getOutputStream(), false, StandardCharsets.UTF_8);
         this.telnetHandler = telnetHandler;
+        this.maxTelnetQueryBytes = maxTelnetQueryBytes;
     }
 
     public String readQuery() throws IOException {
@@ -171,6 +181,8 @@ public class CommandLineInterface {
 
                 writeToTelnet('\n');
                 inputBuffer.append('\n');
+                inputByteLength++;
+                ensureTelnetQuerySize();
 
                 flushBuffer();
                 if (!queuedQuery.isEmpty()) {
@@ -183,7 +195,7 @@ public class CommandLineInterface {
             // Backspace
             if (ch == '\b' || ch == 127) {
                 if (inputBuffer.length() > 0) {
-                    deleteLastCodePoint(inputBuffer);
+                    inputByteLength -= deleteLastCodePoint(inputBuffer);
                     writeToTelnet("\b \b");
                 }
                 continue;
@@ -191,6 +203,8 @@ public class CommandLineInterface {
 
             if (!Character.isISOControl(ch)) {
                 inputBuffer.appendCodePoint(ch);
+                inputByteLength += utf8ByteLength(ch);
+                ensureTelnetQuerySize();
                 writeToTelnet(ch);
             }
         }
@@ -202,17 +216,28 @@ public class CommandLineInterface {
         return null;
     }
 
-    private void deleteLastCodePoint(StringBuilder buffer) {
+    private int deleteLastCodePoint(StringBuilder buffer) {
         if (buffer.length() > 0) {
             int start = buffer.offsetByCodePoints(buffer.length(), -1);
+            int codePoint = buffer.codePointAt(start);
             buffer.delete(start, buffer.length());
+            return utf8ByteLength(codePoint);
         }
+        return 0;
     }
 
     private void flushBuffer() {
-        for (int i = 0; i < inputBuffer.length(); i++) {
-            char ch = inputBuffer.charAt(i);
-            queryBuffer.append(ch);
+        for (int i = 0; i < inputBuffer.length();) {
+            int codePoint = inputBuffer.codePointAt(i);
+            int charCount = Character.charCount(codePoint);
+            char ch = (char) codePoint;
+            if (charCount == 1) {
+                queryBuffer.append((char) codePoint);
+            } else {
+                queryBuffer.appendCodePoint(codePoint);
+            }
+            queryByteLength += utf8ByteLength(codePoint);
+            i += charCount;
             if (isEscaped) {
                 isEscaped = false;
                 continue;
@@ -227,9 +252,31 @@ public class CommandLineInterface {
             } else if (!isInsideString && ch == ';') {
                 queuedQuery.add(queryBuffer.toString());
                 queryBuffer.setLength(0);
+                queryByteLength = 0;
             }
         }
         inputBuffer.setLength(0);
+        inputByteLength = 0;
+    }
+
+    private void ensureTelnetQuerySize() throws ProtocolException {
+        if (queryByteLength + inputByteLength > maxTelnetQueryBytes) {
+            throw new ProtocolException("REQUEST_TOO_LARGE",
+                    "Telnet query exceeds the " + maxTelnetQueryBytes + " byte limit", true);
+        }
+    }
+
+    private int utf8ByteLength(int codePoint) {
+        if (codePoint <= 0x7f) {
+            return 1;
+        }
+        if (codePoint <= 0x7ff) {
+            return 2;
+        }
+        if (codePoint <= 0xffff) {
+            return 3;
+        }
+        return 4;
     }
 
     private void writeToTelnet(int codePoint) {
