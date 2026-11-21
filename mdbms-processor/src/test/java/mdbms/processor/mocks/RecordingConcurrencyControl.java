@@ -6,6 +6,7 @@ import mdbms.models.data.DataItem;
 import mdbms.models.transaction.AccessStatus;
 import mdbms.models.transaction.Operation;
 import mdbms.models.transaction.Transaction;
+import mdbms.models.transaction.WriteContext;
 
 public final class RecordingConcurrencyControl implements IConcurrencyControl {
     public int commitCalls;
@@ -52,6 +53,11 @@ public final class RecordingConcurrencyControl implements IConcurrencyControl {
 
     @Override
     public AccessStatus requestWrite(int txId, DataItem data) {
+        throw new UnsupportedOperationException("Not used in this test");
+    }
+
+    @Override
+    public WriteContext requestWriteWithContext(int txId, DataItem data, Object oldVal, Object newVal) {
         throw new UnsupportedOperationException("Not used in this test");
     }
 

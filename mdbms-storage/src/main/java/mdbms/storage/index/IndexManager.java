@@ -26,6 +26,9 @@ import mdbms.storage.serializer.VarcharCodec;
 
 // pegang semua index yang kebuka, nyatet metadata nya ke katalog SM4, dan nyamain isi index tiap ada perubahan baris
 public final class IndexManager {
+    // perubahan index tanpa log, kayak rebuild atau pemanggil lama yang ga bawa LSN
+    private static final long NO_LSN = 0;
+
     private static final int NO_OVERRIDE = 0;
     private static final int MIN_DEGREE = 3;
 
@@ -136,14 +139,19 @@ public final class IndexManager {
 
     // baris baru masuk ke semua index tabelnya, kalau satu gagal index yang udah keisi dibalikin lagi
     public void onInsert(Row row, TableSchema schema) {
+        onInsert(row, schema, NO_LSN);
+    }
+
+    // sama kayak onInsert tapi halaman index yang berubah ditandai LSN log perubahan baris nya
+    public void onInsert(Row row, TableSchema schema, long pageLsn) {
         lock.readLock().lock();
         try {
             List<Runnable> undo = new ArrayList<>();
             try {
                 for (Index index : indexesOf(schema.tableName())) {
                     Object key = keyOf(row, schema, index.getInfo().columnName());
-                    index.insert(key, row.rowId());
-                    undo.add(() -> index.delete(key, row.rowId()));
+                    index.insert(key, row.rowId(), pageLsn);
+                    undo.add(() -> index.delete(key, row.rowId(), pageLsn));
                 }
             } catch (RuntimeException e) {
                 rollback(undo, e);
@@ -157,6 +165,11 @@ public final class IndexManager {
     // entri baru dimasukin dulu baru entri lama dihapus, jadi kalau gagal di tengah baris tetap bisa dicari
     // kalau satu index gagal semua index yang udah berubah dibalikin, index yang key dan RowId nya sama dilewatin
     public void onUpdate(Row oldRow, Row newRow, TableSchema schema) {
+        onUpdate(oldRow, newRow, schema, NO_LSN);
+    }
+
+    // sama kayak onUpdate tapi halaman index yang berubah ditandai LSN log perubahan baris nya
+    public void onUpdate(Row oldRow, Row newRow, TableSchema schema, long pageLsn) {
         lock.readLock().lock();
         try {
             List<Runnable> undo = new ArrayList<>();
@@ -166,10 +179,10 @@ public final class IndexManager {
                     Object oldKey = keyOf(oldRow, schema, column);
                     Object newKey = keyOf(newRow, schema, column);
                     if (Objects.equals(oldKey, newKey) && oldRow.rowId().equals(newRow.rowId())) continue;
-                    index.insert(newKey, newRow.rowId());
-                    undo.add(() -> index.delete(newKey, newRow.rowId()));
-                    index.delete(oldKey, oldRow.rowId());
-                    undo.add(() -> index.insert(oldKey, oldRow.rowId()));
+                    index.insert(newKey, newRow.rowId(), pageLsn);
+                    undo.add(() -> index.delete(newKey, newRow.rowId(), pageLsn));
+                    index.delete(oldKey, oldRow.rowId(), pageLsn);
+                    undo.add(() -> index.insert(oldKey, oldRow.rowId(), pageLsn));
                 }
             } catch (RuntimeException e) {
                 rollback(undo, e);
@@ -182,14 +195,19 @@ public final class IndexManager {
 
     // baris yang dihapus dikeluarin dari semua index tabelnya, kalau satu gagal entri yang udah kehapus dimasukin lagi
     public void onDelete(Row row, TableSchema schema) {
+        onDelete(row, schema, NO_LSN);
+    }
+
+    // sama kayak onDelete tapi halaman index yang berubah ditandai LSN log perubahan baris nya
+    public void onDelete(Row row, TableSchema schema, long pageLsn) {
         lock.readLock().lock();
         try {
             List<Runnable> undo = new ArrayList<>();
             try {
                 for (Index index : indexesOf(schema.tableName())) {
                     Object key = keyOf(row, schema, index.getInfo().columnName());
-                    index.delete(key, row.rowId());
-                    undo.add(() -> index.insert(key, row.rowId()));
+                    index.delete(key, row.rowId(), pageLsn);
+                    undo.add(() -> index.insert(key, row.rowId(), pageLsn));
                 }
             } catch (RuntimeException e) {
                 rollback(undo, e);

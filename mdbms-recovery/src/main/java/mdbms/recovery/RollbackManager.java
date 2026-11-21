@@ -6,6 +6,7 @@ import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.locks.ReentrantLock;
+import java.util.concurrent.locks.LockSupport;
 import mdbms.api.IDataAccess;
 import mdbms.api.IDurableStorage;
 import mdbms.models.log.DataChangeLogRecord;
@@ -13,7 +14,6 @@ import mdbms.models.log.LogRecord;
 import mdbms.models.log.LogType;
 import mdbms.models.log.RecoveryResult;
 import mdbms.models.log.TransactionLogRecord;
-
 
 public class RollbackManager {
     private final LogManager logManager;
@@ -77,9 +77,10 @@ public class RollbackManager {
                 "ROLLBACK: Transaction txId=" + txId + " is already being undone"
             );
         }
-
+        boolean interrupted = Thread.interrupted();
         rollbackLock.lock();
         try {
+            interrupted |= Thread.interrupted();
             if (recordApplier.getDataAccess() == null || durableStorage == null) {
                 return new RecoveryResult(
                     false,
@@ -155,7 +156,7 @@ public class RollbackManager {
                     }
                 }
 
-                durableStorage.flushBuffer();
+                flushBufferWithPinRetry();
                 TransactionLogRecord abortRecord = logManager.appendTransactionLog(txId, LogType.ABORT);
                 if (!logManager.flushUpTo(abortRecord.getLsn())) {
                     return new RecoveryResult(
@@ -184,6 +185,9 @@ public class RollbackManager {
         } finally {
             rollbackLock.unlock();
             activeRollbacks.remove(txId);
+            if (interrupted) {                              
+                Thread.currentThread().interrupt();
+            }
         }
     }
 
@@ -197,5 +201,44 @@ public class RollbackManager {
 
     public boolean isAccessProtected() {
         return rollbackLock.isLocked();
+    }
+
+    private void flushBufferWithPinRetry() {
+        final int maxAttempts = 50;
+        final long backoffNanos = 2_000_000L; // 2 ms per percobaan, batas atas ~100 ms
+        for (int attempt = 1; attempt <= maxAttempts; attempt++) {
+            try {
+                durableStorage.flushBuffer();
+                return;
+            } catch (RuntimeException e) {
+                if (!isTransientPinConflict(e) || attempt == maxAttempts) {
+                    throw e;
+                }
+                parkUninterruptibly(backoffNanos);
+            }
+        }
+    }
+
+    private static boolean isTransientPinConflict(RuntimeException e) {
+        Throwable cur = e;
+        while (cur != null) {
+            String msg = cur.getMessage();
+            if (msg != null && msg.toLowerCase().contains("still pinned")) {
+                return true;
+            }
+            cur = cur.getCause();
+        }
+        return false;
+    }
+
+    private static void parkUninterruptibly(long nanos) {
+        boolean interrupted = Thread.interrupted();
+        try {
+            LockSupport.parkNanos(nanos);
+        } finally {
+            if (interrupted) {
+                Thread.currentThread().interrupt();
+            }
+        }
     }
 }

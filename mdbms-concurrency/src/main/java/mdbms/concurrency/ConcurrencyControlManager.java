@@ -9,6 +9,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.locks.LockSupport;
+import java.util.function.LongFunction;
 import java.util.function.Supplier;
 
 import mdbms.api.IConcurrencyControl;
@@ -38,6 +39,9 @@ public final class ConcurrencyControlManager implements IConcurrencyControl {
     private volatile boolean acceptingTransactions = true;
     private volatile boolean stopping;
     private volatile String failureReason;
+
+    private static final long RELOCATION_WAITING = -1L;
+    private static final long RELOCATION_ABORTED = -2L;
 
     /** Uses timestamp ordering when no startup configuration is supplied. */
     public ConcurrencyControlManager() {
@@ -388,6 +392,50 @@ public final class ConcurrencyControlManager implements IConcurrencyControl {
     }
 
     @Override
+    public <T> T executeRelocation(
+            int txId,
+            DataItem oldItem,
+            DataItem newItem,
+            Object oldValues,
+            Object newValues,
+            LongFunction<T> physicalChange) { // [CHANGED]
+        Objects.requireNonNull(oldItem, "oldItem");
+        Objects.requireNonNull(newItem, "newItem");
+        Objects.requireNonNull(physicalChange, "physicalChange");
+        Transaction tx = requireTransaction(txId);
+
+        for (;;) {
+            synchronized (tx) {
+                if (tx.getState() != TransactionState.ACTIVE) {
+                    throw new IllegalStateException("Transaction " + txId + " is " + tx.getState());
+                }
+                long relocationLsn = prepareRelocationAndGetLsnLocked(
+                        tx, oldItem, newItem, oldValues, newValues); // [CHANGED]
+                if (relocationLsn == RELOCATION_WAITING) {
+                    // Release the transaction monitor while waiting
+                } else if (relocationLsn == RELOCATION_ABORTED) {
+                    throw new IllegalStateException("Relocation was aborted for transaction " + txId);
+                } else {
+                    try {
+                        return physicalChange.apply(relocationLsn); // [CHANGED] Pass WAL LSN to storage mutation
+                    } catch (RuntimeException failure) {
+                        if (activeTransactions.containsKey(txId)) {
+                            failAndAbort(tx, "Relocation failed");
+                        }
+                        throw failure;
+                    }
+                }
+            }
+            LockSupport.parkNanos(10_000_000L);
+            if (stopping || Thread.currentThread().isInterrupted()) {
+                abortTransaction(txId, "Relocation cancelled");
+                throw new IllegalStateException("Relocation cancelled for transaction " + txId);
+            }
+        }
+    }
+
+
+    @Override
     public Transaction getTransaction(int txId) { return activeTransactions.get(txId); }
 
     public Map<Integer, Transaction> getActiveTransactions() {
@@ -434,37 +482,10 @@ public final class ConcurrencyControlManager implements IConcurrencyControl {
             DataItem newItem,
             Object oldValues,
             Object newValues) {
-        if (oldItem.equals(newItem)) {
-            AccessStatus status = protocol.requestWrite(tx, oldItem);
-            if (status == AccessStatus.ABORTED && tx.getState() == TransactionState.ACTIVE) {
-                failAndAbort(tx, "Protocol aborted relocation");
-                return status;
-            }
-            if (status != AccessStatus.GRANTED || frm == null) return status;
-            try {
-                persistDataLog(tx.getId(), oldItem, oldValues, newValues);
-                return status;
-            } catch (RuntimeException failure) {
-                failAndAbort(tx, "Unable to persist relocation log");
-                throw failure;
-            }
-        }
-
-        AccessStatus status = protocol.requestWriteBatch(tx, List.of(oldItem, newItem));
-        if (status == AccessStatus.ABORTED && tx.getState() == TransactionState.ACTIVE) {
-            failAndAbort(tx, "Protocol aborted relocation");
-            return status;
-        }
-        if (status != AccessStatus.GRANTED || frm == null) return status;
-
-        try {
-            // record the complete relocation once, after both identities are protected and before storage is changed.
-            persistRelocationLog(tx.getId(), oldItem, newItem, oldValues, newValues);
-            return status;
-        } catch (RuntimeException failure) {
-            failAndAbort(tx, "Unable to persist relocation log");
-            throw failure;
-        }
+        long res = prepareRelocationAndGetLsnLocked(tx, oldItem, newItem, oldValues, newValues);
+        if (res == RELOCATION_WAITING) return AccessStatus.WAITING;
+        if (res == RELOCATION_ABORTED) return AccessStatus.ABORTED;
+        return AccessStatus.GRANTED;
     }
 
     private long persistDataLog(int txId, DataItem data, Object oldVal, Object newVal) {
@@ -486,7 +507,47 @@ public final class ConcurrencyControlManager implements IConcurrencyControl {
         return result.getLsn();
     }
 
-    private void persistRelocationLog(
+    private long prepareRelocationAndGetLsnLocked(
+            Transaction tx,
+            DataItem oldItem,
+            DataItem newItem,
+            Object oldValues,
+            Object newValues) {
+        if (oldItem.equals(newItem)) {
+            AccessStatus status = protocol.requestWrite(tx, oldItem);
+            if (status == AccessStatus.ABORTED && tx.getState() == TransactionState.ACTIVE) {
+                failAndAbort(tx, "Protocol aborted relocation");
+                return RELOCATION_ABORTED;
+            }
+            if (status == AccessStatus.WAITING) return RELOCATION_WAITING;
+            if (status == AccessStatus.ABORTED) return RELOCATION_ABORTED;
+            if (frm == null) return 0L;
+            try {
+                return persistDataLog(tx.getId(), oldItem, oldValues, newValues); // [CHANGED] Return LSN
+            } catch (RuntimeException failure) {
+                failAndAbort(tx, "Unable to persist relocation log");
+                throw failure;
+            }
+        }
+
+        AccessStatus status = protocol.requestWriteBatch(tx, List.of(oldItem, newItem));
+        if (status == AccessStatus.ABORTED && tx.getState() == TransactionState.ACTIVE) {
+            failAndAbort(tx, "Protocol aborted relocation");
+            return RELOCATION_ABORTED;
+        }
+        if (status == AccessStatus.WAITING) return RELOCATION_WAITING;
+        if (status == AccessStatus.ABORTED) return RELOCATION_ABORTED;
+        if (frm == null) return 0L;
+
+        try {
+            return persistRelocationLog(tx.getId(), oldItem, newItem, oldValues, newValues); // [CHANGED] Return LSN
+        } catch (RuntimeException failure) {
+            failAndAbort(tx, "Unable to persist relocation log");
+            throw failure;
+        }
+    }
+
+    private long persistRelocationLog(
             int txId,
             DataItem oldItem,
             DataItem newItem,
@@ -499,11 +560,12 @@ public final class ConcurrencyControlManager implements IConcurrencyControl {
                 newItem.rowId(),
                 toRecordImage(oldValues),
                 toRecordImage(newValues));
-        if (result == null || !result.isSuccess()
+        if (result == null || !result.isSuccess() || result.getLsn() < 0
                 || !frm.flushLogUpTo(result.getLsn())) {
             throw new IllegalStateException(
                     "Unable to persist relocation log for transaction " + txId);
         }
+        return result.getLsn();
     }
 
     private void failAndAbort(Transaction tx, String reason) {
@@ -514,6 +576,9 @@ public final class ConcurrencyControlManager implements IConcurrencyControl {
     // cause dipakai buat nyimpen error asli biar ga ketimpa error rollback
     private void failAndAbort(Transaction tx, String reason, RuntimeException cause) {
         synchronized (tx) {
+            if (tx.getState() == TransactionState.ABORTED || tx.getState() == TransactionState.COMMITTED) {
+                return;
+            }
             if (tx.getState() != TransactionState.FAILED) tx.setState(TransactionState.FAILED);
             RuntimeException rollbackFailure = null;
             if (frm != null) {

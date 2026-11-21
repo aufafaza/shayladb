@@ -58,6 +58,6 @@ class SequentialScanOperatorTest {
                 catalog,
                 concurrencyControl,
                 1,
-                MockDataAccess.TABLE_NAME);
+                MockDataAccess.TABLE_NAME, "qualifier");
     }
 }
