@@ -43,6 +43,7 @@ public class InsertOperator implements IQueryOperator, IWriteOperator {
     }
 
     public IResultRow next() {
+        AccessPermission.write(concurrencyControlManager, transactionId, DataItem.tableRange(tableName), null, null);
         RowId rowId = dataAccess.reserveRowId(tableName, rowValues);
         try {
             AccessPermission.write(concurrencyControlManager, transactionId, new DataItem(tableName, rowId), null, rowValues);

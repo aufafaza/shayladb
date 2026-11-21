@@ -42,7 +42,8 @@ public class LockBasedProtocol implements ConcurrencyProtocol {
     
     @Override 
     public AccessStatus requestWrite(Transaction tx, DataItem data) {
-        return handleResult(tx, lockManager.acquireLock(tx, data, Locktype.EXCLUSIVE));
+        Locktype type = data.isTableRange() ? Locktype.INTENT_EXCLUSIVE : Locktype.EXCLUSIVE;
+        return handleResult(tx, lockManager.acquireLock(tx, data, type));
     }
 
     @Override
@@ -68,13 +69,15 @@ public class LockBasedProtocol implements ConcurrencyProtocol {
     }
 
     private AccessStatus handleResult(Transaction tx, AccessStatus result) {
-        if (result != AccessStatus.WAITING || !deadlockHandler.detectDeadlock()) {
+        if (result != AccessStatus.WAITING) {
             return result;
         }
-        Transaction victim = deadlockHandler.chooseVictim();
-        if (victim == null) return result;
-        abortVictim(victim);
-        if (victim == tx || tx.getState() != TransactionState.ACTIVE) return AccessStatus.ABORTED;
+        while (deadlockHandler.detectDeadlock()) {
+            Transaction victim = deadlockHandler.chooseVictim();
+            if (victim == null) break;
+            abortVictim(victim);
+        }
+        if (tx.getState() != TransactionState.ACTIVE) return AccessStatus.ABORTED;
         return result;
     }
 
