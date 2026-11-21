@@ -27,6 +27,7 @@ import mdbms.models.schema.DataType;
 import mdbms.models.schema.TableSchema;
 import mdbms.models.transaction.AccessStatus;
 import mdbms.models.transaction.Transaction;
+import mdbms.models.transaction.TransactionState;
 import mdbms.optimizer.QueryOptimizer;
 import mdbms.optimizer.lexer.ShaylaLexer;
 import mdbms.optimizer.parser.ShaylaParser;
@@ -84,7 +85,7 @@ class TransactionCompletionTest {
         for (int id = 1; id <= BASELINE_ROWS; id++) {
             assertOk(run(tx, "INSERT INTO users VALUES (" + id + ", '" + name(id, 120) + "');"));
         }
-        assertOk(run(tx, "COMMIT;"));
+        assertOk(commit(tx));
         baselineRowIds = rowIdsById();
         baselineRows = heapRows();
         protocol.releases.clear();
@@ -114,7 +115,7 @@ class TransactionCompletionTest {
 
         // pas COMMIT lagi di force, transaksi lain yang mau nulis baris yang sama masih harus nunggu
         recovery.beforeCommitFlush = () -> assertEquals(AccessStatus.WAITING, ccm.requestWrite(probe, updatedRow));
-        assertOk(run(tx, "COMMIT;"));
+        assertOk(commit(tx));
 
         long commitLsn = lsnOf(tx, LogType.COMMIT);
         Release release = protocol.releaseOf(tx);
@@ -143,7 +144,7 @@ class TransactionCompletionTest {
         assertOk(run(tx, "UPDATE users SET name = 'ganti lagi' WHERE id = 3;"));
         assertOk(run(tx, "DELETE FROM users WHERE id = 2;"));
 
-        assertOk(run(tx, "ABORT;"));
+        assertOk(abort(tx));
 
         // isi heap pas lock dilepas udah balik semua, artinya rollback kelar duluan
         Release release = protocol.releaseOf(tx);
@@ -174,7 +175,7 @@ class TransactionCompletionTest {
         assertOk(run(tx, "UPDATE users SET name = '" + name(1, 200) + "' WHERE id = 1;"));
         assertNotEquals(baselineRowIds.get(1), rowIdsById().get(1), "UPDATE harusnya mindahin baris ke halaman lain");
 
-        assertOk(run(tx, "ABORT;"));
+        assertOk(abort(tx));
 
         assertEquals(baselineRows, heapRows());
         assertEquals(baselineRowIds, rowIdsById());
@@ -189,7 +190,7 @@ class TransactionCompletionTest {
         assertOk(run(tx, "UPDATE users SET name = '" + name(1, 200) + "' WHERE id = 1;"));
         DataItem movedRow = new DataItem(TABLE, rowIdsById().get(1));
 
-        assertFalse(run(tx, "ABORT;").success());
+        assertFalse(abort(tx).success());
 
         assertTrue(ccm.isFailed());
         assertNull(protocol.releaseOrNull(tx));
@@ -207,7 +208,7 @@ class TransactionCompletionTest {
 
         // policy nya statement gagal = seluruh transaksi dibatalin, jadi COMMIT abis itu ga boleh nyimpen apa apa
         assertNull(ccm.getTransaction(tx));
-        ExecutionResult commit = run(tx, "COMMIT;");
+        ExecutionResult commit = commit(tx);
         assertFalse(commit.success(), commit.message());
         assertEquals(baselineRows, heapRows());
         assertIndexMatchesHeap();
@@ -225,7 +226,7 @@ class TransactionCompletionTest {
         assertFalse(failed.success());
 
         assertNull(ccm.getTransaction(tx));
-        assertFalse(run(tx, "COMMIT;").success());
+        assertFalse(commit(tx).success());
         assertEquals(baselineRows, heapRows());
         assertEquals(1, recovery.rollbackCalls.get());
     }
@@ -255,7 +256,7 @@ class TransactionCompletionTest {
         assertOk(run(tx, "DELETE FROM users WHERE id = 2;"));
 
         recovery.failCommitAppend = true;
-        ExecutionResult commit = run(tx, "COMMIT;");
+        ExecutionResult commit = commit(tx);
 
         assertFalse(commit.success(), "COMMIT yang log nya gagal ditulis ga boleh dibilang sukses");
         assertFalse(ccm.isFailed());
@@ -271,7 +272,7 @@ class TransactionCompletionTest {
         recovery.failCommitAppend = false;
         int next = ccm.beginTransaction();
         assertOk(run(next, "INSERT INTO users VALUES (101, 'lagi');"));
-        assertOk(run(next, "COMMIT;"));
+        assertOk(commit(next));
     }
 
     @Test
@@ -284,7 +285,7 @@ class TransactionCompletionTest {
 
         // record COMMIT udah masuk WAL tapi force nya dilaporin gagal, jadi hasilnya ga pasti
         recovery.failCommitFlush = true;
-        ExecutionResult commit = run(tx, "COMMIT;");
+        ExecutionResult commit = commit(tx);
 
         assertFalse(commit.success(), "COMMIT yang force nya gagal ga boleh dibilang sukses");
         assertTrue(ccm.isFailed());
@@ -305,7 +306,7 @@ class TransactionCompletionTest {
         assertOk(run(tx, "UPDATE users SET name = 'ganti' WHERE id = 1;"));
 
         recovery.failRollback = true;
-        ExecutionResult abort = run(tx, "ABORT;");
+        ExecutionResult abort = abort(tx);
 
         assertFalse(abort.success(), "ABORT yang rollback nya gagal ga boleh dibilang sukses");
         assertTrue(ccm.isFailed());
@@ -315,15 +316,49 @@ class TransactionCompletionTest {
         assertThrows(IllegalStateException.class, ccm::awaitNoActiveTransactions);
 
         // abort ulang dari klien ga boleh nyoba rollback lagi
-        assertFalse(run(tx, "ABORT;").success());
+        assertFalse(abort(tx).success());
         assertEquals(1, recovery.rollbackCalls.get());
     }
 
+    // jalanin satu statement kayak sesi klien, kalau gagal transaksinya dibatalin sama pemilik siklus transaksi
+    // pemilik nya sesi di ClientHandler (#66), jadi test ini ga bergantung QP ikut abort atau ga
     private ExecutionResult run(int tx, String sql) {
+        ExecutionResult result;
         try {
-            return processor.executeQuery(sql, tx);
+            result = processor.executeQuery(sql, tx);
         } catch (RuntimeException e) {
-            return new ExecutionResult(false, null, null, 0, "lolos dari QueryProcessor: " + e);
+            result = new ExecutionResult(false, null, null, 0, "lolos dari QueryProcessor: " + e);
+        }
+        if (!result.success()) {
+            abortIfActive(tx);
+        }
+        return result;
+    }
+
+    // COMMIT sama ABORT langsung ke CCM kayak ClientHandler, ga lewat operator QP
+    private ExecutionResult commit(int tx) {
+        try {
+            ccm.commitTransaction(tx);
+            return new ExecutionResult(true, null, null, -1, "COMMIT transaction " + tx);
+        } catch (RuntimeException e) {
+            return new ExecutionResult(false, null, null, 0, "COMMIT failed: " + e.getMessage());
+        }
+    }
+
+    private ExecutionResult abort(int tx) {
+        try {
+            ccm.abortTransaction(tx, "ABORT requested by client");
+            return new ExecutionResult(true, null, null, -1, "ABORT transaction " + tx);
+        } catch (RuntimeException e) {
+            return new ExecutionResult(false, null, null, 0, "ABORT failed: " + e.getMessage());
+        }
+    }
+
+    // transaksi yang udah ditutup CCM duluan ga di abort lagi biar ga dobel
+    private void abortIfActive(int tx) {
+        Transaction transaction = ccm.getTransaction(tx);
+        if (transaction != null && transaction.getState() == TransactionState.ACTIVE) {
+            abort(tx);
         }
     }
 
