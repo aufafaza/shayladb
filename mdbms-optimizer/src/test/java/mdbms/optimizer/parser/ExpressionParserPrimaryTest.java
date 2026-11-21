@@ -85,7 +85,7 @@ class ExpressionParserPrimaryTest {
 
     @Test
     void rejectsUnsupportedPrimaryWithoutConsumingIt() {
-        // A leading unary sign is not part of primary; parentheses are now supported.
+        // Unary minus is handled by parseUnary, not by primary; parentheses are now supported.
         for (String sql : List.of("", "+", "*", "WHERE", "NULL", "-18", "\n  ;")) {
             QueryErrorCollector collector = new QueryErrorCollector();
             TokenStream stream = new ShaylaLexer(sql, collector).tokenizeToStream();
