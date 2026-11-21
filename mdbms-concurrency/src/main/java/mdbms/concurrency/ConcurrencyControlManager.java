@@ -19,6 +19,7 @@ import mdbms.models.transaction.AccessStatus;
 import mdbms.models.transaction.Operation;
 import mdbms.models.transaction.Transaction;
 import mdbms.models.transaction.TransactionState;
+import mdbms.models.transaction.WriteContext;
 
 /**
  * CC1 transaction manager and facade. It owns transaction lifecycle and
@@ -196,17 +197,40 @@ public final class ConcurrencyControlManager implements IConcurrencyControl {
 
     @Override
     public AccessStatus requestWrite(int txId, DataItem data, Object oldVal, Object newVal) {
-        AccessStatus status = request(txId, data, true);
-        if (status == AccessStatus.GRANTED && frm != null && (oldVal != null || newVal != null)) {
-            LogType opType = (oldVal == null) ? LogType.INSERT : (newVal == null ? LogType.DELETE : LogType.UPDATE);
-            RecordImage beforeImg = toRecordImage(oldVal);
-            RecordImage afterImg = toRecordImage(newVal);
-            RecoveryResult result = frm.writeDataLog(txId, opType, data.tableName(), data.rowId(), beforeImg, afterImg);
-            if (result == null || !result.isSuccess()) {
-                throw new IllegalStateException("Unable to persist " + opType.toString().toLowerCase() +" log for transaction " + txId);
-            }
+        return requestWriteWithContext(txId, data, oldVal, newVal).getStatus();
+    }
+
+    public WriteContext requestWriteWithContext(int txId, DataItem data, Object oldVal, Object newVal) {
+        Objects.requireNonNull(data, "data");
+        Transaction tx = activeTransactions.get(txId);
+        if (tx == null || tx.getState() != TransactionState.ACTIVE) {
+            return WriteContext.denied(txId, AccessStatus.ABORTED, data.tableName(), data.rowId());
         }
-        return status;
+        synchronized (tx) {
+            AccessStatus status = request(txId, data, true);
+            if (status != AccessStatus.GRANTED) {
+                return WriteContext.denied(txId, status, data.tableName(), data.rowId());
+            }
+            long lsn = 0L;
+            if (frm != null && (oldVal != null || newVal != null)) {
+                LogType opType = (oldVal == null) ? LogType.INSERT : (newVal == null ? LogType.DELETE : LogType.UPDATE);
+                RecordImage beforeImg = toRecordImage(oldVal);
+                RecordImage afterImg = toRecordImage(newVal);
+                RecoveryResult result;
+                try {
+                    result = frm.writeDataLog(txId, opType, data.tableName(), data.rowId(), beforeImg, afterImg);
+                } catch (RuntimeException failure) {
+                    failAndAbort(tx, "Unable to persist " + opType.toString().toLowerCase() + " log");
+                    return WriteContext.denied(txId, AccessStatus.ABORTED, data.tableName(), data.rowId());
+                }
+                if (result == null || !result.isSuccess() || result.getLsn() < 0) {
+                    failAndAbort(tx, "Unable to persist " + opType.toString().toLowerCase() + " log");
+                    return WriteContext.denied(txId, AccessStatus.ABORTED, data.tableName(), data.rowId());
+                }
+                lsn = result.getLsn();
+            }
+            return new WriteContext(txId, AccessStatus.GRANTED, lsn, data.tableName(), data.rowId());
+        }
     }
 
     @Override
@@ -224,7 +248,7 @@ public final class ConcurrencyControlManager implements IConcurrencyControl {
     public boolean verifySchedule(List<Operation> manualSchedule) {
         return new ScheduleVerifier(manualSchedule).isSerializable();
     }
-    
+
     private AccessStatus request(int txId, DataItem data, boolean write) {
         Objects.requireNonNull(data, "data");
         Transaction tx = activeTransactions.get(txId);
