@@ -262,13 +262,20 @@ class LockBasedProtocolTest {
     }
 
     @Test
+    @org.junit.jupiter.api.Timeout(5)
     void victimCallbackIsCalledWhenDeadlockIsDetected() {
         LockManager manager = new LockManager();
         LockBasedProtocol protocol = new LockBasedProtocol(manager);
         Transaction older = transaction(1, 10);
         Transaction newer = transaction(2, 20);
         AtomicReference<Transaction> victimReference = new AtomicReference<>();
-        protocol.setAbortHandler(victimReference::set);
+        protocol.setAbortHandler(victim -> {
+            victimReference.set(victim);
+            // The production CCM callback completes rollback before releasing locks.
+            victim.setState(TransactionState.FAILED);
+            manager.releaseAllLocks(victim);
+            victim.setState(TransactionState.ABORTED);
+        });
 
         assertEquals(AccessStatus.GRANTED, protocol.requestWrite(older, FIRST_ITEM));
         assertEquals(AccessStatus.GRANTED, protocol.requestWrite(newer, SECOND_ITEM));
@@ -276,7 +283,7 @@ class LockBasedProtocolTest {
         assertEquals(AccessStatus.ABORTED, protocol.requestWrite(newer, FIRST_ITEM));
 
         assertSame(newer, victimReference.get());
-        assertEquals(TransactionState.ACTIVE, newer.getState());
+        assertEquals(TransactionState.ABORTED, newer.getState());
     }
     }
 

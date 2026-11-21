@@ -42,6 +42,9 @@ public class LockBasedProtocol implements ConcurrencyProtocol {
     
     @Override 
     public AccessStatus requestWrite(Transaction tx, DataItem data) {
+        if (tx == null || data == null) {
+            throw new IllegalArgumentException("Transaction and data are required");
+        }
         Locktype type = data.isTableRange() ? Locktype.INTENT_EXCLUSIVE : Locktype.EXCLUSIVE;
         return handleResult(tx, lockManager.acquireLock(tx, data, type));
     }
