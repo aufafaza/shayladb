@@ -325,6 +325,53 @@ class FramedJsonProtocolTest {
         assertEquals(1, abortAttempts[0]);
     }
 
+    @Test
+    void disconnectDuringAutocommitExecutionAbortsAdmittedTransactionOnce() throws Exception {
+        TestSocket socket = new TestSocket(frame("{\"sql\":\"SELECT 1\"}"));
+        SessionManager sessionManager = new SessionManager();
+        java.util.concurrent.CountDownLatch entered = new java.util.concurrent.CountDownLatch(1);
+        java.util.concurrent.CountDownLatch release = new java.util.concurrent.CountDownLatch(1);
+        int[] abortAttempts = {0};
+        IConcurrencyControl control = new IConcurrencyControl() {
+            @Override public int beginTransaction() { return 42; }
+            @Override public void commitTransaction(int txId) { }
+            @Override public void abortTransaction(int txId, String reason) { abortAttempts[0]++; }
+            @Override public AccessStatus requestRead(int txId, DataItem data) { return AccessStatus.GRANTED; }
+            @Override public AccessStatus requestWrite(int txId, DataItem data, Object oldVal, Object newVal) {
+                return AccessStatus.GRANTED;
+            }
+            @Override public AccessStatus requestWrite(int txId, DataItem data) { return AccessStatus.GRANTED; }
+            @Override public Transaction getTransaction(int txId) { return null; }
+            @Override public boolean verifySchedule(List<Operation> manualSchedule) { return false; }
+        };
+        IQueryProcessor processor = (query, txId) -> {
+            entered.countDown();
+            try {
+                release.await();
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+            return new ExecutionResult(true, null, null, -1, null);
+        };
+
+        ClientHandler handler = new ClientHandler(socket, sessionManager, processor, control);
+        java.util.concurrent.ExecutorService executor =
+                java.util.concurrent.Executors.newSingleThreadExecutor();
+        java.util.concurrent.Future<?> run = executor.submit(handler);
+        try {
+            assertTrue(entered.await(5, java.util.concurrent.TimeUnit.SECONDS));
+            handler.disconnect();
+            release.countDown();
+            run.get(5, java.util.concurrent.TimeUnit.SECONDS);
+        } finally {
+            release.countDown();
+            executor.shutdownNow();
+        }
+
+        assertEquals(1, abortAttempts[0]);
+        assertEquals(0, sessionManager.getSessionCount());
+    }
+
     private IConcurrencyControl controlWithLifecycleCounters(
             int[] beginAttempts, int[] commitAttempts, int[] abortAttempts) {
         return new IConcurrencyControl() {

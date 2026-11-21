@@ -258,10 +258,11 @@ public final class ConcurrencyControlManager implements IConcurrencyControl {
     private void failAndAbort(Transaction tx, String reason) {
         synchronized (tx) {
             if (tx.getState() != TransactionState.FAILED) tx.setState(TransactionState.FAILED);
+            RuntimeException rollbackFailure = null;
             if (frm != null) {
                 RecoveryResult rollback = frm.rollbackTransaction(tx.getId());
                 if (rollback == null || !rollback.isSuccess()) {
-                    throw new IllegalStateException("Rollback failed for transaction " + tx.getId());
+                    rollbackFailure = new IllegalStateException("Rollback failed for transaction " + tx.getId());
                 }
             }
             protocol.releaseResources(tx);
@@ -269,6 +270,9 @@ public final class ConcurrencyControlManager implements IConcurrencyControl {
             activeTransactions.remove(tx.getId(), tx);
             synchronized (lifecycleMonitor) {
                 lifecycleMonitor.notifyAll();
+            }
+            if (rollbackFailure != null) {
+                throw rollbackFailure;
             }
         }
     }
