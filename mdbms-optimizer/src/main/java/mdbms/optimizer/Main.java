@@ -124,8 +124,7 @@ public class Main {
 
     public static void runPlanMode(String sql) {
         System.out.println("\n--- [PLAN, unoptimized] ---");
-        QueryErrorCollector collector = new QueryErrorCollector();
-        ShaylaParser parser = new ShaylaParser(new ShaylaLexer(sql, collector));
+        ShaylaParser parser = new ShaylaParser();
         try {
             QueryTree plan = new QueryOptimizer(CATALOG, parser).parseQuery(sql).queryTree();
             System.out.print(new QueryPlanPrinter().printPlan(plan));
@@ -152,10 +151,9 @@ public class Main {
     public static void runParserMode(String sql) {
         System.out.println("\n--- [PARSER OUTPUT (UNBOUND)] ---");
         QueryErrorCollector collector = new QueryErrorCollector();
-        ShaylaLexer lexer = new ShaylaLexer(sql, collector);
-        ShaylaParser parser = new ShaylaParser(lexer);
+        ShaylaParser parser = new ShaylaParser();
         try {
-            QueryTree queryTree = parser.parseToTree(sql);
+            QueryTree queryTree = parser.parseToTree(sql, collector);
             System.out.println("=== Unbound QueryTree ===");
             parser.printQueryTree(queryTree);
 
@@ -180,10 +178,9 @@ public class Main {
     public static void runBinderMode(String sql) {
         System.out.println("\n--- [BINDER & VALIDATOR OUTPUT] ---");
         QueryErrorCollector collector = new QueryErrorCollector();
-        ShaylaLexer lexer = new ShaylaLexer(sql, collector);
-        ShaylaParser parser = new ShaylaParser(lexer);
+        ShaylaParser parser = new ShaylaParser();
         try {
-            QueryTree queryTree = parser.parseToTree(sql);
+            QueryTree queryTree = parser.parseToTree(sql, collector);
             System.out.println("=== QueryTree (Before Binding) ===");
             parser.printQueryTree(queryTree);
 
@@ -210,10 +207,9 @@ public class Main {
     public static void runCostMode(String sql) {
         System.out.println("\n--- [COST & CARDINALITY ESTIMATOR OUTPUT] ---");
         QueryErrorCollector collector = new QueryErrorCollector();
-        ShaylaLexer lexer = new ShaylaLexer(sql, collector);
-        ShaylaParser parser = new ShaylaParser(lexer);
+        ShaylaParser parser = new ShaylaParser();
         try {
-            QueryTree queryTree = parser.parseToTree(sql);
+            QueryTree queryTree = parser.parseToTree(sql, collector);
             QueryBinder binder = new QueryBinder(CATALOG, collector);
             BindingContext bindingContext = binder.bind(queryTree);
             QueryValidator validator = new QueryValidator(binder, collector);

@@ -69,7 +69,7 @@ class TransactionCompletionTest {
         protocol = new ReleaseRecordingProtocol();
         ccm = new ConcurrencyControlManager(protocol, recovery);
 
-        QueryOptimizer optimizer = new QueryOptimizer(storage, new ShaylaParser(new ShaylaLexer(""))) {
+        QueryOptimizer optimizer = new QueryOptimizer(storage, new ShaylaParser()) {
             @Override public ParsedQuery optimizeQuery(ParsedQuery query) { return query; }
         };
         processor = new QueryProcessor(optimizer, storage, storage, recovery, ccm);
