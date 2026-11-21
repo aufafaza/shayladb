@@ -7,11 +7,15 @@ import mdbms.api.IDataAccess;
 import mdbms.api.ISchemaCatalog;
 import mdbms.models.data.DataItem;
 import mdbms.models.data.Row;
+import mdbms.models.data.RowId;
 import mdbms.models.query.ExpressionTree;
 import mdbms.models.schema.ColumnDefinition;
 import mdbms.models.schema.DataType;
+import mdbms.models.transaction.WriteContext;
 import mdbms.processor.ExpressionEvaluator;
 import mdbms.processor.IResultRow;
+import mdbms.processor.ResultRow;
+import mdbms.processor.ResultTableSchema;
 
 public class UpdateOperator extends QueryUnaryOperator implements IWriteOperator {
     private final IDataAccess dataAccess;
@@ -21,10 +25,11 @@ public class UpdateOperator extends QueryUnaryOperator implements IWriteOperator
     private final String tableName;
     private final String columnName;
     private final ExpressionTree newValue;
+    private ResultTableSchema resultSchema;
     private List<String> columnNames;
     private int columnIndex;
     private DataType columnType;
-    private List<IResultRow> targetRows;
+    private List<RowId> targetRowIds;
     private int affectedRows;
 
     public UpdateOperator(IQueryOperator childOperator, IDataAccess dataAccess, ISchemaCatalog schemaCatalog,
@@ -41,41 +46,65 @@ public class UpdateOperator extends QueryUnaryOperator implements IWriteOperator
     }
 
     public void open() {
-        List<ColumnDefinition> columns = schemaCatalog.getTableSchema(tableName).columns();
+        var schema = schemaCatalog.getTableSchema(tableName);
+        resultSchema = new ResultTableSchema(schema);
+        List<ColumnDefinition> columns = schema.columns();
         columnNames = columns.stream()
                 .map(ColumnDefinition::name)
                 .toList();
         columnIndex = columnNames.indexOf(columnName);
         columnType = columns.get(columnIndex).type();
 
-        targetRows = new ArrayList<>();
+        targetRowIds = new ArrayList<>();
         childOperator.open();
         IResultRow row;
         while ((row = childOperator.next()) != null) {
-            targetRows.add(row);
+            targetRowIds.add(row.getRowId());
         }
         childOperator.close();
     }
 
     public IResultRow next() {
-        for (IResultRow row : targetRows) {
-            List<Object> oldValues = new ArrayList<>();
-            for (String name : columnNames) {
-                oldValues.add(row.get(name));
-            }
-            List<Object> newValues = new ArrayList<>(oldValues);
-            newValues.set(columnIndex, ColumnTypes.toColumnType(ExpressionEvaluator.evaluate(newValue, row), columnType));
+        int updatedCount = 0;
+        for (RowId targetId : targetRowIds) {
+            DataItem item = new DataItem(tableName, targetId);
+            // 1. Acquire exclusive write protection BEFORE capturing/revalidating old values
+            AccessPermission.protectWrite(concurrencyControlManager, transactionId, item);
 
-            DataItem item = new DataItem(tableName, row.getRowId());
-            AccessPermission.write(concurrencyControlManager, transactionId, item, oldValues, newValues);
-            Row updated = dataAccess.updateByRowId(row.getRowId(), newValues);
-            if (!updated.rowId().equals(row.getRowId())) {
-                AccessPermission.write(concurrencyControlManager, transactionId, item, newValues, null);
-                AccessPermission.write(concurrencyControlManager, transactionId,
-                        new DataItem(tableName, updated.rowId()), null, newValues);
+            // 2. Re-read protected current row to prevent stale computation after reader-to-writer upgrade
+            Row currentRow = dataAccess.fetchByRowId(targetId);
+            if (currentRow == null || currentRow.values() == null || currentRow.values().isEmpty()) {
+                continue;
             }
+            List<Object> oldValues = new ArrayList<>(currentRow.values());
+            ResultRow protectedRow = new ResultRow(resultSchema, oldValues);
+            protectedRow.setRowId(targetId);
+
+            // 3. Compute new values from protected before-image
+            List<Object> newValues = new ArrayList<>(oldValues);
+            newValues.set(columnIndex,
+                    ColumnTypes.toColumnType(ExpressionEvaluator.evaluate(newValue, protectedRow), columnType));
+
+            // 4. Append WAL record and attach LSN to affected dirty pages
+            WriteContext ctx = AccessPermission.writeWithContext(
+                    concurrencyControlManager, transactionId, item, oldValues, newValues);
+
+            // 5. Apply mutation using WAL LSN
+            Row updated = dataAccess.updateByRowId(targetId, newValues, ctx.getLSN());
+            if (!updated.rowId().equals(targetId)) {
+                DataItem movedItem = new DataItem(tableName, updated.rowId());
+                AccessPermission.protectWrite(concurrencyControlManager, transactionId, movedItem);
+                WriteContext deleteOldCtx = AccessPermission.writeWithContext(
+                        concurrencyControlManager, transactionId, item, newValues, null);
+                WriteContext insertNewCtx = AccessPermission.writeWithContext(
+                        concurrencyControlManager, transactionId, movedItem, null, newValues);
+                // Ensure moved pages also carry the latest WAL LSN
+                dataAccess.updateByRowId(updated.rowId(), newValues,
+                        Math.max(deleteOldCtx.getLSN(), insertNewCtx.getLSN()));
+            }
+            updatedCount++;
         }
-        affectedRows = targetRows.size();
+        affectedRows = updatedCount;
         return null;
     }
 
