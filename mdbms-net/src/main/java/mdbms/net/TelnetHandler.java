@@ -12,6 +12,8 @@ import java.nio.charset.StandardCharsets;
 
 public class TelnetHandler implements AutoCloseable {
     private final class TelnetDataInputStream extends InputStream {
+        private boolean closed;
+
         @Override
         public int read() throws IOException {
             return readDataByte();
@@ -30,6 +32,14 @@ public class TelnetHandler implements AutoCloseable {
             bytes[offset] = (byte) value;
             return 1;
         }
+
+        @Override
+        public void close() throws IOException {
+            if (!closed) {
+                closed = true;
+                input.close();
+            }
+        }
     }
 
     private static final int IAC = 255;
@@ -47,18 +57,23 @@ public class TelnetHandler implements AutoCloseable {
 
     private final PushbackInputStream input;
     private final OutputStream output;
+    private final TelnetDataInputStream telnetDataInputStream;
     private final Reader characterReader;
+    private final Socket socket;
 
     private boolean telnet;
     private int pendingCodeUnit = -1;
+    private long activeReadDeadlineNanos;
 
     public TelnetHandler(Socket socket) throws IOException {
+        this.socket = socket;
         this.input = new PushbackInputStream(
                 socket.getInputStream(), 3);
         this.output = socket.getOutputStream();
 
+        this.telnetDataInputStream = new TelnetDataInputStream();
+        this.characterReader = new InputStreamReader(telnetDataInputStream, StandardCharsets.UTF_8);
         detectTelnet(socket);
-        this.characterReader = new InputStreamReader(new TelnetDataInputStream(), StandardCharsets.UTF_8);
     }
 
     public boolean isTelnet() {
@@ -73,6 +88,19 @@ public class TelnetHandler implements AutoCloseable {
     }
 
     public int read() throws IOException {
+        return readCodePoint();
+    }
+
+    public int read(long deadlineNanos) throws IOException {
+        activeReadDeadlineNanos = deadlineNanos;
+        try {
+            return readCodePoint();
+        } finally {
+            activeReadDeadlineNanos = 0;
+        }
+    }
+
+    private int readCodePoint() throws IOException {
         int first = readCodeUnit();
         if (first == -1 || !Character.isHighSurrogate((char) first)) {
             return first;
@@ -90,7 +118,11 @@ public class TelnetHandler implements AutoCloseable {
 
     @Override
     public void close() throws IOException {
-        characterReader.close();
+        try {
+            characterReader.close();
+        } finally {
+            telnetDataInputStream.close();
+        }
     }
 
     private int readCodeUnit() throws IOException {
@@ -104,12 +136,12 @@ public class TelnetHandler implements AutoCloseable {
 
     private int readDataByte() throws IOException {
         if (!telnet) {
-            return input.read();
+            return readInputByte();
         }
 
         int ch;
-        while ((ch = input.read()) == IAC) {
-            int command = input.read();
+        while ((ch = readInputByte()) == IAC) {
+            int command = readInputByte();
             if (command == -1 || command == IAC) {
                 return command;
             }
@@ -118,13 +150,29 @@ public class TelnetHandler implements AutoCloseable {
                 continue;
             }
             if (isNegotiation(command)) {
-                int option = input.read();
+                int option = readInputByte();
                 if (option == -1)
                     return -1;
                 handleNegotiation(command, option);
             }
         }
         return ch;
+    }
+
+    private int readInputByte() throws IOException {
+        if (activeReadDeadlineNanos != 0) {
+            long remainingNanos = activeReadDeadlineNanos - System.nanoTime();
+            if (remainingNanos <= 0) {
+                throw new SocketTimeoutException("Telnet input deadline exceeded");
+            }
+            long remainingMillis = Math.max(1, (remainingNanos + 999_999) / 1_000_000);
+            socket.setSoTimeout((int) Math.min(Integer.MAX_VALUE, remainingMillis));
+        }
+        int value = input.read();
+        if (activeReadDeadlineNanos != 0 && System.nanoTime() >= activeReadDeadlineNanos) {
+            throw new SocketTimeoutException("Telnet input deadline exceeded");
+        }
+        return value;
     }
 
     private void detectTelnet(Socket socket) throws IOException {
@@ -170,9 +218,9 @@ public class TelnetHandler implements AutoCloseable {
 
     private void skipSubnegotiation() throws IOException {
         int ch;
-        while ((ch = input.read()) != -1) {
+        while ((ch = readInputByte()) != -1) {
             if (ch == IAC) {
-                int next = input.read();
+                int next = readInputByte();
                 if (next == SE) {
                     return;
                 }
