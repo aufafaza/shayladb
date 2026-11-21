@@ -37,7 +37,7 @@ Every response has a `status` and non-negative `elapsedMs`.
 Database nulls are JSON `null` inside `rows`. `ERROR` codes include
 `INVALID_REQUEST`, `INVALID_UTF8`, `INCOMPLETE_REQUEST`, `REQUEST_TIMEOUT`,
 `REQUEST_TOO_LARGE`, `RESPONSE_TOO_LARGE`, `ADMISSION_REJECTED`,
-`TRANSACTION_STATE`, and `EXECUTION_ERROR`.
+`TRANSACTION_STATE`, `CAPACITY_REACHED`, and `EXECUTION_ERROR`.
 
 Clean EOF before a frame starts ends the session. EOF during a frame is an
 `INCOMPLETE_REQUEST`. On any disconnect or timeout, an active transaction is

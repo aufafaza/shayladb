@@ -274,7 +274,7 @@ public class CommandLineInterface {
             return 2;
         }
         if (codePoint <= 0xffff) {
-            return 3;
+            return 3; 
         }
         return 4;
     }
