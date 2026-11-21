@@ -19,6 +19,8 @@ public final class MockDataAccess implements IDataAccess {
     public static final String TABLE_NAME = "table";
     public static final String ID_COLUMN = "id";
     public static final String SECOND_COLUMN = "other_id";
+    public static final String NAME_COLUMN = "name";
+    public static final String SCORE_COLUMN = "score";
     public static final String INDEX_NAME = "other_id_idx";
     public static final int TABLE_SIZE = 8;
     public static final int BLOCK_SIZE = 1;
@@ -32,7 +34,11 @@ public final class MockDataAccess implements IDataAccess {
     public MockDataAccess() {
         for (int id = 1; id <= TABLE_SIZE; id++) {
             RowId rowId = new RowId(TABLE_NAME, (id - 1) / BLOCK_SIZE, (id - 1) % BLOCK_SIZE);
-            addRow(new Row(rowId, List.of(id, ((id - 1) * 2) % TABLE_SIZE + 1)));
+            addRow(new Row(rowId, List.of(
+                    id,
+                    ((id - 1) * 2) % TABLE_SIZE + 1,
+                    "row-" + id,
+                    id + 0.5f)));
         }
     }
 
@@ -182,9 +188,9 @@ public final class MockDataAccess implements IDataAccess {
             return true;
         }
         return conditions.stream().allMatch(condition -> {
-            int comparison = Integer.compare(
-                    (Integer) row.values().get(columnIndex(condition.column())),
-                    (Integer) condition.value());
+            int comparison = compare(
+                    row.values().get(columnIndex(condition.column())),
+                    condition.value());
             return switch (condition.operator()) {
                 case EQ -> comparison == 0;
                 case NEQ -> comparison != 0;
@@ -194,6 +200,23 @@ public final class MockDataAccess implements IDataAccess {
                 case GTE -> comparison >= 0;
             };
         });
+    }
+
+    private int compare(Object left, Object right) {
+        if (left instanceof String leftString && right instanceof String rightString) {
+            return leftString.compareTo(rightString);
+        }
+        if ((left instanceof Integer || left instanceof Long)
+                && (right instanceof Integer || right instanceof Long)) {
+            return Long.compare(((Number) left).longValue(), ((Number) right).longValue());
+        }
+        if (left instanceof Number leftNumber && right instanceof Number rightNumber) {
+            if (left instanceof Float || right instanceof Float) {
+                return Float.compare(leftNumber.floatValue(), rightNumber.floatValue());
+            }
+            return Double.compare(leftNumber.doubleValue(), rightNumber.doubleValue());
+        }
+        throw new IllegalArgumentException("Incompatible mock values: " + left + " and " + right);
     }
 
     private Row project(Row row, List<String> columns) {
@@ -206,13 +229,20 @@ public final class MockDataAccess implements IDataAccess {
     }
 
     private List<Object> valuesFrom(Map<String, Object> values) {
-        return List.of(values.get(ID_COLUMN), values.get(SECOND_COLUMN));
+        List<Object> rowValues = new ArrayList<>(4);
+        rowValues.add(values.get(ID_COLUMN));
+        rowValues.add(values.get(SECOND_COLUMN));
+        rowValues.add(values.get(NAME_COLUMN));
+        rowValues.add(values.get(SCORE_COLUMN));
+        return rowValues;
     }
 
     private int columnIndex(String column) {
         return switch (column) {
             case ID_COLUMN -> 0;
             case SECOND_COLUMN -> 1;
+            case NAME_COLUMN -> 2;
+            case SCORE_COLUMN -> 3;
             default -> throw new IllegalArgumentException("Unknown column: " + column);
         };
     }
