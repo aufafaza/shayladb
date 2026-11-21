@@ -93,7 +93,7 @@ class StorageRelocationTest {
 
     @Test
     void updateInPlaceCanStillRefuseWhenSpaceIsTakenAfterTheCheck() {
-        // baris baru selalu masuk halaman terakhir, jadi pakai baris yang ada di halaman terakhir
+        // insert nyari ruang mulai dari halaman terakhir, jadi pakai baris yang ada di halaman terakhir
         RowId last = rowIdOf(ROWS);
         List<Object> longer = values(ROWS, 200);
         List<Object> before = storage.fetchByRowId(last).values();
@@ -149,7 +149,9 @@ class StorageRelocationTest {
         storage.deleteByRowId(oldRid);
 
         // urutan undo relokasi FRM, hapus di lokasi baru, lepas pesanan kalau masih ada, taruh lagi isi lama di lokasi lama
+        // lokasi baru yang udah dihapus masih nahan ruangnya, jadi boleh dilepas sekali, lepas kedua kalinya ditolak
         storage.deleteByRowId(newRid);
+        storage.releaseRowId(newRid);
         StorageException notReserved = assertThrows(StorageException.class, () -> storage.releaseRowId(newRid));
         assertTrue(notReserved.getMessage().toLowerCase().contains("not reserved"),
                 "pesan nya harus cocok sama RecordApplier.isNotReservedError");
