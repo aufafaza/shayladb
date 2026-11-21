@@ -306,25 +306,26 @@ public class HeapFile{
         return pool.blockCount(fileName);
     }
 
+    // cari block yang masih muat mulai dari block terakhir lalu mundur ke block sebelumnya
+    // jadi ruang bekas reservasi yang dilepas atau baris yang dihapus di block lama tetap kepakai lagi
+    // block baru cuma dibikin kalau semua block udah penuh
     private int findBlockWithSpace(int requiredBytes){
-        int blockCount = blockCount();
-        if (blockCount == 0) return appendEmptyPage();
+        for (int blockNumber = blockCount() - 1; blockNumber >= 0; blockNumber--){
+            if (hasSpace(blockNumber, requiredBytes)) return blockNumber;
+        }
 
-        int blockNumber = blockCount - 1;
+        return appendEmptyPage();
+    }
+
+    private boolean hasSpace(int blockNumber, int requiredBytes){
         Block block = pool.pin(fileName, blockNumber);
-        boolean hasSpace;
 
         try{
-            SlottedPage page = SlottedPage.of(block.data);
-            hasSpace = page.hasSpace(requiredBytes);
+            return SlottedPage.of(block.data).hasSpace(requiredBytes);
 
         } finally{
             pool.unpin(block, false, NO_LSN);
         }
-
-        if (hasSpace) return blockNumber;
-        
-        return appendEmptyPage();
     }
 
     // tambah block baru lalu isi header SlottedPage kosong, pin dari appendBlock langsung dilepas
