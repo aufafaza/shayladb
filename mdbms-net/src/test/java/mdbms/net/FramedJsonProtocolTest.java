@@ -170,6 +170,135 @@ class FramedJsonProtocolTest {
         assertTrue(socket.closed);
     }
 
+    @Test
+    void beginAndRepeatedBeginHaveDefinedLifecycleOutcomes() throws Exception {
+        TestSocket socket = new TestSocket(concat(
+                frame("{\"sql\":\"BEGIN\"}"),
+                frame("{\"sql\":\"BEGIN\"}"),
+                frame("{\"sql\":\"COMMIT\"}")));
+        IConcurrencyControl control = new IConcurrencyControl() {
+            private int nextId = 42;
+            private final java.util.Set<Integer> active = new java.util.HashSet<>();
+
+            @Override public int beginTransaction() {
+                active.add(nextId);
+                return nextId++;
+            }
+            @Override public void commitTransaction(int txId) { active.remove(txId); }
+            @Override public void abortTransaction(int txId, String reason) { active.remove(txId); }
+            @Override public AccessStatus requestRead(int txId, DataItem data) { return AccessStatus.GRANTED; }
+            @Override public AccessStatus requestWrite(int txId, DataItem data, Object oldVal, Object newVal) {
+                return AccessStatus.GRANTED;
+            }
+            @Override public AccessStatus requestWrite(int txId, DataItem data) { return AccessStatus.GRANTED; }
+            @Override public Transaction getTransaction(int txId) { return null; }
+            @Override public boolean verifySchedule(List<Operation> manualSchedule) { return false; }
+        };
+
+        new ClientHandler(socket, new SessionManager(), (query, txId) ->
+                new ExecutionResult(true, null, null, -1, null), control).run();
+
+        ByteArrayInputStream responses = new ByteArrayInputStream(socket.output.toByteArray());
+        assertTrue(readFrame(responses).contains("BEGIN transaction 42"));
+        assertTrue(readFrame(responses).contains("\"code\":\"TRANSACTION_STATE\""));
+        assertTrue(readFrame(responses).contains("COMMIT transaction 42"));
+    }
+
+    @Test
+    void commitAndAbortWithoutBeginHaveDefinedLifecycleOutcomes() throws Exception {
+        TestSocket socket = new TestSocket(concat(
+                frame("{\"sql\":\"COMMIT\"}"),
+                frame("{\"sql\":\"ABORT\"}")));
+
+        new ClientHandler(socket, new SessionManager(), (query, txId) ->
+                new ExecutionResult(true, null, null, -1, null), rejectingControl()).run();
+
+        ByteArrayInputStream responses = new ByteArrayInputStream(socket.output.toByteArray());
+        assertTrue(readFrame(responses).contains("No active transaction"));
+        assertTrue(readFrame(responses).contains("No active transaction"));
+    }
+
+    @Test
+    void statementFailureAbortsExplicitTransactionOnce() throws Exception {
+        TestSocket socket = new TestSocket(concat(
+                frame("{\"sql\":\"BEGIN\"}"),
+                frame("{\"sql\":\"SELECT 1\"}")));
+        int[] abortAttempts = {0};
+        IConcurrencyControl control = controlWithAbortCounter(abortAttempts);
+
+        new ClientHandler(socket, new SessionManager(), (query, txId) ->
+                new ExecutionResult(false, null, null, 0, "statement failed"), control).run();
+
+        ByteArrayInputStream responses = new ByteArrayInputStream(socket.output.toByteArray());
+        assertTrue(readFrame(responses).contains("BEGIN transaction"));
+        assertTrue(readFrame(responses).contains("statement failed"));
+        assertEquals(1, abortAttempts[0]);
+    }
+
+    @Test
+    void commitFailureReturnsFailedOutcomeAndDoesNotClearThroughSuccessPath() throws Exception {
+        TestSocket socket = new TestSocket(concat(
+                frame("{\"sql\":\"BEGIN\"}"),
+                frame("{\"sql\":\"COMMIT\"}")));
+        int[] commits = {0};
+        IConcurrencyControl control = new IConcurrencyControl() {
+            @Override public int beginTransaction() { return 42; }
+            @Override public void commitTransaction(int txId) {
+                commits[0]++;
+                throw new IllegalStateException("commit log failed");
+            }
+            @Override public void abortTransaction(int txId, String reason) { }
+            @Override public AccessStatus requestRead(int txId, DataItem data) { return AccessStatus.GRANTED; }
+            @Override public AccessStatus requestWrite(int txId, DataItem data, Object oldVal, Object newVal) {
+                return AccessStatus.GRANTED;
+            }
+            @Override public AccessStatus requestWrite(int txId, DataItem data) { return AccessStatus.GRANTED; }
+            @Override public Transaction getTransaction(int txId) { return null; }
+            @Override public boolean verifySchedule(List<Operation> manualSchedule) { return false; }
+        };
+
+        new ClientHandler(socket, new SessionManager(), (query, txId) ->
+                new ExecutionResult(true, null, null, -1, null), control).run();
+
+        ByteArrayInputStream responses = new ByteArrayInputStream(socket.output.toByteArray());
+        String beginResponse = readFrame(responses);
+        String commitResponse = readFrame(responses);
+        assertTrue(beginResponse.contains("BEGIN transaction"));
+        assertTrue(commitResponse.contains("\"status\":\"ERROR\""));
+        assertTrue(commitResponse.contains("COMMIT failed"));
+        assertEquals(1, commits[0]);
+    }
+
+    private IConcurrencyControl rejectingControl() {
+        return new IConcurrencyControl() {
+            @Override public int beginTransaction() { throw new IllegalStateException("paused"); }
+            @Override public void commitTransaction(int txId) { }
+            @Override public void abortTransaction(int txId, String reason) { }
+            @Override public AccessStatus requestRead(int txId, DataItem data) { return AccessStatus.ABORTED; }
+            @Override public AccessStatus requestWrite(int txId, DataItem data, Object oldVal, Object newVal) {
+                return AccessStatus.ABORTED;
+            }
+            @Override public AccessStatus requestWrite(int txId, DataItem data) { return AccessStatus.ABORTED; }
+            @Override public Transaction getTransaction(int txId) { return null; }
+            @Override public boolean verifySchedule(List<Operation> manualSchedule) { return false; }
+        };
+    }
+
+    private IConcurrencyControl controlWithAbortCounter(int[] abortAttempts) {
+        return new IConcurrencyControl() {
+            @Override public int beginTransaction() { return 42; }
+            @Override public void commitTransaction(int txId) { }
+            @Override public void abortTransaction(int txId, String reason) { abortAttempts[0]++; }
+            @Override public AccessStatus requestRead(int txId, DataItem data) { return AccessStatus.GRANTED; }
+            @Override public AccessStatus requestWrite(int txId, DataItem data, Object oldVal, Object newVal) {
+                return AccessStatus.GRANTED;
+            }
+            @Override public AccessStatus requestWrite(int txId, DataItem data) { return AccessStatus.GRANTED; }
+            @Override public Transaction getTransaction(int txId) { return null; }
+            @Override public boolean verifySchedule(List<Operation> manualSchedule) { return false; }
+        };
+    }
+
     private static byte[] frame(String payload) {
         byte[] body = payload.getBytes(StandardCharsets.UTF_8);
         return concat(ByteBuffer.allocate(4).putInt(body.length).array(), body);

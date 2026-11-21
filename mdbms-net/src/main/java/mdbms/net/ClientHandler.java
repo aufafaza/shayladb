@@ -156,31 +156,95 @@ public class ClientHandler implements Runnable {
     }
 
     private ExecutionResult executeQuery(String query, String command) {
-        boolean autoCommit = !session.isTransacting();
-        int txId;
+        if (command.equals("BEGIN")) {
+            return beginTransaction();
+        }
+        if (command.equals("COMMIT")) {
+            return commitTransaction();
+        }
+        if (command.equals("ABORT")) {
+            return abortTransaction();
+        }
+        return executeStatement(query);
+    }
+
+    private ExecutionResult beginTransaction() {
         try {
-            txId = autoCommit ? concurrencyControl.beginTransaction() : session.getCurrentTxId();
-        } catch (IllegalStateException e) {
+            int txId = concurrencyControl.beginTransaction();
+            session.beginTransaction(txId);
+            return new ExecutionResult(true, null, null, -1, "BEGIN transaction " + txId);
+        } catch (RuntimeException e) {
             return new ExecutionResult(false, null, null, 0,
                     "Transaction admission rejected: "
                             + FramedJsonProtocol.messageOrDefault(e.getMessage(), "unavailable"));
         }
+    }
+
+    private ExecutionResult commitTransaction() {
+        int txId = session.getCurrentTxId();
+        try {
+            concurrencyControl.commitTransaction(txId);
+            session.clearTransaction();
+            return new ExecutionResult(true, null, null, -1, "COMMIT transaction " + txId);
+        } catch (RuntimeException e) {
+            session.clearTransaction();
+            return new ExecutionResult(false, null, null, 0,
+                    "COMMIT failed: " + FramedJsonProtocol.messageOrDefault(e.getMessage(), "unable to commit transaction"));
+        }
+    }
+
+    private ExecutionResult abortTransaction() {
+        int txId = session.getCurrentTxId();
+        try {
+            concurrencyControl.abortTransaction(txId, "ABORT requested by client");
+            session.clearTransaction();
+            return new ExecutionResult(true, null, null, -1, "ABORT transaction " + txId);
+        } catch (RuntimeException e) {
+            session.clearTransaction();
+            return new ExecutionResult(false, null, null, 0,
+                    "ABORT failed: " + FramedJsonProtocol.messageOrDefault(e.getMessage(), "unable to abort transaction"));
+        }
+    }
+
+    private ExecutionResult executeStatement(String query) {
+        boolean autoCommit = !session.isTransacting();
+        int txId;
+        try {
+            txId = autoCommit ? concurrencyControl.beginTransaction() : session.getCurrentTxId();
+        } catch (RuntimeException e) {
+            return new ExecutionResult(false, null, null, 0,
+                    "Transaction admission rejected: "
+                            + FramedJsonProtocol.messageOrDefault(e.getMessage(), "unavailable"));
+        }
+        if (autoCommit) {
+            session.beginTransaction(txId);
+        }
 
         try {
             ExecutionResult result = processor.executeQuery(query, txId);
-            if (result == null || !result.success()) {
+            if (result == null) {
+                abortIfActive(txId, "Query processor returned no result");
+                session.clearTransaction();
+                return new ExecutionResult(false, null, null, 0, "Query processor returned no result");
+            }
+            if (!result.success()) {
                 abortIfActive(txId, "Query execution failed");
                 session.clearTransaction();
-            } else if (command.equals("BEGIN")) {
-                session.beginTransaction(txId);
-            } else if (command.equals("COMMIT") || command.equals("ABORT")) {
-                session.clearTransaction();
-            } else if (autoCommit) {
-                concurrencyControl.commitTransaction(txId);
+                return result;
             }
-            return result == null ? new ExecutionResult(false, null, null, 0, "Query processor returned no result")
-                    : result;
-        } catch (Exception e) {
+
+            if (autoCommit) {
+                try {
+                    concurrencyControl.commitTransaction(txId);
+                    session.clearTransaction();
+                } catch (RuntimeException e) {
+                    session.clearTransaction();
+                    return new ExecutionResult(false, null, null, 0,
+                            "COMMIT failed: " + FramedJsonProtocol.messageOrDefault(e.getMessage(), "unable to commit transaction"));
+                }
+            }
+            return result;
+        } catch (RuntimeException e) {
             abortIfActive(txId, "Failed to execute query: " + e.getMessage());
             session.clearTransaction();
             return new ExecutionResult(false, null, null, 0,
