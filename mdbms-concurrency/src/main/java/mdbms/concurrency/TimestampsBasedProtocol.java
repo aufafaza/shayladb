@@ -27,6 +27,7 @@ public class TimestampsBasedProtocol implements ConcurrencyProtocol {
             return AccessStatus.ABORTED;
         }
         transactionRegistry.put(tx.getId(), tx);
+        if (data.isTableRange()) return AccessStatus.GRANTED;
         if (tx.getTimestamp() < timestampManager.getWriteTS(data)) {
             return AccessStatus.ABORTED;
         }
@@ -40,6 +41,7 @@ public class TimestampsBasedProtocol implements ConcurrencyProtocol {
             return AccessStatus.ABORTED;
         }
         transactionRegistry.put(tx.getId(), tx);
+        if (data.isTableRange()) return AccessStatus.GRANTED;
         if (tx.getTimestamp() < timestampManager.getReadTS(data)
                 || tx.getTimestamp() < timestampManager.getWriteTS(data)) {
             return AccessStatus.ABORTED;
