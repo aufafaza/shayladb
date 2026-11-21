@@ -14,8 +14,18 @@ public interface Index {
     // daftarin satu RowId di bawah key, key yang sama boleh punya banyak RowId
     void insert(Object key, RowId rowId);
 
+    // sama kayak insert tapi halaman index yang berubah ditandai LSN log perubahan baris nya (#54)
+    default void insert(Object key, RowId rowId, long pageLsn) {
+        insert(key, rowId);
+    }
+
     // hapus pasangan key dan RowId, kalau pasangannya ga ada diabaikan aja
     void delete(Object key, RowId rowId);
+
+    // sama kayak delete tapi halaman index yang berubah ditandai LSN log perubahan baris nya (#54)
+    default void delete(Object key, RowId rowId, long pageLsn) {
+        delete(key, rowId);
+    }
 
     // ambil semua RowId yang key nya sama persis, list kosong kalau ga ketemu
     List<RowId> search(Object key);

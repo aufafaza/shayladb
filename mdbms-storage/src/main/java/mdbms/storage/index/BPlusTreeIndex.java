@@ -41,6 +41,8 @@ public final class BPlusTreeIndex implements Index {
     private final KeyComparator comparator;
     private final NodeCodec nodeCodec;
     private final ReentrantReadWriteLock lock = new ReentrantReadWriteLock();
+    // LSN yang ditempel ke tiap halaman yang ditulis selama insert atau delete lagi jalan, cuma diubah pas write lock dipegang
+    private long writeLsn = NO_LSN;
 
     // siapin index, kalau file nya udah ada meta langsung dibaca biar index lama kepake lagi
     public BPlusTreeIndex(IndexInfo info, ColumnDefinition column, int maxDegree, BufferPool pool,
@@ -96,10 +98,17 @@ public final class BPlusTreeIndex implements Index {
     // daftarin RowId di bawah key, key null ga diindex, key baru dapet bucket baru dan bisa bikin split
     @Override
     public void insert(Object key, RowId rowId) {
+        insert(key, rowId, NO_LSN);
+    }
+
+    // semua halaman node, bucket, dan meta yang berubah ditandai pageLsn biar WAL di flush dulu sebelum halaman index ditulis
+    @Override
+    public void insert(Object key, RowId rowId, long pageLsn) {
         checkTable(rowId);
         Object normalized = normalizer.normalize(key, column);
         if (normalized == null) return;
         lock.writeLock().lock();
+        writeLsn = pageLsn;
         try {
             Deque<BPlusNode> path = new ArrayDeque<>();
             BPlusNode leaf = findLeaf(normalized, path);
@@ -118,6 +127,7 @@ public final class BPlusTreeIndex implements Index {
             }
             writeMeta();
         } finally {
+            writeLsn = NO_LSN;
             lock.writeLock().unlock();
         }
     }
@@ -126,10 +136,17 @@ public final class BPlusTreeIndex implements Index {
     // pasangan yang ga ada atau key null diabaikan
     @Override
     public void delete(Object key, RowId rowId) {
+        delete(key, rowId, NO_LSN);
+    }
+
+    // semua halaman yang berubah termasuk free list ditandai pageLsn
+    @Override
+    public void delete(Object key, RowId rowId, long pageLsn) {
         checkTable(rowId);
         Object normalized = normalizer.normalize(key, column);
         if (normalized == null) return;
         lock.writeLock().lock();
+        writeLsn = pageLsn;
         try {
             Deque<BPlusNode> path = new ArrayDeque<>();
             BPlusNode leaf = findLeaf(normalized, path);
@@ -142,6 +159,7 @@ public final class BPlusTreeIndex implements Index {
             }
             writeMeta();
         } finally {
+            writeLsn = NO_LSN;
             lock.writeLock().unlock();
         }
     }
@@ -453,7 +471,7 @@ public final class BPlusTreeIndex implements Index {
     private void writeNode(BPlusNode node) {
         Block block = new Block(fileName, node.getBlockNumber(), new byte[BlockManager.BLOCK_SIZE]);
         nodeCodec.write(node, block);
-        pool.writeBuffer(fileName, node.getBlockNumber(), block.data, NO_LSN);
+        pool.writeBuffer(fileName, node.getBlockNumber(), block.data, writeLsn);
     }
 
     // ambil block buat node baru, belum ditulis sampai writeNode dipanggil
@@ -465,7 +483,7 @@ public final class BPlusTreeIndex implements Index {
     private void freeNode(int blockNumber) {
         byte[] data = new byte[BlockManager.BLOCK_SIZE];
         ByteBuffer.wrap(data).putInt(0, freeListHead);
-        pool.writeBuffer(fileName, blockNumber, data, NO_LSN);
+        pool.writeBuffer(fileName, blockNumber, data, writeLsn);
         freeListHead = blockNumber;
     }
 
@@ -587,7 +605,7 @@ public final class BPlusTreeIndex implements Index {
                 .putInt(8, rootBlock)
                 .putInt(12, height)
                 .putInt(16, freeListHead);
-        pool.writeBuffer(fileName, META_BLOCK, data, NO_LSN);
+        pool.writeBuffer(fileName, META_BLOCK, data, writeLsn);
     }
 
     // salinan isi block dibungkus Block biar bisa dipakai codec dan bucket
@@ -597,7 +615,7 @@ public final class BPlusTreeIndex implements Index {
 
     // tulis balik salinan block ke buffer
     private void writeBlock(Block block) {
-        pool.writeBuffer(fileName, block.blockNumber, block.data, NO_LSN);
+        pool.writeBuffer(fileName, block.blockNumber, block.data, writeLsn);
     }
 
     // hasil split internal, key yang naik ke parent dan node kanan yang baru

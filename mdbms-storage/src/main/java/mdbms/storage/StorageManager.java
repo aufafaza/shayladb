@@ -105,7 +105,7 @@ public final class StorageManager implements IDataAccess, ISchemaCatalog, IStati
             RowId rowId = heapFile.insert(values);
             Row newRow = new Row(rowId, values);
             try{
-                afterWrite(request.table(), null, newRow);
+                afterWrite(request.table(), null, newRow, NO_LSN);
                 result.add(rowId);
                 return result;
                 
@@ -178,17 +178,27 @@ public final class StorageManager implements IDataAccess, ISchemaCatalog, IStati
 
     @Override
     public RowId reserveRowId(String table, List<Object> values){
+        return reserveRowId(table, values, NO_LSN);
+    }
+
+    @Override
+    public RowId reserveRowId(String table, List<Object> values, long pageLsn){
         TableSchema schema = requireSchema(table);
         validateRow(schema, values);
         HeapFile heapFile = heapFileOf(table);
 
-        return heapFile.reserve(values);
+        return heapFile.reserve(values, pageLsn);
     }
 
     @Override
     public void releaseRowId(RowId rowId){
+        releaseRowId(rowId, NO_LSN);
+    }
+
+    @Override
+    public void releaseRowId(RowId rowId, long pageLsn){
         HeapFile heapFile = heapFileOf(rowId.tableName());
-        heapFile.releaseReservation(rowId);
+        heapFile.releaseReservation(rowId, pageLsn);
     }
 
     // taruh baris di RowId hasil reserveRowId atau dari redo FRM, kalau barisnya udah ada dengan isi sama dianggap beres
@@ -211,7 +221,7 @@ public final class StorageManager implements IDataAccess, ISchemaCatalog, IStati
         Row newRow = new Row(rowId, new ArrayList<>(values));
 
         try{
-            afterWrite(rowId.tableName(), null, newRow);
+            afterWrite(rowId.tableName(), null, newRow, pageLsn);
         } catch (RuntimeException e){
             if (inserted){
                 undo(e, () -> heapFile.delete(rowId, pageLsn));
@@ -237,7 +247,7 @@ public final class StorageManager implements IDataAccess, ISchemaCatalog, IStati
         Row newRow = heapFile.update(rowId, values, pageLsn);
 
         try{
-            afterWrite(rowId.tableName(), oldRow, newRow);
+            afterWrite(rowId.tableName(), oldRow, newRow, pageLsn);
             return newRow;
         } catch (RuntimeException e){
             if (newRow.rowId().equals(oldRow.rowId())){
@@ -285,7 +295,7 @@ public final class StorageManager implements IDataAccess, ISchemaCatalog, IStati
         }
 
         try{
-            afterWrite(rowId.tableName(), oldRow, new Row(rowId, new ArrayList<>(values)));
+            afterWrite(rowId.tableName(), oldRow, new Row(rowId, new ArrayList<>(values)), pageLsn);
             return true;
         } catch (RuntimeException e){
             undo(e, () -> heapFile.updateInPlace(oldRow.rowId(), oldRow.values(), pageLsn));
@@ -310,7 +320,7 @@ public final class StorageManager implements IDataAccess, ISchemaCatalog, IStati
         }
 
         try{
-            afterWrite(rowId.tableName(), oldRow, null);
+            afterWrite(rowId.tableName(), oldRow, null, pageLsn);
             return oldRow;
         } catch (RuntimeException e){
             undo(e, () -> heapFile.insertAt(oldRow.rowId(), oldRow.values(), pageLsn));
@@ -728,17 +738,18 @@ public final class StorageManager implements IDataAccess, ISchemaCatalog, IStati
     }
 
     // samain semua index tabel dengan perubahan baris lalu catat perubahannya ke statistik secara eager
-    private void afterWrite(String table, Row oldRow, Row newRow){
+    // halaman index yang berubah ditandai LSN yang sama dengan halaman heap nya
+    private void afterWrite(String table, Row oldRow, Row newRow, long pageLsn){
         TableSchema schema = requireSchema(table);
 
         if (oldRow == null){
-            indexManager.onInsert(newRow, schema);
+            indexManager.onInsert(newRow, schema, pageLsn);
             statistics.recordWrite(table, 1);
         } else if (newRow == null){
-            indexManager.onDelete(oldRow, schema);
+            indexManager.onDelete(oldRow, schema, pageLsn);
             statistics.recordWrite(table, -1);
         } else{
-            indexManager.onUpdate(oldRow, newRow, schema);
+            indexManager.onUpdate(oldRow, newRow, schema, pageLsn);
             statistics.recordWrite(table, 0);
         }
     }

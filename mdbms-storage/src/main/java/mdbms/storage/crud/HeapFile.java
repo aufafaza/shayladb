@@ -55,6 +55,11 @@ public class HeapFile{
     }
 
     public RowId reserve(List<Object> values){
+        return reserve(values, NO_LSN);
+    }
+
+    // sama kayak reserve tapi halaman tempat slot dipesan ditandai LSN dari pemanggil
+    public RowId reserve(List<Object> values, long pageLsn){
         byte[] record = serializer.serialize(values, schema);
         int bytes = record.length;
         validateRecordSize(bytes);
@@ -71,11 +76,16 @@ public class HeapFile{
             return new RowId(schema.tableName(), block.blockNumber, slot);
 
         } finally{
-            pool.unpin(block, dirty, NO_LSN);
+            pool.unpin(block, dirty, pageLsn);
         }
     }
 
     public void releaseReservation(RowId rowId){
+        releaseReservation(rowId, NO_LSN);
+    }
+
+    // sama kayak releaseReservation tapi halamannya ditandai LSN dari pemanggil
+    public void releaseReservation(RowId rowId, long pageLsn){
         Block block = pool.pin(fileName, rowId.blockNumber());
 
         boolean dirty = false;
@@ -86,7 +96,7 @@ public class HeapFile{
             dirty = true;
 
         } finally{
-            pool.unpin(block, dirty, NO_LSN);
+            pool.unpin(block, dirty, pageLsn);
         }
     }
 

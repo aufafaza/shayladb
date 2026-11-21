@@ -121,6 +121,40 @@ class StoragePageLsnTest {
         assertTrue(forced.containsAll(pageLsns), "tiap halaman harus minta WAL sampai LSN nya: " + forced);
     }
 
+    // halaman index yang berubah bareng baris nya ikut ditandai LSN yang sama, jadi flush cuma minta LSN itu
+    @Test
+    void indexPagesCarryTheRowChangeLsn() {
+        storage.createIndex("idx_notes_id", TABLE, "id");
+        flushAndCollect();
+
+        RowId rowId = insert(1, "a", 601);
+        List<Long> afterInsert = flushAndCollect();
+        assertTrue(afterInsert.size() >= 2, "heap dan index harus sama sama dirty: " + afterInsert);
+        assertTrue(afterInsert.stream().allMatch(lsn -> lsn == 601L), "semua halaman harus bawa LSN 601: " + afterInsert);
+
+        assertTrue(storage.updateInPlace(rowId, List.of(2, "a"), 602));
+        List<Long> afterUpdate = flushAndCollect();
+        assertTrue(afterUpdate.size() >= 2, "heap dan index harus sama sama dirty: " + afterUpdate);
+        assertTrue(afterUpdate.stream().allMatch(lsn -> lsn == 602L), "semua halaman harus bawa LSN 602: " + afterUpdate);
+
+        storage.deleteByRowId(rowId, 603);
+        List<Long> afterDelete = flushAndCollect();
+        assertTrue(afterDelete.size() >= 2, "heap dan index harus sama sama dirty: " + afterDelete);
+        assertTrue(afterDelete.stream().allMatch(lsn -> lsn == 603L), "semua halaman harus bawa LSN 603: " + afterDelete);
+        assertTrue(storage.searchIndex("idx_notes_id", 2).isEmpty());
+    }
+
+    // reservasi dan pelepasan nya juga bisa bawa LSN kalau pemanggil punya
+    @Test
+    void reserveAndReleaseMarkPageWithGivenLsn() {
+        List<Object> values = List.of(1, "a");
+        RowId rowId = storage.reserveRowId(TABLE, values, 701);
+        assertEquals(List.of(701L), flushAndCollect());
+
+        storage.releaseRowId(rowId, 702);
+        assertEquals(List.of(702L), flushAndCollect());
+    }
+
     // jalur tanpa LSN kayak redo undo FRM tetap jalan dan ga minta flush WAL buat LSN palsu
     @Test
     void pathsWithoutLsnStillWork() {
