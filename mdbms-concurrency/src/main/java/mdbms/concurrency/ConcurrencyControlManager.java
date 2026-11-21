@@ -83,20 +83,30 @@ public final class ConcurrencyControlManager implements IConcurrencyControl {
     }
 
     public void stopTransactions() {
-        stopping = true;
-        pauseTransactions();
+        synchronized (lifecycleMonitor) {
+            stopping = true;
+            acceptingTransactions = false;
+            lifecycleMonitor.notifyAll();
+        }
     }
 
     @Override public boolean isStopping() { return stopping; }
 
     public void pauseTransactions() {
-        acceptingTransactions = false;
+        synchronized (lifecycleMonitor) {
+            acceptingTransactions = false;
+            lifecycleMonitor.notifyAll();
+        }
     }
 
     /** Allows new transactions after a checkpoint or maintenance operation. */
     public void resumeTransactions() {
         synchronized (lifecycleMonitor) {
             if (stopping) throw new IllegalStateException("Engine is stopping");
+            if (failureReason != null) {
+                throw new IllegalStateException("Engine is in failed state: " + failureReason);
+            }
+            if (!isRecovered) throw new IllegalStateException("Recovery has not completed");
             acceptingTransactions = true;
             lifecycleMonitor.notifyAll();
         }
@@ -161,7 +171,12 @@ public final class ConcurrencyControlManager implements IConcurrencyControl {
             }
             return;
         }
-        initAfterRecovery(frm.recoverOnStartup());
+        try {
+            initAfterRecovery(frm.recoverOnStartup());
+        } catch (RuntimeException failure) {
+            enterFailedState("Failure recovery did not complete: " + failure.getMessage());
+            throw failure;
+        }
     }
 
     public void initAfterRecovery(RecoveryResult result) {
@@ -169,7 +184,9 @@ public final class ConcurrencyControlManager implements IConcurrencyControl {
             isRecovered = false;
         }
         if (result == null || !result.isSuccess()) {
-            throw new IllegalStateException("Failure recovery did not complete");
+            String detail = result == null ? "no result" : result.getMessage();
+            enterFailedState("Failure recovery did not complete: " + detail);
+            throw new IllegalStateException("Failure recovery did not complete: " + detail);
         }
         if (frm == null) {
             synchronized (lifecycleMonitor) {
@@ -537,6 +554,7 @@ public final class ConcurrencyControlManager implements IConcurrencyControl {
     private void enterFailedState(String reason) {
         synchronized (lifecycleMonitor) {
             if (failureReason == null) failureReason = reason;
+            acceptingTransactions = false;
             lifecycleMonitor.notifyAll();
         }
     }
