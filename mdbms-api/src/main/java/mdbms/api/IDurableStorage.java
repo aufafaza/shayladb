@@ -3,10 +3,12 @@ package mdbms.api;
 import java.util.Set;
 import mdbms.models.access.BufferStats;
 
-public interface IDurableStorage{
+public interface IDurableStorage extends AutoCloseable {
     void flushBuffer();
 
     BufferStats getBufferStats();
+
+    @Override default void close() { flushBuffer(); }
 
     // buang cache buffer file yang barusan diganti dari luar misalnya restore snapshot, lalu muat ulang katalog dan index dari disk
     // default nya gagal biar implementasi yang belum ngisi ga keliatan sukses padahal cache nya basi

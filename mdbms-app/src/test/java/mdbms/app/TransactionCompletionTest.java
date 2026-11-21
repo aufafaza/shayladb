@@ -29,7 +29,6 @@ import mdbms.models.transaction.AccessStatus;
 import mdbms.models.transaction.Transaction;
 import mdbms.models.transaction.TransactionState;
 import mdbms.optimizer.QueryOptimizer;
-import mdbms.optimizer.lexer.ShaylaLexer;
 import mdbms.optimizer.parser.ShaylaParser;
 import mdbms.processor.QueryProcessor;
 import mdbms.processor.operator.CreateTableOperator;
@@ -37,7 +36,6 @@ import mdbms.recovery.FailureRecoveryFacade;
 import mdbms.storage.StorageManager;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.api.io.TempDir;
@@ -160,11 +158,7 @@ class TransactionCompletionTest {
         assertEquals(baselineRows, rowsOf(reopened));
     }
 
-    // relokasi sekarang dicatat UPDATE lama, DELETE lama berisi nilai baru, INSERT baru
-    // undo DELETE nya nyoba naruh nilai baru yang lebih panjang ke slot lama yang ga muat jadi rollback gagal
-    // sampai #55 beres engine masuk failed state di kasus ini, lock tetep dipegang jadi data ga rusak
     @Test
-    @Disabled("nunggu #55, log relokasi UPDATE belum bisa di undo")
     void abortRevertsRelocatedUpdate() {
         int tx = ccm.beginTransaction();
         assertOk(run(tx, "UPDATE users SET name = '" + name(1, 200) + "' WHERE id = 1;"));
@@ -177,7 +171,6 @@ class TransactionCompletionTest {
         assertIndexMatchesHeap();
     }
 
-    // perilaku sekarang selama #55 belum beres, rollback relokasi gagal tapi aman karena lock ga dilepas
     @Test
     void failedRelocationRollbackKeepsLocksInsteadOfCorruptingData() {
         int tx = ccm.beginTransaction();
@@ -185,11 +178,87 @@ class TransactionCompletionTest {
         assertOk(run(tx, "UPDATE users SET name = '" + name(1, 200) + "' WHERE id = 1;"));
         DataItem movedRow = new DataItem(TABLE, rowIdsById().get(1));
 
+        recovery.failRollback = true;
+
         assertFalse(run(tx, "ABORT;").success());
 
         assertTrue(ccm.isFailed());
         assertNull(protocol.releaseOrNull(tx));
         assertEquals(AccessStatus.WAITING, ccm.requestWrite(probe, movedRow));
+    }
+
+    @Test
+    void relocationProtectsAndLogsBothIdentitiesBeforeChangingStorage() {
+        int tx = ccm.beginTransaction();
+        int probe = ccm.beginTransaction();
+        RowId original = baselineRowIds.get(1);
+        recovery.beforeRelocationLog = (oldRid, newRid) -> {
+            assertEquals(original, oldRid);
+            assertNotEquals(oldRid, newRid);
+            assertEquals(baselineRows, heapRows(), "no physical change before relocation WAL");
+            assertEquals(AccessStatus.WAITING, ccm.requestWrite(probe, new DataItem(TABLE, oldRid)));
+            assertEquals(AccessStatus.WAITING, ccm.requestWrite(probe, new DataItem(TABLE, newRid)));
+        };
+
+        assertOk(run(tx, "UPDATE users SET name = '" + name(1, 200) + "' WHERE id = 1;"));
+
+        var changes = wal.readLogs(tx).stream()
+                .filter(record -> record instanceof mdbms.models.log.DataChangeLogRecord)
+                .map(record -> (mdbms.models.log.DataChangeLogRecord) record).toList();
+        assertEquals(1, changes.size(), "one relocation record, without extra UPDATE/DELETE/INSERT logs");
+        assertTrue(changes.get(0).isRelocation());
+        assertEquals(original, changes.get(0).getRowId());
+        assertEquals(rowIdsById().get(1), changes.get(0).getNewRowId());
+        assertTrue(wal.getLogManager().getWalFileHandler().getFlushedLsn() >= changes.get(0).getLsn());
+        assertIndexMatchesHeap();
+        assertOk(run(tx, "COMMIT;"));
+        ccm.abortTransaction(probe, "probe complete");
+    }
+
+    @Test
+    void failedRelocationLoggingReleasesReservationWithoutChangingTheRow() {
+        int tx = ccm.beginTransaction();
+        recovery.failRelocationLog = true;
+
+        assertFalse(run(tx, "UPDATE users SET name = '" + name(1, 200) + "' WHERE id = 1;").success());
+
+        assertEquals(baselineRows, heapRows());
+        assertEquals(baselineRowIds, rowIdsById());
+        assertIndexMatchesHeap();
+        assertEquals(0, storage.releaseOrphanReservations(), "destination reservation must already be released");
+        assertNull(ccm.getTransaction(tx));
+        assertFalse(ccm.isFailed());
+    }
+
+    @Test
+    void failureBetweenRelocationInsertAndDeleteUndoesTheDestination() {
+        RowId original = baselineRowIds.get(1);
+        mdbms.api.IDataAccess failingStorage = (mdbms.api.IDataAccess) java.lang.reflect.Proxy.newProxyInstance(
+                mdbms.api.IDataAccess.class.getClassLoader(), new Class<?>[] {mdbms.api.IDataAccess.class},
+                (proxy, method, args) -> {
+                    if (method.getName().equals("deleteByRowId") && original.equals(args[0])) {
+                        throw new IllegalStateException("injected failure after destination insertion");
+                    }
+                    try {
+                        return method.invoke(storage, args);
+                    } catch (java.lang.reflect.InvocationTargetException failure) {
+                        throw failure.getCause();
+                    }
+                });
+        QueryOptimizer optimizer = new QueryOptimizer(storage, new ShaylaParser()) {
+            @Override public ParsedQuery optimizeQuery(ParsedQuery query) { return query; }
+        };
+        processor = new QueryProcessor(optimizer, failingStorage, storage, recovery, ccm);
+        int tx = ccm.beginTransaction();
+
+        assertFalse(run(tx, "UPDATE users SET name = '" + name(1, 200) + "' WHERE id = 1;").success());
+
+        assertEquals(baselineRows, heapRows());
+        assertEquals(baselineRowIds, rowIdsById());
+        assertIndexMatchesHeap();
+        assertEquals(0, storage.releaseOrphanReservations());
+        assertNull(ccm.getTransaction(tx));
+        assertFalse(ccm.isFailed());
     }
 
     @Test
@@ -401,6 +470,8 @@ class TransactionCompletionTest {
         private volatile boolean failCommitAppend;
         private volatile boolean failCommitFlush;
         private volatile boolean failRollback;
+        private volatile boolean failRelocationLog;
+        private volatile java.util.function.BiConsumer<RowId, RowId> beforeRelocationLog = (oldRid, newRid) -> {};
         private volatile Runnable beforeCommitFlush = () -> {};
         private volatile long commitLsn = -1;
 
@@ -422,6 +493,14 @@ class TransactionCompletionTest {
         public RecoveryResult writeDataLog(int txId, LogType opType, String table, RowId rid,
                 RecordImage beforeImg, RecordImage afterImg) {
             return delegate.writeDataLog(txId, opType, table, rid, beforeImg, afterImg);
+        }
+
+        @Override
+        public RecoveryResult writeRelocationLog(int txId, String table, RowId oldRid, RowId newRid,
+                RecordImage beforeImg, RecordImage afterImg) {
+            beforeRelocationLog.accept(oldRid, newRid);
+            if (failRelocationLog) return new RecoveryResult(false, -1L, txId, "injected relocation log failure");
+            return delegate.writeRelocationLog(txId, table, oldRid, newRid, beforeImg, afterImg);
         }
 
         @Override
