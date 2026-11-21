@@ -27,6 +27,7 @@ import mdbms.models.schema.DataType;
 import mdbms.models.schema.TableSchema;
 import mdbms.models.transaction.AccessStatus;
 import mdbms.models.transaction.Transaction;
+import mdbms.models.transaction.TransactionState;
 import mdbms.optimizer.QueryOptimizer;
 import mdbms.optimizer.lexer.ShaylaLexer;
 import mdbms.optimizer.parser.ShaylaParser;
@@ -299,7 +300,21 @@ class TransactionCompletionTest {
 
     private ExecutionResult run(int tx, String sql) {
         try {
-            return processor.executeQuery(sql, tx);
+            // The embedded caller owns lifecycle actions, just as NET does for socket clients.
+            if (sql.equals("COMMIT;")) {
+                ccm.commitTransaction(tx);
+                return new ExecutionResult(true, List.of(), List.of(), 0, "COMMIT transaction " + tx);
+            }
+            if (sql.equals("ABORT;")) {
+                ccm.abortTransaction(tx, "ABORT requested by embedded caller");
+                return new ExecutionResult(true, List.of(), List.of(), 0, "ABORT transaction " + tx);
+            }
+            ExecutionResult result = processor.executeQuery(sql, tx);
+            Transaction transaction = ccm.getTransaction(tx);
+            if (!result.success() && transaction != null && transaction.getState() == TransactionState.ACTIVE) {
+                ccm.abortTransaction(tx, "Query execution failed");
+            }
+            return result;
         } catch (RuntimeException e) {
             return new ExecutionResult(false, null, null, 0, "lolos dari QueryProcessor: " + e);
         }
