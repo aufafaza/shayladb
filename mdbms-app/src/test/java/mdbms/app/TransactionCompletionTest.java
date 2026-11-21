@@ -158,6 +158,33 @@ class TransactionCompletionTest {
         assertEquals(baselineRows, rowsOf(reopened));
     }
 
+    // skenario STO-F1, INSERT dengan primary key yang udah ada ditolak dan baris asli tetap satu
+    @Test
+    void duplicatePrimaryKeyInsertIsRejected() {
+        int tx = ccm.beginTransaction();
+        ExecutionResult result = run(tx, "INSERT INTO users VALUES (1, 'Duplicate');");
+
+        assertFalse(result.success());
+        assertTrue(result.message().toLowerCase().contains("duplicate primary key"), result.message());
+        assertEquals(baselineRows, heapRows());
+        assertIndexMatchesHeap();
+    }
+
+    // UPDATE yang ganti primary key jadi punya baris lain ditolak, UPDATE kolom lain tetap jalan
+    @Test
+    void updateToExistingPrimaryKeyIsRejected() {
+        int tx = ccm.beginTransaction();
+        ExecutionResult result = run(tx, "UPDATE users SET id = 1 WHERE id = 2;");
+
+        assertFalse(result.success());
+        assertTrue(result.message().toLowerCase().contains("duplicate primary key"), result.message());
+        assertEquals(baselineRows, heapRows());
+
+        int next = ccm.beginTransaction();
+        assertOk(run(next, "UPDATE users SET name = 'tetap boleh' WHERE id = 2;"));
+        assertOk(run(next, "COMMIT;"));
+    }
+
     @Test
     void abortRevertsRelocatedUpdate() {
         int tx = ccm.beginTransaction();
