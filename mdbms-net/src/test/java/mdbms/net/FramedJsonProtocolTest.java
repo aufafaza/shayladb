@@ -222,9 +222,9 @@ class FramedJsonProtocolTest {
         }
 
         @Override
-        public void removeSession(String sessionId) {
+        public boolean removeSession(String sessionId) {
             removedSession = true;
-            super.removeSession(sessionId);
+            return super.removeSession(sessionId);
         }
     }
 }
