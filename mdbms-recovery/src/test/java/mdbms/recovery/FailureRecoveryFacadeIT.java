@@ -323,6 +323,7 @@ class FailureRecoveryFacadeIT {
             ds.flushBuffer();
 
             // Uji recoverToTransaction(2)
+            frm.setOfflineMaintenanceMode(true);
             RecoveryResult txTargetRes = frm.recoverToTransaction(2);
             assertTrue(txTargetRes.isSuccess());
             assertTrue(Files.exists(dir.resolve(TABLE + ".tbl")),

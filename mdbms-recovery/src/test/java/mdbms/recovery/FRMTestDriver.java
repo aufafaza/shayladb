@@ -475,6 +475,9 @@ public class FRMTestDriver {
         attachRecoveryManagerToStorage(smInstance, frm);
         IConcurrencyControl activeCcm = createRealConcurrencyControl(frm);
         invokeCcmInitAfterRecovery(activeCcm);
+        frm.attachMaintenanceCoordinator(() ->
+            !invokeCcmIsAccepting(activeCcm) && invokeCcmActiveTxCount(activeCcm) == 0
+        );
 
         try {
             // t0: T0 BEGIN, T0 INSERT R0 (100, BaseSnapshot, 10), T0 COMMIT, dan buat snapshot awal
@@ -506,8 +509,8 @@ public class FRMTestDriver {
             activeCcm.commitTransaction(t2);
             smDurable.flushBuffer();
 
-            // t6: Pulihkan basis data ke targetTime
-            RecoveryResult pitrRes = frm.recoverToPointInTime(targetTime);
+            // t6: Pulihkan basis data ke targetTime dalam maintenance barrier terkoordinasi dengan CCM
+            RecoveryResult pitrRes = invokeCcmQuiescentPitr(activeCcm, frm, targetTime);
 
             // t7: Jalankan recovery startup untuk verifikasi pemangkasan log
             RecoveryResult restartRes = frm.recoverOnStartup();
@@ -914,6 +917,43 @@ public class FRMTestDriver {
             resume.invoke(ccm);
         } catch (Exception e) {
             throw new RuntimeException("Gagal mengeksekusi quiescent checkpoint via CCM", e);
+        }
+    }
+
+    private static boolean invokeCcmIsAccepting(IConcurrencyControl ccm) {
+        try {
+            return (Boolean) ccm.getClass().getMethod("isAcceptingTransactions").invoke(ccm);
+        } catch (Exception e) {
+            throw new RuntimeException("Gagal memeriksa status admission CCM", e);
+        }
+    }
+
+    private static int invokeCcmActiveTxCount(IConcurrencyControl ccm) {
+        try {
+            return (Integer) ccm.getClass().getMethod("getActiveTransactionCount").invoke(ccm);
+        } catch (Exception e) {
+            throw new RuntimeException("Gagal memeriksa jumlah transaksi aktif CCM", e);
+        }
+    }
+
+    private static RecoveryResult invokeCcmQuiescentPitr(
+        IConcurrencyControl ccm,
+        IFailureRecoveryManager frm,
+        Instant targetTime
+    ) {
+        try {
+            Method pause = ccm.getClass().getMethod("pauseTransactions");
+            Method await = ccm.getClass().getMethod("awaitNoActiveTransactions");
+            Method resume = ccm.getClass().getMethod("resumeTransactions");
+            pause.invoke(ccm);
+            try {
+                await.invoke(ccm);
+                return frm.recoverToPointInTime(targetTime);
+            } finally {
+                resume.invoke(ccm);
+            }
+        } catch (Exception e) {
+            throw new RuntimeException("Gagal mengeksekusi quiescent PITR via CCM", e);
         }
     }
 

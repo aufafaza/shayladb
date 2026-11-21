@@ -120,51 +120,56 @@ class HistoricalRecoveryIT {
             Path staleFile = snapDir.resolve("stale_old_table.tbl");
             Files.writeString(staleFile, "STALE");
 
-            // Tx1 committed SEBELUM baseline snapshot
+            // Tx1 & Tx2 committed SEBELUM baseline snapshot -> baselineLsn berada di COMMIT Tx2 (strictly > COMMIT Tx1)
             frm.writeTransactionLog(1, LogType.BEGIN);
-            insertLogged(frm, da, 1, List.of(1, "PRE_BASELINE"));
+            insertLogged(frm, da, 1, List.of(1, "PRE_BASELINE_TX1"));
             frm.writeTransactionLog(1, LogType.COMMIT);
+
+            frm.writeTransactionLog(2, LogType.BEGIN);
+            insertLogged(frm, da, 2, List.of(2, "AT_BASELINE_TX2"));
+            frm.writeTransactionLog(2, LogType.COMMIT);
             Instant beforeBaseline = Instant.now().minusSeconds(60);
 
-            // Buat baseline snapshot setelah Tx1 (snapshot berisi id=1)
+            // Buat baseline snapshot setelah Tx2 (snapshot berisi id=1 dan id=2)
             frm.createBaselineSnapshot();
             assertFalse(Files.exists(staleFile), "File snapshot basi harus dihapus saat createSnapshot()");
             assertTrue(Files.exists(snapDir.resolve(CheckpointManager.SNAPSHOT_META_FILE)),
                     "Manifest snapshot.meta harus dibuat");
 
-            // Tx2 committed SESUDAH baseline snapshot
-            Thread.sleep(15);
-            frm.writeTransactionLog(2, LogType.BEGIN);
-            insertLogged(frm, da, 2, List.of(2, "POST_BASELINE_TX2"));
-            frm.writeTransactionLog(2, LogType.COMMIT);
-            Instant afterTx2 = Instant.now();
-
-            // Tx3 committed SESUDAH Tx2
+            // Tx3 committed SESUDAH baseline snapshot
             Thread.sleep(15);
             frm.writeTransactionLog(3, LogType.BEGIN);
             insertLogged(frm, da, 3, List.of(3, "POST_BASELINE_TX3"));
             frm.writeTransactionLog(3, LogType.COMMIT);
+            Instant afterTx3 = Instant.now();
+
+            // Tx4 committed SESUDAH Tx3
+            Thread.sleep(15);
+            frm.writeTransactionLog(4, LogType.BEGIN);
+            insertLogged(frm, da, 4, List.of(4, "POST_BASELINE_TX4"));
+            frm.writeTransactionLog(4, LogType.COMMIT);
             ds.flushBuffer();
 
-            // Out-of-range PITR (sebelum baseline) -> DITOLAK & storage aktif tetap berisi 3 baris
+            // Out-of-range PITR (sebelum baseline) -> DITOLAK & storage aktif tetap berisi 4 baris
             RecoveryResult oldPitr = frm.recoverToPointInTimeOffline(beforeBaseline);
             assertFalse(oldPitr.isSuccess(), "Target PITR sebelum baseline wajib ditolak");
-            assertEquals(3, readRowsById(da).size(), "Storage aktif tidak boleh berubah saat target PITR ditolak");
+            assertEquals(4, readRowsById(da).size(), "Storage aktif tidak boleh berubah saat target PITR ditolak");
 
-            // Out-of-range txId (tx1 commit sebelum baselineLsn) -> DITOLAK & storage aktif tetap berisi 3 baris
+            // Out-of-range txId (tx1 commit strictly sebelum baselineLsn) -> DITOLAK & storage aktif tetap berisi 4 baris
             RecoveryResult oldTx = frm.recoverToTransactionOffline(1);
             assertFalse(oldTx.isSuccess(), "Target transaksi sebelum baseline wajib ditolak");
-            assertEquals(3, readRowsById(da).size(), "Storage aktif tidak boleh berubah saat target transaksi ditolak");
+            assertEquals(4, readRowsById(da).size(), "Storage aktif tidak boleh berubah saat target transaksi ditolak");
 
-            // Target valid (afterTx2) -> restore baseline (id=1) + replay hanya sesudah baseline (id=2), id=3 hilang
-            RecoveryResult validPitr = frm.recoverToPointInTimeOffline(afterTx2);
+            // Target valid (afterTx3) -> restore baseline (id=1,2) + replay hanya sesudah baseline (id=3), id=4 hilang
+            RecoveryResult validPitr = frm.recoverToPointInTimeOffline(afterTx3);
             assertTrue(validPitr.isSuccess(), "PITR valid harus berhasil: " + validPitr.getMessage());
             Map<Integer, List<Object>> afterRestore = readRowsById(da);
-            assertEquals(2, afterRestore.size());
-            assertEquals(List.of(1, "PRE_BASELINE"), afterRestore.get(1));
-            assertEquals(List.of(2, "POST_BASELINE_TX2"), afterRestore.get(2));
-            assertFalse(afterRestore.containsKey(3));
-            assertTrue(da.searchIndex(INDEX_ID, 3).isEmpty());
+            assertEquals(3, afterRestore.size());
+            assertEquals(List.of(1, "PRE_BASELINE_TX1"), afterRestore.get(1));
+            assertEquals(List.of(2, "AT_BASELINE_TX2"), afterRestore.get(2));
+            assertEquals(List.of(3, "POST_BASELINE_TX3"), afterRestore.get(3));
+            assertFalse(afterRestore.containsKey(4));
+            assertTrue(da.searchIndex(INDEX_ID, 4).isEmpty());
         } finally {
             frm.close();
         }
@@ -178,16 +183,17 @@ class HistoricalRecoveryIT {
         try {
             assertTrue(frm2.recoverOnStartup().isSuccess());
             Map<Integer, List<Object>> afterRestart = readRowsById(da2);
-            assertEquals(2, afterRestart.size());
-            assertEquals(List.of(1, "PRE_BASELINE"), afterRestart.get(1));
-            assertEquals(List.of(2, "POST_BASELINE_TX2"), afterRestart.get(2));
+            assertEquals(3, afterRestart.size());
+            assertEquals(List.of(1, "PRE_BASELINE_TX1"), afterRestart.get(1));
+            assertEquals(List.of(2, "AT_BASELINE_TX2"), afterRestart.get(2));
+            assertEquals(List.of(3, "POST_BASELINE_TX3"), afterRestart.get(3));
 
             // Transaksi baru setelah restart memakai LSN lanjutan yang konsisten
-            frm2.writeTransactionLog(4, LogType.BEGIN);
-            insertLogged(frm2, da2, 4, List.of(4, "NEW_AFTER_PITR_RESTART"));
-            frm2.writeTransactionLog(4, LogType.COMMIT);
+            frm2.writeTransactionLog(5, LogType.BEGIN);
+            insertLogged(frm2, da2, 5, List.of(5, "NEW_AFTER_PITR_RESTART"));
+            frm2.writeTransactionLog(5, LogType.COMMIT);
             ds2.flushBuffer();
-            assertEquals(3, readRowsById(da2).size());
+            assertEquals(4, readRowsById(da2).size());
         } finally {
             frm2.close();
         }
@@ -285,7 +291,6 @@ class HistoricalRecoveryIT {
         if (catalog.getIndexes(TABLE).stream().noneMatch(i -> INDEX_ID.equals(i.indexName()))) {
             catalog.createIndex(INDEX_ID, TABLE, "id");
         }
-        ((IDurableStorage) sm).flushBuffer();
         return sm;
     }
 

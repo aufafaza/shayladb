@@ -182,6 +182,7 @@ class CheckpointManagerTest {
         Files.writeString(tableFile, "users-v1");
         Files.writeString(nestedFile, "orders-v1");
         logManager.appendTransactionLog(1, LogType.BEGIN);
+        logManager.appendTransactionLog(1, LogType.COMMIT);
 
         checkpointManager.createSnapshot();
 
@@ -212,10 +213,11 @@ class CheckpointManagerTest {
 
         Files.writeString(tableFile, "modified-after-snapshot");
 
-        Instant t1 = Instant.parse("2026-11-19T10:00:00Z");
-        Instant t2 = Instant.parse("2026-11-19T10:00:05Z");
-        Instant targetTime = Instant.parse("2026-11-19T10:00:10Z");
-        Instant t3 = Instant.parse("2026-11-19T10:00:20Z");
+        Instant base = checkpointManager.getSnapshotMetadata().baselineTimestamp();
+        Instant t1 = base.plusSeconds(1);
+        Instant t2 = base.plusSeconds(5);
+        Instant targetTime = base.plusSeconds(10);
+        Instant t3 = base.plusSeconds(20);
 
         walFileHandler.append(new TransactionLogRecord(1L, 1, LogType.BEGIN, t1));
         walFileHandler.append(new DataChangeLogRecord(
@@ -350,8 +352,9 @@ class CheckpointManagerTest {
         Files.writeString(tableFile, "snapshot-state");
         checkpointManager.createSnapshot();
 
-        Instant t1 = Instant.parse("2026-11-19T10:00:00Z");
-        Instant targetTime = Instant.parse("2026-11-19T10:00:10Z");
+        Instant base = checkpointManager.getSnapshotMetadata().baselineTimestamp();
+        Instant t1 = base.plusSeconds(1);
+        Instant targetTime = base.plusSeconds(10);
         walFileHandler.append(new TransactionLogRecord(1L, 1, LogType.BEGIN, t1));
         walFileHandler.append(new DataChangeLogRecord(
             2L, 1, LogType.INSERT, t1, "users", new RowId("users", 0, 0),

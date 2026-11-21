@@ -263,7 +263,9 @@ public class LogManager {
 
             walFileHandler.rewriteWithRecords(kept);
             this.nextLsn.set(highestLsn + 1);
-            this.maxTxId = highestTxId;
+            if (highestTxId > this.maxTxId) {
+                this.maxTxId = highestTxId;
+            }
         }
     }
 }

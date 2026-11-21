@@ -98,6 +98,8 @@ public class RecordApplier {
             Pattern.compile("invalid slot -?\\d+");
     private static final Pattern BLOCK_NOT_EXIST_PATTERN =
             Pattern.compile("block does not exist:\\s*-?\\d+");
+    private static final Pattern CANNOT_READ_BLOCK_PATTERN =
+            Pattern.compile("cannot read .+ block -?\\d+");
 
     private void applyIdempotentInsert(String table, RowId rid, RecordImage img) {
         try {
@@ -194,6 +196,7 @@ public class RecordApplier {
         String msg = e.getMessage() == null ? "" : e.getMessage().toLowerCase();
         return INVALID_SLOT_INDEX_PATTERN.matcher(msg).find()
                 || BLOCK_NOT_EXIST_PATTERN.matcher(msg).find()
+                || CANNOT_READ_BLOCK_PATTERN.matcher(msg).find()
                 || msg.contains("row not found")
                 || msg.contains("slot contains no record")
                 || msg.contains("already deleted")
@@ -203,7 +206,11 @@ public class RecordApplier {
     private boolean hasIoOrCorruptionCause(Throwable t) {
         Throwable curr = t;
         while (curr != null) {
-            if (curr instanceof java.io.IOException || curr instanceof java.io.UncheckedIOException) {
+            if ((curr instanceof java.io.IOException
+                    && !(curr instanceof java.io.EOFException)
+                    && !(curr instanceof java.io.FileNotFoundException)
+                    && !(curr instanceof java.nio.file.NoSuchFileException))
+                    || curr instanceof java.io.UncheckedIOException) {
                 return true;
             }
             String msg = curr.getMessage() == null ? "" : curr.getMessage().toLowerCase();
