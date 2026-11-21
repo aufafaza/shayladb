@@ -87,9 +87,12 @@ public class QueryProcessor implements IQueryProcessor {
                 rows.add(row);
             }
         } catch (QueryExecutionException e) {
-            ExecutionResult executionResult = new ExecutionResult(false, null, null, 0, "Error: " + e.getMessage());
-            return executionResult;
+            if (!(e instanceof mdbms.processor.exception.TransactionCompletionException)) {
+                abortIfActive(txId);
+            }
+            return new ExecutionResult(false, null, null, 0, "Error: " + e.getMessage());
         } catch (Exception e) {
+            abortIfActive(txId);
             return new ExecutionResult(false, columns, rows, 0, "Error: " + e.getMessage());
         } finally {
             if (translatedQuery != null) translatedQuery.close();
@@ -109,9 +112,17 @@ public class QueryProcessor implements IQueryProcessor {
 
     // statement gagal berarti seluruh transaksi dibatalkan, tapi skip kalau CCM udah duluan nutup transaksinya
     private void abortIfActive(int txId) {
-        Transaction tx = concurrencyControl.getTransaction(txId);
-        if (tx != null && tx.getState() == TransactionState.ACTIVE) {
-            concurrencyControl.abortTransaction(txId, "Query execution failed");
+        boolean interrupted = Thread.interrupted();
+        try {
+            Transaction tx = concurrencyControl.getTransaction(txId);
+            if (tx != null && tx.getState() == TransactionState.ACTIVE) {
+                concurrencyControl.abortTransaction(txId, "Query execution failed");
+            }
+        } catch (RuntimeException ignored) {
+        } finally {
+            if (interrupted) {
+                Thread.currentThread().interrupt();
+            }
         }
     }
 

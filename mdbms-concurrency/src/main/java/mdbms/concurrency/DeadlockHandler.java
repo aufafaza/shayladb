@@ -31,8 +31,7 @@ public class DeadlockHandler {
             if (holders == null) return;
             for (Lock holder : holders) {
                 if (holder.getTransaction() != requester
-                        && (request.getType() == Locktype.EXCLUSIVE
-                        || holder.getLocktype() == Locktype.EXCLUSIVE)) {
+                        && LockManager.conflicts(holder.getLocktype(), request.getType())) {
                     graph.addEdge(requester, holder.getTransaction());
                 }
             }
