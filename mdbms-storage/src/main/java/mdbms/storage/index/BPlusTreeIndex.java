@@ -96,6 +96,11 @@ public final class BPlusTreeIndex implements Index {
     // daftarin RowId di bawah key, key null ga diindex, key baru dapet bucket baru dan bisa bikin split
     @Override
     public void insert(Object key, RowId rowId) {
+        insert(key, rowId, NO_LSN);
+    }
+
+    @Override
+    public void insert(Object key, RowId rowId, long pageLsn) {
         checkTable(rowId);
         Object normalized = normalizer.normalize(key, column);
         if (normalized == null) return;
@@ -105,18 +110,18 @@ public final class BPlusTreeIndex implements Index {
             BPlusNode leaf = findLeaf(normalized, path);
             int pos = leaf.findKey(normalized, comparator);
             if (pos >= 0) {
-                addToBucketChain(leaf.getPointer(pos), rowId);
+                addToBucketChain(leaf.getPointer(pos), rowId, pageLsn);
                 return;
             }
-            int bucketBlock = newBucket(rowId);
+            int bucketBlock = newBucket(rowId, pageLsn);
             insertInLeaf(leaf, normalized, bucketBlock);
             if (leaf.isOverfull(maxDegree)) {
-                BPlusNode right = splitLeaf(leaf);
-                insertInParent(leaf, right.getKey(0), right, path);
+                BPlusNode right = splitLeaf(leaf, pageLsn);
+                insertInParent(leaf, right.getKey(0), right, path, pageLsn);
             } else {
-                writeNode(leaf);
+                writeNode(leaf, pageLsn);
             }
-            writeMeta();
+            writeMeta(pageLsn);
         } finally {
             lock.writeLock().unlock();
         }
@@ -126,6 +131,11 @@ public final class BPlusTreeIndex implements Index {
     // pasangan yang ga ada atau key null diabaikan
     @Override
     public void delete(Object key, RowId rowId) {
+        delete(key, rowId, NO_LSN);
+    }
+
+    @Override
+    public void delete(Object key, RowId rowId, long pageLsn) {
         checkTable(rowId);
         Object normalized = normalizer.normalize(key, column);
         if (normalized == null) return;
@@ -136,11 +146,11 @@ public final class BPlusTreeIndex implements Index {
             int pos = leaf.findKey(normalized, comparator);
             if (pos < 0) return;
             int firstBlock = leaf.getPointer(pos);
-            if (removeFromBucketChain(firstBlock, rowId)) {
-                freeNode(firstBlock);
-                deleteEntry(leaf, normalized, firstBlock, path);
+            if (removeFromBucketChain(firstBlock, rowId, pageLsn)) {
+                freeNode(firstBlock, pageLsn);
+                deleteEntry(leaf, normalized, firstBlock, path, pageLsn);
             }
-            writeMeta();
+            writeMeta(pageLsn);
         } finally {
             lock.writeLock().unlock();
         }
@@ -204,10 +214,10 @@ public final class BPlusTreeIndex implements Index {
             height = 1;
             freeListHead = NO_BLOCK;
             for (int block = pool.blockCount(fileName) - 1; block > FIRST_ROOT; block--) {
-                freeNode(block);
+                freeNode(block, NO_LSN);
             }
-            writeNode(new BPlusNode(FIRST_ROOT, true));
-            writeMeta();
+            writeNode(new BPlusNode(FIRST_ROOT, true), NO_LSN);
+            writeMeta(NO_LSN);
         } finally {
             lock.writeLock().unlock();
         }
@@ -268,12 +278,12 @@ public final class BPlusTreeIndex implements Index {
 
     // daftarin pemisah baru ke parent, kalau parent ikut penuh dia di split dan naik terus ke atas
     // kalau yang di split root maka dibikin root baru dan tinggi pohon nambah satu
-    private void insertInParent(BPlusNode left, Object key, BPlusNode right, Deque<BPlusNode> path) {
+    private void insertInParent(BPlusNode left, Object key, BPlusNode right, Deque<BPlusNode> path, long pageLsn) {
         if (path.isEmpty()) {
-            BPlusNode root = allocateNode(false);
+            BPlusNode root = allocateNode(false, pageLsn);
             root.setPointer(0, left.getBlockNumber());
             root.insertAt(0, key, right.getBlockNumber());
-            writeNode(root);
+            writeNode(root, pageLsn);
             rootBlock = root.getBlockNumber();
             height++;
             return;
@@ -281,16 +291,16 @@ public final class BPlusTreeIndex implements Index {
         BPlusNode parent = path.pop();
         parent.insertAt(childIndex(parent, left.getBlockNumber()), key, right.getBlockNumber());
         if (!parent.isOverfull(maxDegree)) {
-            writeNode(parent);
+            writeNode(parent, pageLsn);
             return;
         }
-        InternalSplit split = splitInternal(parent);
-        insertInParent(parent, split.separator(), split.right(), path);
+        InternalSplit split = splitInternal(parent, pageLsn);
+        insertInParent(parent, split.separator(), split.right(), path, pageLsn);
     }
 
     // belah leaf yang penuh, kiri nyimpen setengah ke atas dan key pertama kanan di copy ke parent
-    private BPlusNode splitLeaf(BPlusNode leaf) {
-        BPlusNode right = allocateNode(true);
+    private BPlusNode splitLeaf(BPlusNode leaf, long pageLsn) {
+        BPlusNode right = allocateNode(true, pageLsn);
         int count = leaf.keyCount();
         int mid = (count + 1) / 2;
         for (int i = mid; i < count; i++) {
@@ -301,14 +311,14 @@ public final class BPlusTreeIndex implements Index {
         }
         right.setNextLeaf(leaf.getNextLeaf());
         leaf.setNextLeaf(right.getBlockNumber());
-        writeNode(right);
-        writeNode(leaf);
+        writeNode(right, pageLsn);
+        writeNode(leaf, pageLsn);
         return right;
     }
 
     // belah internal node yang penuh, key tengah dipindah naik ke parent dan ga disimpan di dua anak
-    private InternalSplit splitInternal(BPlusNode node) {
-        BPlusNode right = allocateNode(false);
+    private InternalSplit splitInternal(BPlusNode node, long pageLsn) {
+        BPlusNode right = allocateNode(false, pageLsn);
         int count = node.keyCount();
         int mid = count / 2;
         Object separator = node.getKey(mid);
@@ -319,8 +329,8 @@ public final class BPlusTreeIndex implements Index {
         for (int i = count - 1; i >= mid; i--) {
             node.removeAt(i);
         }
-        writeNode(right);
-        writeNode(node);
+        writeNode(right, pageLsn);
+        writeNode(node, pageLsn);
         return new InternalSplit(separator, right);
     }
 
@@ -335,20 +345,20 @@ public final class BPlusTreeIndex implements Index {
 
     // hapus key dan pointer dari node, root internal yang tinggal satu anak diganti anaknya
     // node non root yang kurang isi pinjam dari saudara kalau bisa, kalau ga bisa digabung
-    private void deleteEntry(BPlusNode node, Object key, int pointer, Deque<BPlusNode> path) {
+    private void deleteEntry(BPlusNode node, Object key, int pointer, Deque<BPlusNode> path, long pageLsn) {
         node.removeAt(entryIndex(node, key, pointer));
         if (node.getBlockNumber() == rootBlock) {
             if (!node.isLeaf() && node.keyCount() == 0) {
                 rootBlock = node.getPointer(0);
                 height--;
-                freeNode(node.getBlockNumber());
+                freeNode(node.getBlockNumber(), pageLsn);
             } else {
-                writeNode(node);
+                writeNode(node, pageLsn);
             }
             return;
         }
         if (!node.isUnderfull(maxDegree, false)) {
-            writeNode(node);
+            writeNode(node, pageLsn);
             return;
         }
         BPlusNode parent = path.pop();
@@ -358,14 +368,14 @@ public final class BPlusTreeIndex implements Index {
         BPlusNode sibling = readNode(parent.getPointer(nodeIsLeft ? index + 1 : index - 1));
         Object separator = parent.getKey(separatorIndex);
         if (sibling.canLend(maxDegree)) {
-            redistribute(node, sibling, separator, parent, nodeIsLeft);
+            redistribute(node, sibling, separator, parent, nodeIsLeft, pageLsn);
         } else {
-            coalesce(node, sibling, separator, parent, path);
+            coalesce(node, sibling, separator, parent, path, pageLsn);
         }
     }
 
     // gabung node kanan ke node kiri, pemisah di parent ikut turun kalau internal lalu dihapus dari parent
-    private void coalesce(BPlusNode node, BPlusNode sibling, Object separator, BPlusNode parent, Deque<BPlusNode> path) {
+    private void coalesce(BPlusNode node, BPlusNode sibling, Object separator, BPlusNode parent, Deque<BPlusNode> path, long pageLsn) {
         boolean nodeIsLeft = childIndex(parent, node.getBlockNumber()) < childIndex(parent, sibling.getBlockNumber());
         BPlusNode left = nodeIsLeft ? node : sibling;
         BPlusNode right = nodeIsLeft ? sibling : node;
@@ -380,14 +390,14 @@ public final class BPlusTreeIndex implements Index {
                 left.insertAt(left.keyCount(), right.getKey(i), right.getPointer(i + 1));
             }
         }
-        writeNode(left);
-        freeNode(right.getBlockNumber());
-        deleteEntry(parent, separator, right.getBlockNumber(), path);
+        writeNode(left, pageLsn);
+        freeNode(right.getBlockNumber(), pageLsn);
+        deleteEntry(parent, separator, right.getBlockNumber(), path, pageLsn);
     }
 
     // pindahin satu entri dari saudara ke node yang kurang isi lalu benerin pemisah di parent
     // leaf mindahin key apa adanya, internal muter lewat parent biar urutannya tetap benar
-    private void redistribute(BPlusNode node, BPlusNode sibling, Object separator, BPlusNode parent, boolean nodeIsLeft) {
+    private void redistribute(BPlusNode node, BPlusNode sibling, Object separator, BPlusNode parent, boolean nodeIsLeft, long pageLsn) {
         int separatorIndex = childIndex(parent, (nodeIsLeft ? node : sibling).getBlockNumber());
         if (nodeIsLeft) {
             if (node.isLeaf()) {
@@ -416,9 +426,9 @@ public final class BPlusTreeIndex implements Index {
                 parent.setKey(separatorIndex, raised);
             }
         }
-        writeNode(node);
-        writeNode(sibling);
-        writeNode(parent);
+        writeNode(node, pageLsn);
+        writeNode(sibling, pageLsn);
+        writeNode(parent, pageLsn);
     }
 
     // posisi entri yang mau dihapus, leaf dicari dari key dan internal dari pointer anak kanan nya
@@ -450,34 +460,34 @@ public final class BPlusTreeIndex implements Index {
     }
 
     // tulis node ke buffer, ditandai dirty dan baru ke disk pas flush
-    private void writeNode(BPlusNode node) {
+    private void writeNode(BPlusNode node, long pageLsn) {
         Block block = new Block(fileName, node.getBlockNumber(), new byte[BlockManager.BLOCK_SIZE]);
         nodeCodec.write(node, block);
-        pool.writeBuffer(fileName, node.getBlockNumber(), block.data, NO_LSN);
+        pool.writeBuffer(fileName, node.getBlockNumber(), block.data, pageLsn);
     }
 
     // ambil block buat node baru, belum ditulis sampai writeNode dipanggil
-    private BPlusNode allocateNode(boolean leaf) {
-        return new BPlusNode(allocateBlock(), leaf);
+    private BPlusNode allocateNode(boolean leaf, long pageLsn) {
+        return new BPlusNode(allocateBlock(pageLsn), leaf);
     }
 
     // masukin block ke free list, isi block cuma nomor block bebas berikutnya
-    private void freeNode(int blockNumber) {
+    private void freeNode(int blockNumber, long pageLsn) {
         byte[] data = new byte[BlockManager.BLOCK_SIZE];
         ByteBuffer.wrap(data).putInt(0, freeListHead);
-        pool.writeBuffer(fileName, blockNumber, data, NO_LSN);
+        pool.writeBuffer(fileName, blockNumber, data, pageLsn);
         freeListHead = blockNumber;
     }
 
     // ambil block dari free list dulu, kalau kosong baru nambah block di ujung file
-    private int allocateBlock() {
+    private int allocateBlock(long pageLsn) {
         if (freeListHead != NO_BLOCK) {
             int block = freeListHead;
             freeListHead = ByteBuffer.wrap(pool.readBuffer(fileName, block)).getInt(0);
             return block;
         }
         Block block = pool.appendBlock(fileName);
-        pool.unpin(block, false, NO_LSN);
+        pool.unpin(block, false, pageLsn);
         return block.blockNumber;
     }
 
@@ -487,18 +497,18 @@ public final class BPlusTreeIndex implements Index {
     }
 
     // bikin bucket baru berisi satu RowId, balikin nomor block nya buat disimpan di leaf
-    private int newBucket(RowId rowId) {
-        Block block = new Block(fileName, allocateBlock(), new byte[BlockManager.BLOCK_SIZE]);
+    private int newBucket(RowId rowId, long pageLsn) {
+        Block block = new Block(fileName, allocateBlock(pageLsn), new byte[BlockManager.BLOCK_SIZE]);
         RidBucket bucket = new RidBucket(block, info.tableName());
         bucket.setNext(RidBucket.NO_NEXT);
         bucket.add(rowId);
-        writeBlock(block);
+        writeBlock(block, pageLsn);
         return block.blockNumber;
     }
 
     // tambah RowId ke sambungan bucket, isi slot kosong pertama atau sambung block baru di ujung
     // RowId yang udah ada di salah satu bucket diabaikan
-    private void addToBucketChain(int firstBlock, RowId rowId) {
+    private void addToBucketChain(int firstBlock, RowId rowId, long pageLsn) {
         Block target = null;
         Block last = null;
         int current = firstBlock;
@@ -512,18 +522,18 @@ public final class BPlusTreeIndex implements Index {
         }
         if (target != null) {
             new RidBucket(target, info.tableName()).add(rowId);
-            writeBlock(target);
+            writeBlock(target, pageLsn);
             return;
         }
-        int added = newBucket(rowId);
+        int added = newBucket(rowId, pageLsn);
         new RidBucket(last, info.tableName()).setNext(added);
-        writeBlock(last);
-        writeMeta();
+        writeBlock(last, pageLsn);
+        writeMeta(pageLsn);
     }
 
     // hapus RowId dari sambungan bucket, bucket tengah yang kosong dilepas dari sambungan
     // bucket pertama yang kosong diisi bucket berikutnya biar pointer di leaf ga berubah, true kalau semua bucket habis
-    private boolean removeFromBucketChain(int firstBlock, RowId rowId) {
+    private boolean removeFromBucketChain(int firstBlock, RowId rowId, long pageLsn) {
         Block previous = null;
         int current = firstBlock;
         while (current != RidBucket.NO_NEXT) {
@@ -536,15 +546,15 @@ public final class BPlusTreeIndex implements Index {
                 continue;
             }
             if (!bucket.isEmpty()) {
-                writeBlock(block);
+                writeBlock(block, pageLsn);
             } else if (previous != null) {
                 new RidBucket(previous, info.tableName()).setNext(next);
-                writeBlock(previous);
-                freeNode(current);
+                writeBlock(previous, pageLsn);
+                freeNode(current, pageLsn);
             } else if (next != RidBucket.NO_NEXT) {
                 System.arraycopy(pool.readBuffer(fileName, next), 0, block.data, 0, BlockManager.BLOCK_SIZE);
-                writeBlock(block);
-                freeNode(next);
+                writeBlock(block, pageLsn);
+                freeNode(next, pageLsn);
             } else {
                 return true;
             }
@@ -579,7 +589,7 @@ public final class BPlusTreeIndex implements Index {
     }
 
     // tulis root, tinggi, free list, dan maxDegree ke block 0
-    private void writeMeta() {
+    private void writeMeta(long pageLsn) {
         byte[] data = new byte[BlockManager.BLOCK_SIZE];
         ByteBuffer.wrap(data)
                 .putInt(0, META_MAGIC)
@@ -587,7 +597,7 @@ public final class BPlusTreeIndex implements Index {
                 .putInt(8, rootBlock)
                 .putInt(12, height)
                 .putInt(16, freeListHead);
-        pool.writeBuffer(fileName, META_BLOCK, data, NO_LSN);
+        pool.writeBuffer(fileName, META_BLOCK, data, pageLsn);
     }
 
     // salinan isi block dibungkus Block biar bisa dipakai codec dan bucket
@@ -596,8 +606,8 @@ public final class BPlusTreeIndex implements Index {
     }
 
     // tulis balik salinan block ke buffer
-    private void writeBlock(Block block) {
-        pool.writeBuffer(fileName, block.blockNumber, block.data, NO_LSN);
+    private void writeBlock(Block block, long pageLsn) {
+        pool.writeBuffer(fileName, block.blockNumber, block.data, pageLsn);
     }
 
     // hasil split internal, key yang naik ke parent dan node kanan yang baru
