@@ -13,7 +13,7 @@ import mdbms.optimizer.binder.BindingContext;
 import mdbms.optimizer.binder.ColumnBinding;
 import mdbms.optimizer.binder.TableBinding;
 
-// QO-10: optimasi proyeksi
+// Membatasi kolom pada setiap sumber data sesuai kebutuhan query.
 public class ProjectionPushDownRule implements IOptimizationRule {
     @Override
     public String getRuleName() {
@@ -106,7 +106,7 @@ public class ProjectionPushDownRule implements IOptimizationRule {
     private static List<ColumnReference> columnsOf(QueryTree node, BindingContext bindings) {
         List<ColumnReference> result = new ArrayList<>();
         if (node.getNodeType() == QueryNodeType.TABLE_SCAN && node.getTableName() != null) {
-            TableBinding table = bindings.getTableBinding(node.getTableName());
+            TableBinding table = bindings.getTableBindingByAlias(node.getBindingName());
             if (table != null) {
                 for (ColumnDefinition column : table.getSchema().columns()) {
                     result.add(new ColumnReference(table.getAlias(), column.name()));

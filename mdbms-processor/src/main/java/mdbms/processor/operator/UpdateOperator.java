@@ -47,6 +47,7 @@ public class UpdateOperator extends QueryUnaryOperator implements IWriteOperator
     public void open() {
         done = false;
         affectedRows = 0;
+
         List<ColumnDefinition> columns = schemaCatalog.getTableSchema(tableName).columns();
         columnNames = columns.stream()
                 .map(ColumnDefinition::name)
@@ -56,56 +57,79 @@ public class UpdateOperator extends QueryUnaryOperator implements IWriteOperator
 
         targetRows = new ArrayList<>();
         childOperator.open();
-        IResultRow row;
-        while ((row = childOperator.next()) != null) {
-            targetRows.add(row);
+        try {
+            IResultRow row;
+            while ((row = childOperator.next()) != null) {
+                targetRows.add(row);
+            }
+        } finally {
+            childOperator.close();
         }
-        childOperator.close();
     }
 
     public IResultRow next() {
         if (done) return null;
         done = true;
-        for (IResultRow row : targetRows) {
-            DataItem item = new DataItem(tableName, row.getRowId());
-            AccessPermission.lockWrite(concurrencyControlManager, transactionId, item);
-            Row current = dataAccess.fetchByRowId(row.getRowId());
-            List<Object> oldValues = new ArrayList<>(current.values());
-            ResultRow protectedRow = new ResultRow(row.getSchema(), oldValues);
-            protectedRow.setRowId(current.rowId());
-            List<Object> newValues = new ArrayList<>(oldValues);
-            newValues.set(columnIndex, ColumnTypes.toColumnType(ExpressionEvaluator.evaluate(newValue, protectedRow), columnType));
 
-            if (dataAccess.canUpdateInPlace(current.rowId(), newValues)) {
-                concurrencyControlManager.executeRelocation(transactionId, item, item, oldValues, newValues, () -> {
-                    if (!dataAccess.updateInPlace(current.rowId(), newValues)) {
-                        // Abort instead of committing an UPDATE log whose row would silently move.
-                        throw new QueryExecutionException("Row no longer fits in place; retry the transaction");
-                    }
-                    return null;
-                });
-            } else {
-                RowId destination = dataAccess.reserveRowId(tableName, newValues);
-                try {
-                    concurrencyControlManager.executeRelocation(transactionId, item,
-                            new DataItem(tableName, destination), oldValues, newValues, () -> {
-                                dataAccess.insertAt(destination, newValues);
-                                dataAccess.deleteByRowId(current.rowId());
-                                return null;
-                            });
-                } catch (RuntimeException failure) {
-                    try {
-                        dataAccess.releaseRowId(destination);
-                    } catch (RuntimeException cleanupFailure) {
-                        // Undo may already have released it. Preserve any other cleanup error as well.
-                        failure.addSuppressed(cleanupFailure);
-                    }
-                    throw failure;
+        for (IResultRow row : targetRows) {
+            RowId oldRid = row.getRowId();
+            DataItem oldItem = new DataItem(tableName, oldRid);
+
+            Row current = dataAccess.fetchByRowId(oldRid);
+            List<Object> oldValues = new ArrayList<>(current.values());
+            ResultRow currentResult = new ResultRow(row.getSchema(), oldValues);
+            currentResult.setRowId(oldRid);
+
+            List<Object> newValues = new ArrayList<>(oldValues);
+            newValues.set(columnIndex, ColumnTypes.toColumnType(ExpressionEvaluator.evaluate(newValue, currentResult), columnType));
+
+            if (dataAccess.canUpdateInPlace(oldRid, newValues)) {
+                AccessPermission.write(concurrencyControlManager, transactionId, oldItem, oldValues, newValues);
+
+                if (dataAccess.updateInPlace(oldRid, newValues)) {
+                    affectedRows++;
+                    continue;
+                } else {
+                    throw new QueryExecutionException("Row no longer fits in place; retry the transaction");
                 }
             }
+            
+            relocate(oldRid, oldItem, oldValues, newValues);
             affectedRows++;
         }
         return null;
+    }
+
+    private void relocate( RowId oldRid, DataItem oldItem, List<Object> oldValues, List<Object> newValues) {
+        RowId newRid = dataAccess.reserveRowId(tableName, newValues);
+        if (newRid == null) {
+            throw new QueryExecutionException("Storage manager returned no destination RowId for UPDATE of " + oldRid);
+        }
+        if (newRid.equals(oldRid)) {
+            dataAccess.releaseRowId(newRid);
+            throw new QueryExecutionException("Storage manager reserved the original RowId as a relocation destination: " + oldRid);
+        }
+
+        DataItem newItem = new DataItem(tableName, newRid);
+        try {
+            concurrencyControlManager.executeRelocation(transactionId, oldItem, newItem, oldValues, newValues, () -> {
+                dataAccess.insertAt(newRid, newValues);
+
+                Row deleted = dataAccess.deleteByRowId(oldRid);
+                if (deleted == null) {
+                    throw new QueryExecutionException( "Original row disappeared during relocation: " + oldRid);
+                }
+                return null;
+            });
+        } catch (RuntimeException failure) {
+            try {
+                dataAccess.releaseRowId(newRid);
+            } catch (RuntimeException cleanupFailure) {
+                // Undo may already have released it. Preserve any other cleanup error as well.
+                failure.addSuppressed(cleanupFailure);
+            }
+            throw failure;
+        }
     }
 
     public void close() {

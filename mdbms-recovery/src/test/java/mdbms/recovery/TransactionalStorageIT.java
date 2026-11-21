@@ -513,7 +513,7 @@ class TransactionalStorageIT {
         assertThrows(RuntimeException.class, () -> da3.releaseRowId(orphanOnLastPage),
                 "Slot orphan pada halaman akhir seharusnya sudah tidak berstatus reserved");
 
-        // Ruang pada blok terakhir (HeapFile.findBlockWithSpace memeriksa blok terakhir) harus dapat dipakai kembali
+        // Ruang pada blok terakhir dipakai kembali lebih dulu karena HeapFile.findBlockWithSpace mulai dari blok terakhir
         int expectedReusable = Math.max(1, orphansOnLastBlock - 1);
         List<RowId> reused = new ArrayList<>();
         try {
@@ -526,6 +526,21 @@ class TransactionalStorageIT {
                         "Ruang orphan yang sudah dilepas di blok " + maxOrphanBlock + " harus terpakai kembali"
                 );
             }
+
+            // Setelah blok terakhir penuh, ruang orphan di halaman awal juga harus terjangkau (tanpa menambah blok baru)
+            RowId earlierAlloc = null;
+            for (int i = 0; i < 12 && earlierAlloc == null; i++) {
+                RowId nextAlloc = da3.reserveRowId(TABLE, List.of(720 + i, "N".repeat(550)));
+                reused.add(nextAlloc);
+                assertTrue(nextAlloc.blockNumber() <= maxOrphanBlock,
+                        "Tidak boleh menambah blok baru selama halaman awal masih punya ruang orphan yang dilepas");
+                if (nextAlloc.blockNumber() < maxOrphanBlock) {
+                    earlierAlloc = nextAlloc;
+                }
+            }
+            assertTrue(earlierAlloc != null,
+                    "Ruang orphan yang dilepas di halaman awal (mis. blok " + orphanOnEarlierPage.blockNumber()
+                            + ") harus dapat dipakai kembali");
         } finally {
             for (RowId rid : reused) {
                 da3.releaseRowId(rid);

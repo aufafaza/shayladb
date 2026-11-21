@@ -22,6 +22,7 @@ import mdbms.models.data.Condition;
 import mdbms.models.schema.IndexInfo;
 import mdbms.models.schema.Statistic;
 import mdbms.models.schema.TableSchema;
+import mdbms.models.schema.DropBehavior;
 import mdbms.models.schema.ColumnDefinition;
 import mdbms.storage.exception.StorageErrorCode;
 import mdbms.storage.exception.StorageException;
@@ -32,6 +33,7 @@ import mdbms.storage.block.BlockManager;
 import mdbms.storage.block.BufferPool;
 import mdbms.storage.serializer.BinaryRecordSerializer;
 import mdbms.storage.serializer.IRecordSerializer;
+import mdbms.storage.serializer.SlottedPage;
 import mdbms.storage.catalog.CatalogManager;
 import mdbms.storage.statistics.StatisticsManager;
 import mdbms.storage.index.IndexManager;
@@ -315,18 +317,34 @@ public final class StorageManager implements IDataAccess, ISchemaCatalog, IStati
             throw new StorageException(StorageErrorCode.TABLE_ALREADY_EXISTS,
                 "Table already exists: " + schema.tableName());
         }
+        if (schema != null){
+            long maximumRowSize = BinaryRecordSerializer.maximumSerializedSize(schema);
+
+            if (maximumRowSize > SlottedPage.MAX_RECORD_SIZE){
+                throw new StorageException(
+                    StorageErrorCode.SCHEMA_VIOLATION,
+                    "Maximum row size " + maximumRowSize + " bytes exceeds page record limit of " + SlottedPage.MAX_RECORD_SIZE + " bytes"
+                );
+            }
+        }
         catalog.saveSchema(schema);
     }
 
     @Override
     public void dropTable(String table){
+        dropTable(table, DropBehavior.RESTRICT);
+    }
+
+    @Override
+    public void dropTable(String table, DropBehavior behavior){
         requireSchema(table);
+        catalog.validateDrop(table, behavior);
 
         indexManager.dropIndexesOf(table);
         bufferPool.discardFile(table + ".tbl");
         tables.remove(table);
         statistics.invalidate(table);
-        catalog.dropTable(table);
+        catalog.dropTable(table, behavior);
     }
 
     // kosongin semua baris tabel tapi tabelnya tetap ada, index tabel ikut dikosongin dan statistik dihitung ulang
@@ -412,6 +430,7 @@ public final class StorageManager implements IDataAccess, ISchemaCatalog, IStati
     }
 
     // lepas slot dipesan yang nyangkut di disk dari transaksi yang ga sempat selesai sebelum crash
+    // sekalian balikin ruang bekas baris yang dihapus, karena delete nahan ruangnya biar undo pasti muat di RowId asal
     // cuma boleh dipanggil pas ga ada transaksi aktif, balikin jumlah slot yang dilepas
     public int releaseOrphanReservations(){
         int released = 0;

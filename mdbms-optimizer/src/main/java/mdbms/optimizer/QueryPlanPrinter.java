@@ -86,6 +86,11 @@ public final class QueryPlanPrinter {
         if (node.getTableName() != null) {
             result.add("table=" + escape(node.getTableName()));
         }
+        if (node.getTableAlias() != null) result.add("alias=" + escape(node.getTableAlias()));
+        if (node.getTableDefinition() != null) result.add("definition=" + escape(node.getTableDefinition().toString()));
+        if (node.getNodeType() == mdbms.models.query.QueryNodeType.DROP_TABLE) {
+            result.add("behavior=" + node.getDropBehavior());
+        }
         if (!node.getProjectionColumns().isEmpty()) {
             result.add("columns=[" + node.getProjectionColumns().stream().map(this::column)
                 .collect(Collectors.joining(", ")) + "]");

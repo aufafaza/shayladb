@@ -17,7 +17,7 @@ import mdbms.optimizer.binder.BindingContext;
 import mdbms.optimizer.binder.ColumnBinding;
 import mdbms.optimizer.cost.ICostEstimator;
 
-// QO-13: pakai index buat seleksi yang langsung di atas tabel
+// Memilih indeks untuk kondisi seleksi yang berada di atas tabel.
 public class IndexSelectionRule implements IOptimizationRule {
     @Override
     public String getRuleName() {
@@ -159,6 +159,7 @@ public class IndexSelectionRule implements IOptimizationRule {
         QueryTree result = new QueryTree(QueryNodeType.TABLE_SCAN, PhysicalAlgorithm.INDEX_SCAN,
             scan.getTableName(), List.of(chosen.expression()), List.of(), scan.getEstimatedCost(),
             scan.getProjectionColumns(), false);
+        result.setTableAlias(scan.getTableAlias());
         result.setIndexScan(chosen.spec());
         return result;
     }

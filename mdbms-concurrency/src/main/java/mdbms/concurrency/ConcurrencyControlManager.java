@@ -21,6 +21,7 @@ import mdbms.models.transaction.AccessStatus;
 import mdbms.models.transaction.Operation;
 import mdbms.models.transaction.Transaction;
 import mdbms.models.transaction.TransactionState;
+import mdbms.models.transaction.WriteContext;
 
 /**
  * CC1 transaction manager and facade. It owns transaction lifecycle and
@@ -160,10 +161,23 @@ public final class ConcurrencyControlManager implements IConcurrencyControl {
             }
             return;
         }
-        RecoveryResult result = frm.recoverOnStartup();
+        initAfterRecovery(frm.recoverOnStartup());
+    }
+
+    public void initAfterRecovery(RecoveryResult result) {
+        synchronized (lifecycleMonitor) {
+            isRecovered = false;
+        }
         if (result == null || !result.isSuccess()) {
             throw new IllegalStateException("Failure recovery did not complete");
         }
+        if (frm == null) {
+            synchronized (lifecycleMonitor) {
+                isRecovered = true;
+            }
+            return;
+        }
+
         transactionCounter.updateAndGet(current -> Math.max(current, result.getMaxTxId() + 1));
         long now = System.currentTimeMillis();
         timestampCounter.updateAndGet(current -> Math.max(now, current + 1));
@@ -248,21 +262,38 @@ public final class ConcurrencyControlManager implements IConcurrencyControl {
         return request(txId, data, false);
     }
 
-    @Override
+   @Override
     public AccessStatus requestWrite(int txId, DataItem data, Object oldVal, Object newVal) {
-        AccessStatus status = request(txId, data, true);
-        if (status == AccessStatus.GRANTED && frm != null && (oldVal != null || newVal != null)) {
-            Transaction tx = activeTransactions.get(txId);
-            try {
-                persistDataLog(txId, data, oldVal, newVal);
-            } catch (RuntimeException failure) {
-                if (tx != null && activeTransactions.containsKey(txId)) {
-                    failAndAbort(tx, "Unable to persist data log");
-                }
-                throw failure;
-            }
+        return requestWriteWithContext(txId, data, oldVal, newVal).getStatus();
+    }
+
+    @Override
+    public WriteContext requestWriteWithContext(int txId, DataItem data, Object oldVal, Object newVal) {
+        Objects.requireNonNull(data, "data");
+        Transaction tx = activeTransactions.get(txId);
+        if (tx == null || tx.getState() != TransactionState.ACTIVE) {
+            return WriteContext.denied(txId, AccessStatus.ABORTED, data.tableName(), data.rowId());
         }
-        return status;
+        synchronized (tx) {
+            AccessStatus status = request(txId, data, true);
+            if (status != AccessStatus.GRANTED) {
+                return WriteContext.denied(txId, status, data.tableName(), data.rowId());
+            }
+            long lsn = 0L;
+            if (frm != null && (oldVal != null || newVal != null)) {
+                try {
+                    lsn = persistDataLog(txId, data, oldVal, newVal);
+                } catch (RuntimeException failure) {
+                    if (activeTransactions.containsKey(txId)) {
+                        failAndAbort(tx, "Unable to persist data log");
+                    }
+                    throw failure;
+                }
+
+            }
+            return new WriteContext(txId, AccessStatus.GRANTED, lsn, data.tableName(), data.rowId());
+        }
+
     }
 
     @Override
@@ -419,7 +450,7 @@ public final class ConcurrencyControlManager implements IConcurrencyControl {
         }
     }
 
-    private void persistDataLog(int txId, DataItem data, Object oldVal, Object newVal) {
+    private long persistDataLog(int txId, DataItem data, Object oldVal, Object newVal) {
         LogType opType = (oldVal == null) ? LogType.INSERT
                 : (newVal == null ? LogType.DELETE : LogType.UPDATE);
         RecoveryResult result = frm.writeDataLog(
@@ -435,6 +466,7 @@ public final class ConcurrencyControlManager implements IConcurrencyControl {
                     "Unable to persist " + opType.toString().toLowerCase()
                             + " log for transaction " + txId);
         }
+        return result.getLsn();
     }
 
     private void persistRelocationLog(

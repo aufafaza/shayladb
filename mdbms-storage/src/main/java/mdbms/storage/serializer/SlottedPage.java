@@ -13,6 +13,7 @@ public final class SlottedPage {
     private static final int VERSION = 1;
     private static final int HEADER_SIZE = 16;
     private static final int SLOT_SIZE = 12;
+    public static final int MAX_RECORD_SIZE = PAGE_SIZE - HEADER_SIZE - SLOT_SIZE;
     private static final int DELETED = 0;
     private static final int RESERVED = 1;
     private static final int OCCUPIED = 2;
@@ -209,12 +210,17 @@ public final class SlottedPage {
         return record.clone();
     }
 
+    // hapus record tapi ruangnya tetap ditahan jadi slot dipesan sepanjang record lama
+    // biar undo DELETE atau relokasi yang di abort pasti muat lagi di RowId asalnya walau transaksi lain lagi nyari ruang
+    // ruangnya baru balik lewat releaseReservation pas ga ada transaksi aktif
     public void deleteRecord(int slot) {
         checkSlot(slot);
-        if (records.get(slot) == null) {
+        byte[] record = records.get(slot);
+        if (record == null) {
             throw new StorageException(StorageErrorCode.SLOT_UNAVAILABLE, "Slot contains no record");
         }
         records.set(slot, null);
+        reservations.set(slot, record.length);
     }
 
     // menyusun seluruh halaman jadi data biner

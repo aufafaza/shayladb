@@ -57,6 +57,7 @@ public class HeapFile{
     public RowId reserve(List<Object> values){
         byte[] record = serializer.serialize(values, schema);
         int bytes = record.length;
+        validateRecordSize(bytes);
 
         Block block = pool.pin(fileName, findBlockWithSpace(bytes));
 
@@ -92,6 +93,8 @@ public class HeapFile{
     public RowId insert(List<Object> values){
         byte[] record = serializer.serialize(values, schema);
         int bytes = record.length;
+        validateRecordSize(bytes);
+
         Block block = pool.pin(fileName, findBlockWithSpace(bytes));
 
         try{
@@ -111,6 +114,8 @@ public class HeapFile{
     public boolean insertAt(RowId rowId, List<Object> values){
         byte[] record = serializer.serialize(values, schema);
         int bytes = record.length;
+        validateRecordSize(bytes);
+
         while (blockCount() <= rowId.blockNumber()){
             appendEmptyPage();
         }
@@ -151,8 +156,24 @@ public class HeapFile{
 
     // ganti isi baris di tempat, kalau ga muat baris baru di insert dulu baru yang lama dihapus biar data ga hilang kalau gagal
     public Row update(RowId rowId, List<Object> values){
-        if (updateInPlace(rowId, values)){
-            return new Row(rowId, values);
+        byte[] record = serializer.serialize(values, schema);
+        validateRecordSize(record.length);
+        Block block = pool.pin(fileName, rowId.blockNumber());
+        boolean dirty = false;
+
+        try{
+            SlottedPage page = SlottedPage.of(block.data);
+            int slot = rowId.slot();
+            boolean replaced = page.replaceRecord(slot, record);
+
+            if (replaced) {
+                writeBack(block, page);
+                dirty = true;
+                return new Row(rowId, values);
+            }
+
+        } finally{
+            pool.unpin(block, dirty, NO_LSN);
         }
 
         RowId moved = insert(values);
@@ -278,6 +299,7 @@ public class HeapFile{
 
     // lepas semua slot yang masih dipesan dan balikin jumlahnya, cuma aman dipanggil pas ga ada transaksi aktif
     // slot dipesan yang ikut ke disk sebelum crash bakal nyangkut, kalau ga dilepas ruangnya kepake selamanya
+    // ruang bekas baris yang dihapus juga ditahan sebagai slot dipesan, jadi baru bisa dipakai lagi abis dilepas di sini
     public int releaseAllReservations(){
         int released = 0;
         for (int blockNumber = 0; blockNumber < blockCount(); blockNumber++){
@@ -306,25 +328,32 @@ public class HeapFile{
         return pool.blockCount(fileName);
     }
 
-    private int findBlockWithSpace(int requiredBytes){
-        int blockCount = blockCount();
-        if (blockCount == 0) return appendEmptyPage();
+    private static void validateRecordSize(int bytes){
+        if (bytes > SlottedPage.MAX_RECORD_SIZE){
+            throw new StorageException(
+                StorageErrorCode.SCHEMA_VIOLATION,
+                "Record size " + bytes + " bytes exceeds maximum row size of " + SlottedPage.MAX_RECORD_SIZE + " bytes"
+            );
+        }
+    }
 
-        int blockNumber = blockCount - 1;
+    private int findBlockWithSpace(int requiredBytes){
+        for (int blockNumber = blockCount() - 1; blockNumber >= 0; blockNumber--){
+            if (hasSpace(blockNumber, requiredBytes)) return blockNumber;
+        }
+
+        return appendEmptyPage();
+    }
+
+    private boolean hasSpace(int blockNumber, int requiredBytes){
         Block block = pool.pin(fileName, blockNumber);
-        boolean hasSpace;
 
         try{
-            SlottedPage page = SlottedPage.of(block.data);
-            hasSpace = page.hasSpace(requiredBytes);
+            return SlottedPage.of(block.data).hasSpace(requiredBytes);
 
         } finally{
             pool.unpin(block, false, NO_LSN);
         }
-
-        if (hasSpace) return blockNumber;
-        
-        return appendEmptyPage();
     }
 
     // tambah block baru lalu isi header SlottedPage kosong, pin dari appendBlock langsung dilepas
