@@ -59,7 +59,7 @@ public class DBMS {
             manager.initAfterRecovery();
             loadSampleData();
             IQueryProcessor queryProcessor = new QueryProcessor(
-                new QueryOptimizer((ISchemaCatalog) storage, new ShaylaParser(new ShaylaLexer(null))),
+                new QueryOptimizer((ISchemaCatalog) storage, new ShaylaParser()),
                 (IDataAccess) storage, (ISchemaCatalog) storage, frm, manager);
             concurrencyControl = manager;
             processor = queryProcessor;
