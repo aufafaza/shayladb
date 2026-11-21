@@ -269,6 +269,81 @@ class FramedJsonProtocolTest {
         assertEquals(1, commits[0]);
     }
 
+    @Test
+    void autocommitInvokesCommitOnce() throws Exception {
+        TestSocket socket = new TestSocket(frame("{\"sql\":\"INSERT INTO users VALUES (1)\"}"));
+        int[] beginAttempts = {0};
+        int[] commitAttempts = {0};
+        int[] abortAttempts = {0};
+        IConcurrencyControl control = controlWithLifecycleCounters(beginAttempts, commitAttempts, abortAttempts);
+
+        new ClientHandler(socket, new SessionManager(), (query, txId) ->
+                new ExecutionResult(true, null, null, 1, null), control).run();
+
+        assertEquals(1, beginAttempts[0]);
+        assertEquals(1, commitAttempts[0]);
+        assertEquals(0, abortAttempts[0]);
+    }
+
+    @Test
+    void explicitMultiStatementTransactionCommitsOnceWithoutPerStatementCommit() throws Exception {
+        TestSocket socket = new TestSocket(concat(
+                frame("{\"sql\":\"BEGIN\"}"),
+                frame("{\"sql\":\"INSERT INTO users VALUES (1)\"}"),
+                frame("{\"sql\":\"UPDATE users SET id = 2\"}"),
+                frame("{\"sql\":\"COMMIT\"}")));
+        int[] beginAttempts = {0};
+        int[] commitAttempts = {0};
+        int[] abortAttempts = {0};
+        IConcurrencyControl control = controlWithLifecycleCounters(beginAttempts, commitAttempts, abortAttempts);
+
+        new ClientHandler(socket, new SessionManager(), (query, txId) ->
+                new ExecutionResult(true, null, null, 1, null), control).run();
+
+        assertEquals(1, beginAttempts[0]);
+        assertEquals(1, commitAttempts[0]);
+        assertEquals(0, abortAttempts[0]);
+    }
+
+    @Test
+    void explicitMultiStatementFailureAbortsOnce() throws Exception {
+        TestSocket socket = new TestSocket(concat(
+                frame("{\"sql\":\"BEGIN\"}"),
+                frame("{\"sql\":\"INSERT INTO users VALUES (1)\"}"),
+                frame("{\"sql\":\"SELECT FROM\"}")));
+        int[] beginAttempts = {0};
+        int[] commitAttempts = {0};
+        int[] abortAttempts = {0};
+        IConcurrencyControl control = controlWithLifecycleCounters(beginAttempts, commitAttempts, abortAttempts);
+
+        new ClientHandler(socket, new SessionManager(), (query, txId) ->
+                query.startsWith("SELECT") ? new ExecutionResult(false, null, null, 0, "statement failed")
+                        : new ExecutionResult(true, null, null, 1, null), control).run();
+
+        assertEquals(1, beginAttempts[0]);
+        assertEquals(0, commitAttempts[0]);
+        assertEquals(1, abortAttempts[0]);
+    }
+
+    private IConcurrencyControl controlWithLifecycleCounters(
+            int[] beginAttempts, int[] commitAttempts, int[] abortAttempts) {
+        return new IConcurrencyControl() {
+            @Override public int beginTransaction() {
+                beginAttempts[0]++;
+                return 42;
+            }
+            @Override public void commitTransaction(int txId) { commitAttempts[0]++; }
+            @Override public void abortTransaction(int txId, String reason) { abortAttempts[0]++; }
+            @Override public AccessStatus requestRead(int txId, DataItem data) { return AccessStatus.GRANTED; }
+            @Override public AccessStatus requestWrite(int txId, DataItem data, Object oldVal, Object newVal) {
+                return AccessStatus.GRANTED;
+            }
+            @Override public AccessStatus requestWrite(int txId, DataItem data) { return AccessStatus.GRANTED; }
+            @Override public Transaction getTransaction(int txId) { return null; }
+            @Override public boolean verifySchedule(List<Operation> manualSchedule) { return false; }
+        };
+    }
+
     private IConcurrencyControl rejectingControl() {
         return new IConcurrencyControl() {
             @Override public int beginTransaction() { throw new IllegalStateException("paused"); }
