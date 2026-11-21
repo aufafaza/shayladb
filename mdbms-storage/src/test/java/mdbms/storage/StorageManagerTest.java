@@ -274,7 +274,8 @@ class StorageManagerTest {
             RowId rowId = storage.writeBlock(new DataWrite("texts", Map.of("id", i + 1, "fixed", text, "varying", text), List.of())).get(0);
             assertEquals(List.of(i + 1, text, text), storage.fetchByRowId(rowId).values());
         }   
-        
+    }
+
     // table with a maximum row larger than one page is rejected
     @Test
     void oversizedTableSchemaIsRejected() {
