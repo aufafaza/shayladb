@@ -274,6 +274,26 @@ class StorageManagerTest {
             RowId rowId = storage.writeBlock(new DataWrite("texts", Map.of("id", i + 1, "fixed", text, "varying", text), List.of())).get(0);
             assertEquals(List.of(i + 1, text, text), storage.fetchByRowId(rowId).values());
         }   
+        
+    // table with a maximum row larger than one page is rejected
+    @Test
+    void oversizedTableSchemaIsRejected() {
+        TableSchema schema = new TableSchema(
+                "wide_rows",
+                List.of(
+                        new ColumnDefinition("id", DataType.INTEGER, 0, false),
+                        new ColumnDefinition("payload", DataType.VARCHAR, 5000, false)),
+                List.of("id"),
+                List.of());
+
+        StorageException error = assertThrows(
+                StorageException.class,
+                () -> storage.updateTableSchema(schema));
+
+        assertEquals(StorageErrorCode.SCHEMA_VIOLATION, error.getCode());
+        assertTrue(error.getMessage().contains("exceeds page record limit"));
+        assertNull(storage.getTableSchema("wide_rows"));
+        assertFalse(storage.listTable().contains("wide_rows"));
     }
 
     // FRM palsu yang selalu bilang log udah aman biar flush bisa jalan

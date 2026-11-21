@@ -57,6 +57,7 @@ public class HeapFile{
     public RowId reserve(List<Object> values){
         byte[] record = serializer.serialize(values, schema);
         int bytes = record.length;
+        validateRecordSize(bytes);
 
         Block block = pool.pin(fileName, findBlockWithSpace(bytes));
 
@@ -92,6 +93,8 @@ public class HeapFile{
     public RowId insert(List<Object> values){
         byte[] record = serializer.serialize(values, schema);
         int bytes = record.length;
+        validateRecordSize(bytes);
+
         Block block = pool.pin(fileName, findBlockWithSpace(bytes));
 
         try{
@@ -111,6 +114,8 @@ public class HeapFile{
     public boolean insertAt(RowId rowId, List<Object> values){
         byte[] record = serializer.serialize(values, schema);
         int bytes = record.length;
+        validateRecordSize(bytes);
+
         while (blockCount() <= rowId.blockNumber()){
             appendEmptyPage();
         }
@@ -152,6 +157,7 @@ public class HeapFile{
     // ganti isi baris di tempat, kalau ga muat baris baru di insert dulu baru yang lama dihapus biar data ga hilang kalau gagal
     public Row update(RowId rowId, List<Object> values){
         byte[] record = serializer.serialize(values, schema);
+        validateRecordSize(record.length);
         Block block = pool.pin(fileName, rowId.blockNumber());
         boolean dirty = false;
 
@@ -283,6 +289,15 @@ public class HeapFile{
 
     public int blockCount(){
         return pool.blockCount(fileName);
+    }
+
+    private static void validateRecordSize(int bytes){
+        if (bytes > SlottedPage.MAX_RECORD_SIZE){
+            throw new StorageException(
+                StorageErrorCode.SCHEMA_VIOLATION,
+                "Record size " + bytes + " bytes exceeds maximum row size of " + SlottedPage.MAX_RECORD_SIZE + " bytes"
+            );
+        }
     }
 
     private int findBlockWithSpace(int requiredBytes){
