@@ -182,4 +182,24 @@ class LogManagerTest {
             failingWal.close();
         }
     }
+
+    @Test
+    void testAppendRelocationLogRecordsOldAndNewRowIds() {
+        RowId oldRid = new RowId("users", 0, 3);
+        RowId newRid = new RowId("users", 2, 0);
+        RecordImage before = new RecordImage(List.of(1, "A"));
+        RecordImage after = new RecordImage(List.of(1, "A_Relocated_Long_Payload"));
+
+        DataChangeLogRecord record = logManager.appendRelocationLog(
+                12, "users", oldRid, newRid, before, after);
+
+        assertNotNull(record);
+        assertTrue(record.isRelocation());
+        assertEquals(oldRid, record.getRowId());
+        assertEquals(newRid, record.getNewRowId());
+        assertEquals(12, logManager.getMaxTxId());
+
+        String formatted = logManager.formatLogTable(logManager.readLogs(12));
+        assertTrue(formatted.contains("0:3->2:0"));
+    }
 }
