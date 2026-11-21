@@ -375,18 +375,29 @@ class FramedJsonProtocolTest {
     private IConcurrencyControl controlWithLifecycleCounters(
             int[] beginAttempts, int[] commitAttempts, int[] abortAttempts) {
         return new IConcurrencyControl() {
+            private Transaction transaction;
+
             @Override public int beginTransaction() {
                 beginAttempts[0]++;
+                transaction = new Transaction(42, 1L);
                 return 42;
             }
-            @Override public void commitTransaction(int txId) { commitAttempts[0]++; }
-            @Override public void abortTransaction(int txId, String reason) { abortAttempts[0]++; }
+            @Override public void commitTransaction(int txId) {
+                commitAttempts[0]++;
+                transaction = null;
+            }
+            @Override public void abortTransaction(int txId, String reason) {
+                abortAttempts[0]++;
+                transaction = null;
+            }
             @Override public AccessStatus requestRead(int txId, DataItem data) { return AccessStatus.GRANTED; }
             @Override public AccessStatus requestWrite(int txId, DataItem data, Object oldVal, Object newVal) {
                 return AccessStatus.GRANTED;
             }
             @Override public AccessStatus requestWrite(int txId, DataItem data) { return AccessStatus.GRANTED; }
-            @Override public Transaction getTransaction(int txId) { return null; }
+            @Override public Transaction getTransaction(int txId) {
+                return transaction != null && transaction.getId() == txId ? transaction : null;
+            }
             @Override public boolean verifySchedule(List<Operation> manualSchedule) { return false; }
         };
     }
@@ -407,18 +418,7 @@ class FramedJsonProtocolTest {
     }
 
     private IConcurrencyControl controlWithAbortCounter(int[] abortAttempts) {
-        return new IConcurrencyControl() {
-            @Override public int beginTransaction() { return 42; }
-            @Override public void commitTransaction(int txId) { }
-            @Override public void abortTransaction(int txId, String reason) { abortAttempts[0]++; }
-            @Override public AccessStatus requestRead(int txId, DataItem data) { return AccessStatus.GRANTED; }
-            @Override public AccessStatus requestWrite(int txId, DataItem data, Object oldVal, Object newVal) {
-                return AccessStatus.GRANTED;
-            }
-            @Override public AccessStatus requestWrite(int txId, DataItem data) { return AccessStatus.GRANTED; }
-            @Override public Transaction getTransaction(int txId) { return null; }
-            @Override public boolean verifySchedule(List<Operation> manualSchedule) { return false; }
-        };
+        return controlWithLifecycleCounters(new int[1], new int[1], abortAttempts);
     }
 
     private static byte[] frame(String payload) {
