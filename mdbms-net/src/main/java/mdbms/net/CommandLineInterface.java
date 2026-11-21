@@ -193,7 +193,10 @@ public class CommandLineInterface {
                 if (ch == '\r')
                     lastWasCR = true;
 
-                writeToTelnet('\n');
+                String endline = System.lineSeparator();
+                for (int i = 0; i < endline.length(); i++) {
+                    writeToTelnet(endline.codePointAt(i));
+                }
 
                 if (!queryBuffer.isEmpty()) {
                     inputBuffer.insert(0, '\n');
