@@ -179,15 +179,25 @@ public final class SlottedPage {
         if (data == null || data.length == 0) {
             throw new StorageException(StorageErrorCode.SCHEMA_VIOLATION, "Record data must not be empty");
         }
-        byte[] previous = records.get(slot);
-        if (previous == null) {
-            throw new StorageException(StorageErrorCode.SLOT_UNAVAILABLE, "Slot contains no active record");
-        }
-        if (usedBytes() - previous.length + data.length > PAGE_SIZE) {
+        if (!canReplace(slot, data.length)) {
             return false;
         }
         records.set(slot, data.clone());
         return true;
+    }
+
+    // true kalau record aktif di slot ini bisa diganti record sepanjang length tanpa pindah slot
+    // dipakai buat nentuin UPDATE perlu relokasi atau ga sebelum ada yang diubah
+    public boolean canReplace(int slot, int length) {
+        checkSlot(slot);
+        if (length <= 0) {
+            throw new StorageException(StorageErrorCode.SCHEMA_VIOLATION, "Record length must be positive");
+        }
+        byte[] previous = records.get(slot);
+        if (previous == null) {
+            throw new StorageException(StorageErrorCode.SLOT_UNAVAILABLE, "Slot contains no active record");
+        }
+        return usedBytes() - previous.length + length <= PAGE_SIZE;
     }
 
     public byte[] readRecord(int slot) {
