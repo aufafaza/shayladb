@@ -15,7 +15,6 @@ import mdbms.models.schema.DataType;
 import mdbms.models.schema.TableSchema;
 import mdbms.models.transaction.AccessStatus;
 import mdbms.optimizer.QueryOptimizer;
-import mdbms.optimizer.lexer.ShaylaLexer;
 import mdbms.optimizer.parser.ShaylaParser;
 import mdbms.processor.QueryProcessor;
 import mdbms.processor.operator.CreateTableOperator;
@@ -184,7 +183,7 @@ class QueryEndToEndTest {
     }
 
     private void useOptimizer() {
-        processor = new QueryProcessor(new QueryOptimizer(storage, new ShaylaParser(new ShaylaLexer(""))),
+        processor = new QueryProcessor(new QueryOptimizer(storage, new ShaylaParser()),
             storage, storage, recovery, concurrency);
     }
 
