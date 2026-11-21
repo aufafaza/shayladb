@@ -117,6 +117,35 @@ public class FailureRecoveryFacade implements IFailureRecoveryManager {
     }
 
     @Override
+    public RecoveryResult writeRelocationLog(
+            int txId,
+            String table,
+            RowId oldRid,
+            RowId newRid,
+            RecordImage beforeImg,
+            RecordImage afterImg) {
+        if (txId <= 0 || table == null || oldRid == null || newRid == null) {
+            return new RecoveryResult(false, -1L, logManager.getMaxTxId(), "Invalid relocation log parameters");
+        }
+        if (oldRid.equals(newRid)) {
+            return writeDataLog(txId, LogType.UPDATE, table, oldRid, beforeImg, afterImg);
+        }
+        try {
+            DataChangeLogRecord record = logManager.appendRelocationLog(
+                    txId, table, oldRid, newRid, beforeImg, afterImg);
+            return new RecoveryResult(
+                    true,
+                    record.getLsn(),
+                    logManager.getMaxTxId(),
+                    "Relocation log UPDATE recorded on table " + table
+                            + " (" + oldRid + " -> " + newRid + ") for txId=" + txId
+            );
+        } catch (Exception e) {
+            return new RecoveryResult(false, -1L, logManager.getMaxTxId(), e.getMessage());
+        }
+    }
+
+    @Override
     public boolean flushLogUpTo(long lsn) {
         return logManager.flushUpTo(lsn);
     }
