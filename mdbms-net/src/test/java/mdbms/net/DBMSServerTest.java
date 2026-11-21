@@ -71,6 +71,37 @@ class DBMSServerTest {
     }
 
     @Test
+    void repeatedRequestsAndIdleDisconnectsLeaveNoSessionsOrHandlers() throws Exception {
+        DBMSServer server = new DBMSServer(0, OK_PROCESSOR, STUB_CONCURRENCY);
+        Future<?> future = startAsync(server);
+
+        try {
+            assertTrue(server.awaitReady(5, TimeUnit.SECONDS));
+            for (int i = 0; i < 25; i++) {
+                try (Socket client = connect(server.getBoundPort())) {
+                    assertEquals("OK", query(client, "SELECT " + i + ";"));
+                }
+            }
+
+            for (int i = 0; i < 25; i++) {
+                Socket idle = connect(server.getBoundPort());
+                idle.close();
+            }
+
+            assertTrue(waitFor(() -> server.getActiveClientCount() == 0
+                    && server.getActiveHandlerCount() == 0
+                    && server.getActiveSessionCount() == 0, 5_000));
+        } finally {
+            server.shutdown();
+        }
+
+        future.get(5, TimeUnit.SECONDS);
+        assertEquals(0, server.getActiveClientCount());
+        assertEquals(0, server.getActiveHandlerCount());
+        assertEquals(0, server.getActiveSessionCount());
+    }
+
+    @Test
     void bindFailurePropagatesWithoutLeak() throws Exception {
         try (ServerSocket occupied = new ServerSocket(0)) {
             DBMSServer server = new DBMSServer(occupied.getLocalPort(), OK_PROCESSOR, STUB_CONCURRENCY);
@@ -223,5 +254,17 @@ class DBMSServerTest {
             socket.close();
         } catch (IOException ignored) {
         }
+    }
+
+    private static boolean waitFor(java.util.concurrent.Callable<Boolean> condition, long timeoutMillis)
+            throws Exception {
+        long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(timeoutMillis);
+        while (System.nanoTime() < deadline) {
+            if (condition.call()) {
+                return true;
+            }
+            Thread.sleep(10);
+        }
+        return condition.call();
     }
 }

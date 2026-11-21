@@ -22,6 +22,8 @@ public class DBMSServer {
     private final IConcurrencyControl concurrencyControl;
     private final ClientHandler.Mode mode;
     private final Set<Socket> activeClientSockets = ConcurrentHashMap.newKeySet();
+    private final Map<Socket, ClientHandler> activeHandlers = new ConcurrentHashMap<>();
+    private volatile SessionManager sessionManager;
     private final CountDownLatch readyLatch = new CountDownLatch(1);
     private final CountDownLatch stoppedLatch = new CountDownLatch(1);
 
@@ -69,11 +71,11 @@ public class DBMSServer {
                         return thread;
                     },
                     new ThreadPoolExecutor.AbortPolicy());
+            sessionManager = new SessionManager();
             state = State.RUNNING;
             readyLatch.countDown();
         }
 
-        SessionManager sessionManager = new SessionManager();
         IOException acceptError = null;
         try {
             while (state == State.RUNNING) {
@@ -98,7 +100,7 @@ public class DBMSServer {
             }
             synchronized (this) {
                 serverSocket = null;
-                terminate(State.STOPPED);
+                terminate(workerPool.isTerminated() ? State.STOPPED : State.FAILED);
             }
             if (acceptError != null)
                 throw acceptError;
@@ -108,12 +110,26 @@ public class DBMSServer {
     public void shutdown() throws IOException {
         IOException closeError = closeActiveSockets();
         try {
-            stoppedLatch.await(shutdownTimeoutMs + 2_000L, TimeUnit.MILLISECONDS);
+            if (!stoppedLatch.await(shutdownTimeoutMs + 2_000L, TimeUnit.MILLISECONDS)
+                    || !isWorkerPoolTerminated()) {
+                throw new IOException("Server shutdown timed out; workers are still active");
+            }
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
+            throw new IOException("Interrupted while awaiting server shutdown", e);
         }
         if (closeError != null)
             throw closeError;
+    }
+
+    /** Stops accepting connections without waiting for transaction cleanup. */
+    public synchronized void stopAccepting() throws IOException {
+        if (state == State.RUNNING) {
+            state = State.STOPPING;
+            serverSocket.close();
+        } else if (state == State.NEW) {
+            terminate(State.STOPPED);
+        }
     }
 
     public boolean isRunning() {
@@ -137,8 +153,17 @@ public class DBMSServer {
         return stoppedLatch.await(timeout, unit);
     }
 
-    int getActiveClientCount() {
+    public int getActiveClientCount() {
         return activeClientSockets.size();
+    }
+
+    public int getActiveSessionCount() {
+        SessionManager manager = sessionManager;
+        return manager == null ? 0 : manager.getSessionCount();
+    }
+
+    int getActiveHandlerCount() {
+        return activeHandlers.size();
     }
 
     boolean isWorkerPoolTerminated() {
@@ -158,13 +183,20 @@ public class DBMSServer {
                     + clientSocket.getInetAddress() + ":" + clientSocket.getPort());
             clientSocket.setSoTimeout(FramedJsonProtocol.REQUEST_TIMEOUT_MILLIS);
             workerPool.execute(() -> {
+                ClientHandler handler = null;
                 try {
-                    new ClientHandler(clientSocket, sessionManager, processor, concurrencyControl, mode).run();
+                    handler = new ClientHandler(clientSocket, sessionManager, processor, concurrencyControl, mode);
+                    activeHandlers.put(clientSocket, handler);
+                    handler.run();
                 } finally {
+                    if (handler != null) {
+                        activeHandlers.remove(clientSocket, handler);
+                    }
                     releaseClient(clientSocket);
                 }
             });
         } catch (RejectedExecutionException | IOException e) {
+            activeHandlers.remove(clientSocket);
             if (e instanceof RejectedExecutionException && mode == ClientHandler.Mode.FRAMED_JSON) {
                 try {
                     new FramedJsonProtocol(clientSocket, clientSocket.getInputStream())
@@ -208,7 +240,11 @@ public class DBMSServer {
         } catch (IOException e) {
             closeError = e;
         } finally {
-            clientsToClose.forEach(DBMSServer::closeQuietly);
+            clientsToClose.forEach(socket -> {
+                // The owning worker resolves its transaction in finally. Never block
+                // the shutdown caller acquiring a transaction monitor here.
+                closeQuietly(socket);
+            });
         }
         return closeError;
     }

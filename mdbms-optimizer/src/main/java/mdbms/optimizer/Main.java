@@ -131,8 +131,7 @@ public class Main {
     // QO-15: plan sebelum dan sesudah optimasi beserta biaya totalnya
     public static void runOptimizeMode(String sql) {
         System.out.println("\n--- [PLAN, before & after optimization] ---");
-        QueryErrorCollector collector = new QueryErrorCollector();
-        ShaylaParser parser = new ShaylaParser(new ShaylaLexer(sql, collector));
+        ShaylaParser parser = new ShaylaParser();
         try {
             System.out.print(new QueryOptimizer(CATALOG, parser).explainQuery(sql));
         } catch (QueryProcessingException e) {
