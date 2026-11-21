@@ -77,6 +77,18 @@ class FramedJsonProtocolTest {
         assertEquals("INVALID_REQUEST", malformedError.code());
         assertFalse(malformedError.closeConnection());
 
+        TestSocket duplicate = new TestSocket(frame("{\"sql\":\"SELECT 1\",\"sql\":\"SELECT 2\"}"));
+        ProtocolException duplicateError = assertThrows(ProtocolException.class,
+                () -> new FramedJsonProtocol(duplicate, duplicate.getInputStream()).readSql());
+        assertEquals("INVALID_REQUEST", duplicateError.code());
+        assertFalse(duplicateError.closeConnection());
+
+        TestSocket trailing = new TestSocket(frame("{\"sql\":\"SELECT 1\"} trailing"));
+        ProtocolException trailingError = assertThrows(ProtocolException.class,
+                () -> new FramedJsonProtocol(trailing, trailing.getInputStream()).readSql());
+        assertEquals("INVALID_REQUEST", trailingError.code());
+        assertFalse(trailingError.closeConnection());
+
         TestSocket oversized = new TestSocket(ByteBuffer.allocate(4)
                 .putInt(FramedJsonProtocol.MAX_FRAME_BYTES + 1).array());
         ProtocolException oversizedError = assertThrows(ProtocolException.class,
