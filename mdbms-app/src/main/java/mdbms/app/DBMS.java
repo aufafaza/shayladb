@@ -11,6 +11,10 @@ import mdbms.concurrency.ConcurrencyProtocol;
 import mdbms.concurrency.LockBasedProtocol;
 import mdbms.concurrency.TimestampsBasedProtocol;
 import mdbms.models.log.RecoveryResult;
+import mdbms.optimizer.QueryOptimizer;
+import mdbms.optimizer.lexer.ShaylaLexer;
+import mdbms.optimizer.parser.ShaylaParser;
+import mdbms.processor.QueryProcessor;
 import mdbms.recovery.FailureRecoveryManager;
 import mdbms.storage.SampleDataLoader;
 import mdbms.storage.StorageManager;
@@ -46,7 +50,9 @@ public class DBMS {
         loadSampleData();
         concurrencyControl = new ConcurrencyControlManager(protocol, frm);
         System.out.println("Concurrency protocol: " + ((ConcurrencyControlManager) concurrencyControl).getActiveProtocolName());
-        // TODO: assign the real QueryProcessor here once it implements IQueryProcessor
+        processor = new QueryProcessor(
+            new QueryOptimizer((ISchemaCatalog) storage, new ShaylaParser(new ShaylaLexer(null))),
+            (IDataAccess) storage, (ISchemaCatalog) storage, frm, concurrencyControl);
         running = true;
     }
 

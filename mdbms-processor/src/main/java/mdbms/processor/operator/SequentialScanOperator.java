@@ -15,7 +15,7 @@ import mdbms.processor.IResultRow;
 import mdbms.processor.ResultRow;
 import mdbms.processor.ResultTableSchema;
 
-public final class SequentialScanOperator implements IQueryOperator{
+public final class SequentialScanOperator implements IQueryOperator, IRowProducingOperator {
     private final IDataAccess access; 
     private final ISchemaCatalog catalog; 
     private final IConcurrencyControl concurrency;
@@ -32,6 +32,16 @@ public final class SequentialScanOperator implements IQueryOperator{
         this.concurrency=concurrency;
         this.txId=txId; 
         this.table=table;
+    }
+
+    @Override
+    public ResultTableSchema getSchema() {
+        if (tableSchema == null) {
+            TableSchema schema = catalog.getTableSchema(table);
+            if (schema == null) throw new IllegalArgumentException("Tabel tidak ditemukan: "+table);
+            tableSchema = new ResultTableSchema(schema);
+        }
+        return tableSchema;
     }
 
     @Override public void open() {

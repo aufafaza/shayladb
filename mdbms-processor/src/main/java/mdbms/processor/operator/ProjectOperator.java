@@ -9,7 +9,7 @@ import mdbms.processor.ResultRow;
 import mdbms.processor.ResultTableSchema;
 import mdbms.processor.exception.AmbiguousColumnException;
 
-public class ProjectOperator extends QueryUnaryOperator{
+public class ProjectOperator extends QueryUnaryOperator implements IRowProducingOperator {
     private final List<ColumnReference> columns;
     private ResultTableSchema outputSchema;
 
@@ -20,6 +20,17 @@ public class ProjectOperator extends QueryUnaryOperator{
 
     @Override public void open() {
         childOperator.open();
+        if (childOperator instanceof IRowProducingOperator) {
+            createSchema(((IRowProducingOperator) childOperator).getSchema());
+        }
+    }
+
+    @Override
+    public ResultTableSchema getSchema() {
+        if (outputSchema == null && childOperator instanceof IRowProducingOperator) {
+            createSchema(((IRowProducingOperator) childOperator).getSchema());
+        }
+        return outputSchema;
     }
 
     private void createSchema(ResultTableSchema input) {

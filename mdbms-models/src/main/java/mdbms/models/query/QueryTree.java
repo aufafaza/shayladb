@@ -19,6 +19,7 @@ public class QueryTree {
     private List<ExpressionTree> insertValues = List.of();
     private String indexName;
     private ColumnReference indexColumn;
+    private IndexScanSpec indexScan;
 
     public QueryTree(
         QueryNodeType nodeType,
@@ -118,6 +119,20 @@ public class QueryTree {
         requireConcreteColumn(column);
         this.indexName = name;
         this.indexColumn = column;
+    }
+
+    public IndexScanSpec getIndexScan() {
+        return indexScan;
+    }
+
+    // baca tabel lewat index, beda arti sama setIndexDefinition
+    public void setIndexScan(IndexScanSpec spec) {
+        requireNodeType(QueryNodeType.TABLE_SCAN);
+        Objects.requireNonNull(spec);
+        if (tableName != null && !tableName.equalsIgnoreCase(spec.index().tableName())) {
+            throw new IllegalArgumentException("Index belongs to another table: " + spec.index().tableName());
+        }
+        this.indexScan = spec;
     }
 
     private void requireNodeType(QueryNodeType expected) {
@@ -250,6 +265,12 @@ public class QueryTree {
         }
         if (node.indexColumn != null) {
             details.add("indexColumn=" + node.indexColumn);
+        }
+        if (node.indexScan != null) {
+            details.add("indexScan=" + node.indexScan.index().indexName()
+                + " " + node.indexScan.condition().column()
+                + " " + node.indexScan.condition().operator()
+                + " " + node.indexScan.condition().value());
         }
         if (node.algorithm != null && node.algorithm != PhysicalAlgorithm.DEFAULT) {
             details.add("algorithm=" + node.algorithm);
