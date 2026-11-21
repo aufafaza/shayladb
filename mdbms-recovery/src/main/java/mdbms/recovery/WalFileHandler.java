@@ -104,9 +104,10 @@ public class WalFileHandler {
 
         synchronized (ioLock) {
             try {
-                if (channel != null && channel.isOpen()) {
-                    channel.force(false);
+                if (channel == null || !channel.isOpen()) {
+                    return false;
                 }
+                channel.force(true);
                 flushedLsn = Math.max(flushedLsn, lastWrittenLsn);
                 return flushedLsn >= lsn;
             } catch (IOException e) {
@@ -161,6 +162,18 @@ public class WalFileHandler {
                 }
             }
 
+            long highestDiskLsn = 0L;
+            for (LogRecord rec : records) {
+                if (rec.getLsn() > highestDiskLsn) {
+                    highestDiskLsn = rec.getLsn();
+                }
+            }
+            if (highestDiskLsn > lastWrittenLsn) {
+                lastWrittenLsn = highestDiskLsn;
+            }
+            if (highestDiskLsn > flushedLsn) {
+                flushedLsn = highestDiskLsn;
+            }
             return records;
         }
     }
@@ -224,7 +237,8 @@ public class WalFileHandler {
     }
 
     private LogRecord parseRecord(String line) {
-        String[] tokens = line.split("\\|", -1);
+        List<String> tokenList = splitUnescaped(line, '|');
+        String[] tokens = tokenList.toArray(new String[0]);
         if (tokens.length < 4) {
             throw new IllegalArgumentException("Field log kurang dari 4: " + line);
         }
@@ -403,5 +417,31 @@ public class WalFileHandler {
             result.add(Integer.parseInt(part.trim()));
         }
         return result;
+    }
+
+    private List<String> splitUnescaped(String line, char delimiter) {
+        List<String> tokens = new ArrayList<>();
+        StringBuilder current = new StringBuilder();
+        boolean escaped = false;
+
+        for (int i = 0; i < line.length(); i++) {
+            char c = line.charAt(i);
+            if (escaped) {
+                current.append('\\').append(c);
+                escaped = false;
+            } else if (c == '\\') {
+                escaped = true;
+            } else if (c == delimiter) {
+                tokens.add(current.toString());
+                current.setLength(0);
+            } else {
+                current.append(c);
+            }
+        }
+        if (escaped) {
+            current.append('\\');
+        }
+        tokens.add(current.toString());
+        return tokens;
     }
 }
