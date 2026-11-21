@@ -352,4 +352,28 @@ class HeapFileTest {
         assertNull(heapFile.deleteIfPresent(new RowId("users", 5, 0)));
         assertEquals(1, heapFile.blockCount());
     }
+
+    // oversized rows are rejected before a new page is allocated
+    @Test
+    void oversizedRowIsRejectedBeforePageAllocation(){
+        TableSchema wideSchema = new TableSchema(
+            "wide_rows",
+            List.of(
+                new ColumnDefinition("id", DataType.INTEGER, 0, false),
+                new ColumnDefinition("payload", DataType.VARCHAR, 5000, false)
+            ),
+            List.of("id"),
+            List.of()
+        );
+
+        HeapFile wideHeapFile = new HeapFile(wideSchema, pool, serializer);
+
+        StorageException error = assertThrows(
+            StorageException.class,
+            () -> wideHeapFile.insert(List.of(1, "x".repeat(5000)))
+        );
+
+        assertEquals(StorageErrorCode.SCHEMA_VIOLATION, error.getCode());
+        assertEquals(0, wideHeapFile.blockCount());
+    }
 }

@@ -57,6 +57,7 @@ public class HeapFile{
     public RowId reserve(List<Object> values){
         byte[] record = serializer.serialize(values, schema);
         int bytes = record.length;
+        validateRecordSize(bytes);
 
         Block block = pool.pin(fileName, findBlockWithSpace(bytes));
 
@@ -92,6 +93,8 @@ public class HeapFile{
     public RowId insert(List<Object> values){
         byte[] record = serializer.serialize(values, schema);
         int bytes = record.length;
+        validateRecordSize(bytes);
+
         Block block = pool.pin(fileName, findBlockWithSpace(bytes));
 
         try{
@@ -111,6 +114,8 @@ public class HeapFile{
     public boolean insertAt(RowId rowId, List<Object> values){
         byte[] record = serializer.serialize(values, schema);
         int bytes = record.length;
+        validateRecordSize(bytes);
+
         while (blockCount() <= rowId.blockNumber()){
             appendEmptyPage();
         }
@@ -151,8 +156,24 @@ public class HeapFile{
 
     // ganti isi baris di tempat, kalau ga muat baris baru di insert dulu baru yang lama dihapus biar data ga hilang kalau gagal
     public Row update(RowId rowId, List<Object> values){
-        if (updateInPlace(rowId, values)){
-            return new Row(rowId, values);
+        byte[] record = serializer.serialize(values, schema);
+        validateRecordSize(record.length);
+        Block block = pool.pin(fileName, rowId.blockNumber());
+        boolean dirty = false;
+
+        try{
+            SlottedPage page = SlottedPage.of(block.data);
+            int slot = rowId.slot();
+            boolean replaced = page.replaceRecord(slot, record);
+
+            if (replaced) {
+                writeBack(block, page);
+                dirty = true;
+                return new Row(rowId, values);
+            }
+
+        } finally{
+            pool.unpin(block, dirty, NO_LSN);
         }
 
         RowId moved = insert(values);
@@ -307,9 +328,15 @@ public class HeapFile{
         return pool.blockCount(fileName);
     }
 
-    // cari block yang masih muat mulai dari block terakhir lalu mundur ke block sebelumnya
-    // jadi ruang bekas reservasi yang dilepas atau baris yang dihapus di block lama tetap kepakai lagi
-    // block baru cuma dibikin kalau semua block udah penuh
+    private static void validateRecordSize(int bytes){
+        if (bytes > SlottedPage.MAX_RECORD_SIZE){
+            throw new StorageException(
+                StorageErrorCode.SCHEMA_VIOLATION,
+                "Record size " + bytes + " bytes exceeds maximum row size of " + SlottedPage.MAX_RECORD_SIZE + " bytes"
+            );
+        }
+    }
+
     private int findBlockWithSpace(int requiredBytes){
         for (int blockNumber = blockCount() - 1; blockNumber >= 0; blockNumber--){
             if (hasSpace(blockNumber, requiredBytes)) return blockNumber;
