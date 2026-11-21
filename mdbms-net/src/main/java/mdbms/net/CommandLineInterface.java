@@ -196,7 +196,7 @@ public class CommandLineInterface {
                 writeToTelnet('\n');
 
                 if (!queryBuffer.isEmpty()) {
-                    inputBuffer.append('\n');
+                    inputBuffer.insert(0, '\n');
                     inputByteLength++;
                     ensureTelnetQuerySize();
                 }
@@ -248,6 +248,10 @@ public class CommandLineInterface {
             int codePoint = inputBuffer.codePointAt(i);
             int charCount = Character.charCount(codePoint);
             char ch = (char) codePoint;
+            if (queryBuffer.isEmpty() && !isInsideString && Character.isWhitespace(codePoint)) {
+                i += charCount;
+                continue;
+            }
             if (charCount == 1) {
                 queryBuffer.append((char) codePoint);
             } else {
