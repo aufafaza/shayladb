@@ -39,6 +39,12 @@ public interface IDataAccess{
 
     Row deleteByRowId(RowId rowId);
 
+    // tolak kalau ada baris lain yang primary key nya sama dengan values, baris ignoreRowId dilewatin
+    // dipanggil QP sebelum INSERT dan UPDATE ngubah data, ignoreRowId diisi baris yang lagi di update, null buat INSERT
+    // ga dicek di insertAt karena insertAt juga dipakai undo redo FRM dan relokasi UPDATE yang baris lamanya masih ada
+    default void checkPrimaryKey(String table, List<Object> values, RowId ignoreRowId) {
+    }
+
     List<RowId> searchIndex(String indexName, Object key);
 
     List<RowId> searchIndexRange(String indexName, Object low, Object high, boolean lowInclusive, boolean highInclusive);
