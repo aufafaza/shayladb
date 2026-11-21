@@ -2,6 +2,7 @@ package mdbms.processor.operator;
 
 import mdbms.api.IConcurrencyControl;
 import mdbms.processor.IResultRow;
+import mdbms.processor.exception.TransactionCompletionException;
 
 @Deprecated 
 public class CommitOperator implements IQueryOperator, IQueryMessage {
@@ -30,7 +31,9 @@ public class CommitOperator implements IQueryOperator, IQueryMessage {
             concurrencyControlManager.commitTransaction(transactionId);
             message = "COMMIT transaction " + transactionId;
         } catch (RuntimeException e) {
+            // lempar biar hasil query gagal, jangan sampai klien ngira COMMIT berhasil
             message = "COMMIT rejected: " + e.getMessage();
+            throw new TransactionCompletionException(message, e);
         }
         return null;
     }

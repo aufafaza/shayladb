@@ -4,6 +4,7 @@ import java.util.List;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.Set;
 import java.nio.charset.StandardCharsets;
 import mdbms.api.IDataAccess;
 import mdbms.api.IDurableStorage;
@@ -320,6 +321,11 @@ public final class StorageManager implements IDataAccess, ISchemaCatalog, IStati
         }
     }
 
+    // hapus satu index dari katalog dan file nya, dipakai bootstrap schema buat batalin index yang baru dibuat
+    public void dropIndex(String name){
+        indexManager.dropIndex(name);
+    }
+
     @Override
     public Statistic getStatistics(String table){
         return statistics.getStatistics(table, heapFileOf(table));
@@ -340,6 +346,42 @@ public final class StorageManager implements IDataAccess, ISchemaCatalog, IStati
     // perubahan di buffer yang belum di flush sengaja dibuang karena isi disk yang jadi acuan
     public void reloadFromDisk(){
         bufferPool.discardAllFrames();
+        reloadCatalogAndIndexes();
+    }
+
+    // versi IDurableStorage dari reloadFromDisk, cuma frame file yang diganti yang dibuang biar perubahan file lain ga hilang
+    @Override
+    public void invalidateAndReload(Set<String> affectedFiles){
+        if (affectedFiles == null || affectedFiles.isEmpty()){
+            reloadFromDisk();
+            return;
+        }
+        for (String fileName : affectedFiles){
+            bufferPool.discardFrames(fileName);
+        }
+        reloadCatalogAndIndexes();
+    }
+
+    // dipanggil FRM setelah recovery selesai, buffer ga dibuang karena hasil redo undo bisa belum ke flush
+    @Override
+    public void rebuildIndexesAndReloadCatalog(){
+        reloadCatalogAndIndexes();
+        releaseOrphanReservations();
+        rebuildIndexes();
+    }
+
+    // lepas slot dipesan yang nyangkut di disk dari transaksi yang ga sempat selesai sebelum crash
+    // cuma boleh dipanggil pas ga ada transaksi aktif, balikin jumlah slot yang dilepas
+    public int releaseOrphanReservations(){
+        int released = 0;
+        for (String table : catalog.listTables()){
+            released += heapFileOf(table).releaseAllReservations();
+        }
+        return released;
+    }
+
+    // kosongin cache heap dan statistik lalu baca ulang katalog dan buka ulang index sesuai katalog terbaru
+    private void reloadCatalogAndIndexes(){
         tables.clear();
         for (String table : catalog.listTables()){
             statistics.invalidate(table);
