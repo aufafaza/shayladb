@@ -9,6 +9,10 @@ import mdbms.models.access.DataRetrieval;
 import mdbms.models.query.ColumnReference;
 import mdbms.models.data.RowId;
 import mdbms.processor.ResultRow;
+import mdbms.processor.mocks.MockConcurrencyControl;
+import mdbms.processor.mocks.MockDataAccess;
+import mdbms.processor.mocks.MockOperator;
+
 import org.junit.jupiter.api.Test;
 
 class DeleteOperatorTest {
