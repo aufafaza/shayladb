@@ -14,6 +14,11 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.function.IntConsumer;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
 
 import mdbms.api.IConcurrencyControl;
 import mdbms.api.IFailureRecoveryManager;
@@ -470,6 +475,135 @@ class ConcurrencyControlManagerTest {
         }
     }
 
+    @Test
+    void pauseRejectsNewTransactionsAndResumeRestoresAdmission() {
+        ConcurrencyControlManager manager = (ConcurrencyControlManager) ccm;
+
+        int existing = manager.beginTransaction();
+        manager.pauseTransactions();
+
+        assertFalse(manager.isAcceptingTransactions());
+        assertThrows(IllegalStateException.class, manager::beginTransaction);
+
+        manager.abortTransaction(existing, "checkpoint");
+        assertDoesNotThrow(() -> manager.awaitNoActiveTransactions());
+
+        manager.resumeTransactions();
+        assertTrue(manager.isAcceptingTransactions());
+        assertDoesNotThrow(manager::beginTransaction);
+    }
+
+    @Test
+    void pauseWaitingForBeginAlreadyInsideAdmissionGate() throws Exception {
+        CountDownLatch beginLogEntered = new CountDownLatch(1);
+        CountDownLatch releaseBeginLog = new CountDownLatch(1);
+        frm.onBegin = txId -> {
+            beginLogEntered.countDown();
+            try {
+                releaseBeginLog.await(2, TimeUnit.SECONDS);
+            } catch (InterruptedException interrupted) {
+                Thread.currentThread().interrupt();
+                throw new RuntimeException(interrupted);
+            }
+        };
+        ConcurrencyControlManager manager = (ConcurrencyControlManager) ccm;
+        ExecutorService executor = Executors.newSingleThreadExecutor();
+
+        try {
+            java.util.concurrent.Future<Integer> begin = executor.submit(manager::beginTransaction);
+            assertTrue(beginLogEntered.await(2, TimeUnit.SECONDS));
+
+            Thread pauseThread = new Thread(manager::pauseTransactions);
+            pauseThread.start();
+            pauseThread.join(100);
+            assertTrue(pauseThread.isAlive());
+
+            releaseBeginLog.countDown();
+            assertEquals(1, begin.get(2, TimeUnit.SECONDS));
+            pauseThread.join(2000);
+
+            assertFalse(pauseThread.isAlive());
+            assertFalse(manager.isAcceptingTransactions());
+            assertEquals(1, manager.getActiveTransactionCount());
+        } finally {
+            releaseBeginLog.countDown();
+            executor.shutdownNow();
+        }
+    }
+
+    @Test
+    void pauseFirstThenConcurrentBeginIsRejected() {
+        ConcurrencyControlManager manager = (ConcurrencyControlManager) ccm;
+        manager.pauseTransactions();
+
+        assertThrows(IllegalStateException.class, manager::beginTransaction);
+        assertEquals(0, manager.getActiveTransactionCount());
+    }
+
+    @Test
+    void drainWakesWhenCommitRemovesLastActiveTransaction() throws Exception {
+        ConcurrencyControlManager manager = (ConcurrencyControlManager) ccm;
+        int txId = manager.beginTransaction();
+        AtomicReference<Throwable> waitFailure = new AtomicReference<>();
+        Thread waiter = new Thread(() -> {
+            try {
+                manager.awaitNoActiveTransactions();
+            } catch (Throwable failure) {
+                waitFailure.set(failure);
+            }
+        });
+
+        waiter.start();
+        Thread.sleep(50);
+        assertEquals(1, manager.getActiveTransactionCount());
+        manager.commitTransaction(txId);
+        waiter.join(2000);
+
+        assertFalse(waiter.isAlive());
+        assertNull(waitFailure.get());
+        assertEquals(0, manager.getActiveTransactionCount());
+    }
+
+    @Test
+    void resumeIsRejectedAfterRollbackFailureAndFailedState() {
+        ConcurrencyControlManager manager = (ConcurrencyControlManager) ccm;
+        int txId = manager.beginTransaction();
+        frm.rollbackSucceeds = false;
+
+        assertThrows(IllegalStateException.class,
+                () -> manager.abortTransaction(txId, "forced failure"));
+
+        assertTrue(manager.isFailed());
+        assertThrows(IllegalStateException.class, manager::resumeTransactions);
+        assertFalse(manager.isAcceptingTransactions());
+    }
+
+    @Test
+    void stopTransactionsRejectsResume() {
+        ConcurrencyControlManager manager = (ConcurrencyControlManager) ccm;
+        manager.stopTransactions();
+
+        assertTrue(manager.isStopping());
+        assertFalse(manager.isAcceptingTransactions());
+        assertThrows(IllegalStateException.class, manager::beginTransaction);
+        assertThrows(IllegalStateException.class, manager::resumeTransactions);
+    }
+
+    @Test
+    void failedRecoveryKeepsAdmissionClosed() {
+        ConcurrencyControlManager manager = (ConcurrencyControlManager) ccm;
+        RecoveryResult failedRecovery =
+                new RecoveryResult(false, -1L, 0, "recovery failed");
+
+        assertThrows(IllegalStateException.class,
+                () -> manager.initAfterRecovery(failedRecovery));
+
+        assertFalse(manager.isRecovered());
+        assertTrue(manager.isFailed());
+        assertThrows(IllegalStateException.class, manager::beginTransaction);
+        assertThrows(IllegalStateException.class, manager::resumeTransactions);
+    }
+
     private static final class StubProtocol implements ConcurrencyProtocol {
         private AccessStatus status = AccessStatus.GRANTED;
         private final List<Integer> released = new ArrayList<>();
@@ -508,6 +642,7 @@ class ConcurrencyControlManagerTest {
         private RuntimeException commitLogFailure;
         private RuntimeException rollbackFailure;
         private IntConsumer onRollback;
+        private IntConsumer onBegin;
         private final List<LogType> transactionLogsType = new ArrayList<>();
         private final List<LogRecord> transactionLog = new ArrayList<>();
         private final List<Integer> rolledBack = new ArrayList<>();
@@ -526,6 +661,9 @@ class ConcurrencyControlManagerTest {
             transactionLogsType.add(eventType);
             transactionLog.add(new TransactionLogRecord(transactionLogsType.size(), txId, eventType, Instant.now()));
             events.add("log " + eventType);
+            if (eventType == LogType.BEGIN && onBegin != null) {
+                onBegin.accept(txId);
+            }
             if (eventType == LogType.COMMIT && commitLogFailure != null) throw commitLogFailure;
             return result(logSucceeds);
         }
