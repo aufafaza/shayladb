@@ -161,10 +161,23 @@ public final class ConcurrencyControlManager implements IConcurrencyControl {
             }
             return;
         }
-        RecoveryResult result = frm.recoverOnStartup();
+        initAfterRecovery(frm.recoverOnStartup());
+    }
+
+    public void initAfterRecovery(RecoveryResult result) {
+        synchronized (lifecycleMonitor) {
+            isRecovered = false;
+        }
         if (result == null || !result.isSuccess()) {
             throw new IllegalStateException("Failure recovery did not complete");
         }
+        if (frm == null) {
+            synchronized (lifecycleMonitor) {
+                isRecovered = true;
+            }
+            return;
+        }
+
         transactionCounter.updateAndGet(current -> Math.max(current, result.getMaxTxId() + 1));
         long now = System.currentTimeMillis();
         timestampCounter.updateAndGet(current -> Math.max(now, current + 1));
