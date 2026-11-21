@@ -21,17 +21,24 @@ public final class SequentialScanOperator implements IQueryOperator, IRowProduci
     private final IConcurrencyControl concurrency;
     private final int txId;
     private final String table; 
+    private final String qualifier;
     private List<Row> rows=List.of();
     private int pos;
     private ResultTableSchema tableSchema;
 
     public SequentialScanOperator(IDataAccess access, ISchemaCatalog catalog,
             IConcurrencyControl concurrency, int txId, String table) {
+        this(access, catalog, concurrency, txId, table, table);
+    }
+
+    public SequentialScanOperator(IDataAccess access, ISchemaCatalog catalog,
+            IConcurrencyControl concurrency, int txId, String table, String qualifier) {
         this.access=access; 
         this.catalog=catalog; 
         this.concurrency=concurrency;
         this.txId=txId; 
         this.table=table;
+        this.qualifier=qualifier;
     }
 
     @Override
@@ -39,7 +46,7 @@ public final class SequentialScanOperator implements IQueryOperator, IRowProduci
         if (tableSchema == null) {
             TableSchema schema = catalog.getTableSchema(table);
             if (schema == null) throw new IllegalArgumentException("Tabel tidak ditemukan: "+table);
-            tableSchema = new ResultTableSchema(schema);
+            tableSchema = new ResultTableSchema(schema, qualifier);
         }
         return tableSchema;
     }
@@ -47,7 +54,7 @@ public final class SequentialScanOperator implements IQueryOperator, IRowProduci
     @Override public void open() {
         TableSchema schema=catalog.getTableSchema(table);
         if(schema==null) throw new IllegalArgumentException("Tabel tidak ditemukan: "+table);
-        tableSchema=new ResultTableSchema(schema);
+        tableSchema=new ResultTableSchema(schema, qualifier);
         rows=access.readBlock(new DataRetrieval(table,
                 schema.columns().stream().map(ColumnDefinition::name).toList(), List.of())).rows();
         pos=0;
