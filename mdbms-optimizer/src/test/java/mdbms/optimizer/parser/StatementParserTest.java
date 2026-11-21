@@ -124,6 +124,15 @@ class StatementParserTest {
     }
 
     @Test
+    void insertAcceptsNegativeNumericLiterals() {
+        List<ExpressionTree> values = parse("INSERT INTO a VALUES (-1, -2.5)").getInsertValues();
+
+        assertEquals(List.of("-1", "-2.5"), values.stream().map(v -> v.getRoot().getValue()).toList());
+        assertEquals(List.of(ExpressionNode.Type.INTEGER_LITERAL, ExpressionNode.Type.REAL_LITERAL),
+            values.stream().map(v -> v.getRoot().getType()).toList());
+    }
+
+    @Test
     void deleteRetainsCompleteWherePredicate() {
         QueryTree tree = parse("DELETE FROM siswa WHERE siswa.id = 1 AND (umur + 1 >= 18);");
 
@@ -308,7 +317,6 @@ class StatementParserTest {
         assertError("INSERT INTO a VALUES (other.id)", "other");
         assertError("INSERT INTO a VALUES (1 + 2)", "1");
         assertError("INSERT INTO a VALUES (NULL)", "NULL");
-        assertError("INSERT INTO a VALUES (-1)", "-");
         assertError("INSERT INTO a VALUES (1 = 1)", "=");
     }
 

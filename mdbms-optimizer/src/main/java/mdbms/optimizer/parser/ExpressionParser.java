@@ -102,8 +102,18 @@ public class ExpressionParser {
     }
 
     private ExpressionNode parseUnary(TokenStream stream) {
-        // Unary signs are reserved for a later grammar extension.
-        return parsePrimary(stream);
+        if (!stream.match(TokenType.minus)) {
+            return parsePrimary(stream);
+        }
+        ExpressionNode operand = parseUnary(stream);
+        ExpressionNode.Type type = operand.getType();
+        if (type == ExpressionNode.Type.INTEGER_LITERAL || type == ExpressionNode.Type.REAL_LITERAL) {
+            // lipat jadi literal negatif: -5 -> "-5", -(-5) -> "5"
+            String value = operand.getValue();
+            return ExpressionNode.literal(type, value.startsWith("-") ? value.substring(1) : "-" + value);
+        }
+        // -kolom / -(a + b) -> 0 - x
+        return ExpressionNode.binary("-", ExpressionNode.literal(ExpressionNode.Type.INTEGER_LITERAL, "0"), operand);
     }
 
     /** Reads a literal, column reference, or parenthesized arithmetic expression. */
