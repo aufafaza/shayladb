@@ -10,6 +10,10 @@ import mdbms.models.transaction.Transaction;
 import mdbms.models.transaction.WriteContext;
 
 public class MockConcurrencyControl implements IConcurrencyControl {
+    @Override public <T> T executeRelocation(int txId, DataItem oldItem, DataItem newItem,
+            Object oldValues, Object newValues, java.util.function.Supplier<T> physicalChange) {
+        return physicalChange.get();
+    }
     @Override
     public AccessStatus requestRead(int txId, DataItem data) {
         return AccessStatus.GRANTED;

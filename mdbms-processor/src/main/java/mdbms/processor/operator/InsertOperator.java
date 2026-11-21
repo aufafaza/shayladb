@@ -48,7 +48,7 @@ public class InsertOperator implements IQueryOperator, IWriteOperator {
         WriteContext ctx;
         try {
             DataItem item = new DataItem(tableName, rowId);
-            AccessPermission.protectWrite(concurrencyControlManager, transactionId, item);
+            AccessPermission.lockWrite(concurrencyControlManager, transactionId, item);
             ctx = AccessPermission.writeWithContext(concurrencyControlManager, transactionId, item, null, rowValues);
         } catch (RuntimeException e) {
             dataAccess.releaseRowId(rowId);

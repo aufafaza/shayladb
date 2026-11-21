@@ -2,6 +2,8 @@ package mdbms.processor;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 import mdbms.api.IConcurrencyControl;
 import mdbms.api.IDataAccess;
@@ -15,13 +17,16 @@ import mdbms.models.schema.ColumnDefinition;
 import mdbms.models.transaction.Transaction;
 import mdbms.models.transaction.TransactionState;
 import mdbms.processor.exception.QueryExecutionException;
-import mdbms.processor.exception.TransactionAbortedException;
 import mdbms.processor.operator.IQueryMessage;
 import mdbms.processor.operator.IQueryOperator;
 import mdbms.processor.operator.IRowProducingOperator;
 import mdbms.processor.operator.IWriteOperator;
 
 public class QueryProcessor implements IQueryProcessor {
+    // EXPLAIN <query>: tampilkan plan dari optimizer tanpa mengeksekusi query-nya
+    private static final Pattern EXPLAIN = Pattern.compile("\\s*EXPLAIN\\s+(.+)",
+            Pattern.CASE_INSENSITIVE | Pattern.DOTALL);
+
     private IQueryOptimizer queryOptimizer;
     private IConcurrencyControl concurrencyControl;
     private PlanTranslator planTranslator;
@@ -39,6 +44,10 @@ public class QueryProcessor implements IQueryProcessor {
 
     @Override
     public ExecutionResult executeQuery(String query, int txId) {
+        Matcher explain = EXPLAIN.matcher(query);
+        if (explain.matches()) {
+            return new ExecutionResult(true, List.of(), List.of(), 0, queryOptimizer.explainQuery(explain.group(1)));
+        }
         IQueryOperator translatedQuery = null;
         List<String> columns = new ArrayList<>();
         List<List<Object>> rows = new ArrayList<>();
@@ -78,11 +87,9 @@ public class QueryProcessor implements IQueryProcessor {
                 rows.add(row);
             }
         } catch (QueryExecutionException e) {
-            abortIfActive(txId);
             ExecutionResult executionResult = new ExecutionResult(false, null, null, 0, "Error: " + e.getMessage());
             return executionResult;
         } catch (Exception e) {
-            abortIfActive(txId);
             return new ExecutionResult(false, columns, rows, 0, "Error: " + e.getMessage());
         } finally {
             if (translatedQuery != null) translatedQuery.close();

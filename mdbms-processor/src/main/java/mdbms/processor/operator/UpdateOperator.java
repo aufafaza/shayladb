@@ -16,6 +16,7 @@ import mdbms.processor.ExpressionEvaluator;
 import mdbms.processor.IResultRow;
 import mdbms.processor.ResultRow;
 import mdbms.processor.ResultTableSchema;
+import mdbms.processor.exception.QueryExecutionException;
 
 public class UpdateOperator extends QueryUnaryOperator implements IWriteOperator {
     private final IDataAccess dataAccess;
@@ -31,6 +32,7 @@ public class UpdateOperator extends QueryUnaryOperator implements IWriteOperator
     private DataType columnType;
     private List<RowId> targetRowIds;
     private int affectedRows;
+    private boolean done;
 
     public UpdateOperator(IQueryOperator childOperator, IDataAccess dataAccess, ISchemaCatalog schemaCatalog,
             IConcurrencyControl concurrencyControlManager, int transactionId, String tableName,
@@ -49,6 +51,8 @@ public class UpdateOperator extends QueryUnaryOperator implements IWriteOperator
         var schema = schemaCatalog.getTableSchema(tableName);
         resultSchema = new ResultTableSchema(schema);
         List<ColumnDefinition> columns = schema.columns();
+        done = false;
+        affectedRows = 0;
         columnNames = columns.stream()
                 .map(ColumnDefinition::name)
                 .toList();
@@ -64,47 +68,53 @@ public class UpdateOperator extends QueryUnaryOperator implements IWriteOperator
         childOperator.close();
     }
 
-    public IResultRow next() {
-        int updatedCount = 0;
-        for (RowId targetId : targetRowIds) {
+public IResultRow next() {
+        if (done) return null;
+        done = true;
+        for (RowId targetId : targetRowIds) { // [CHANGED]
             DataItem item = new DataItem(tableName, targetId);
-            // 1. Acquire exclusive write protection BEFORE capturing/revalidating old values
-            AccessPermission.protectWrite(concurrencyControlManager, transactionId, item);
+            // [ADDED] Acquire write protection BEFORE re-reading row and computing newValues
+            AccessPermission.lockWrite(concurrencyControlManager, transactionId, item);
 
-            // 2. Re-read protected current row to prevent stale computation after reader-to-writer upgrade
-            Row currentRow = dataAccess.fetchByRowId(targetId);
-            if (currentRow == null || currentRow.values() == null || currentRow.values().isEmpty()) {
+            Row current = dataAccess.fetchByRowId(targetId); // [CHANGED]
+            if (current == null || current.values() == null || current.values().isEmpty()) { // [ADDED]
                 continue;
             }
-            List<Object> oldValues = new ArrayList<>(currentRow.values());
-            ResultRow protectedRow = new ResultRow(resultSchema, oldValues);
-            protectedRow.setRowId(targetId);
-
-            // 3. Compute new values from protected before-image
+            List<Object> oldValues = new ArrayList<>(current.values());
+            ResultRow protectedRow = new ResultRow(resultSchema, oldValues); // [CHANGED]
+            protectedRow.setRowId(current.rowId());
             List<Object> newValues = new ArrayList<>(oldValues);
-            newValues.set(columnIndex,
-                    ColumnTypes.toColumnType(ExpressionEvaluator.evaluate(newValue, protectedRow), columnType));
+            newValues.set(columnIndex, ColumnTypes.toColumnType(ExpressionEvaluator.evaluate(newValue, protectedRow), columnType));
 
-            // 4. Append WAL record and attach LSN to affected dirty pages
-            WriteContext ctx = AccessPermission.writeWithContext(
-                    concurrencyControlManager, transactionId, item, oldValues, newValues);
-
-            // 5. Apply mutation using WAL LSN
-            Row updated = dataAccess.updateByRowId(targetId, newValues, ctx.getLSN());
-            if (!updated.rowId().equals(targetId)) {
-                DataItem movedItem = new DataItem(tableName, updated.rowId());
-                AccessPermission.protectWrite(concurrencyControlManager, transactionId, movedItem);
-                WriteContext deleteOldCtx = AccessPermission.writeWithContext(
-                        concurrencyControlManager, transactionId, item, newValues, null);
-                WriteContext insertNewCtx = AccessPermission.writeWithContext(
-                        concurrencyControlManager, transactionId, movedItem, null, newValues);
-                // Ensure moved pages also carry the latest WAL LSN
-                dataAccess.updateByRowId(updated.rowId(), newValues,
-                        Math.max(deleteOldCtx.getLSN(), insertNewCtx.getLSN()));
+            if (dataAccess.canUpdateInPlace(current.rowId(), newValues)) {
+                WriteContext ctx = AccessPermission.writeWithContext(
+                        concurrencyControlManager, transactionId, item, oldValues, newValues); // [ADDED]
+                concurrencyControlManager.executeRelocation(transactionId, item, item, oldValues, newValues, () -> {
+                    if (!dataAccess.updateInPlace(current.rowId(), newValues, ctx.getLSN())) { // [CHANGED] Pass WAL LSN
+                        throw new QueryExecutionException("Row no longer fits in place; retry the transaction");
+                    }
+                    return null;
+                });
+            } else {
+                RowId destination = dataAccess.reserveRowId(tableName, newValues, 0L); // [CHANGED]
+                try {
+                    concurrencyControlManager.executeRelocation(transactionId, item,
+                            new DataItem(tableName, destination), oldValues, newValues, () -> {
+                                dataAccess.insertAt(destination, newValues, 0L); // [CHANGED]
+                                dataAccess.deleteByRowId(current.rowId(), 0L); // [CHANGED]
+                                return null;
+                            });
+                } catch (RuntimeException failure) {
+                    try {
+                        dataAccess.releaseRowId(destination, 0L); // [CHANGED]
+                    } catch (RuntimeException cleanupFailure) {
+                        failure.addSuppressed(cleanupFailure);
+                    }
+                    throw failure;
+                }
             }
-            updatedCount++;
+            affectedRows++;
         }
-        affectedRows = updatedCount;
         return null;
     }
 

@@ -7,7 +7,6 @@ import mdbms.models.schema.DataType;
 import mdbms.models.schema.TableSchema;
 import mdbms.optimizer.exception.QuerySemanticException;
 import mdbms.optimizer.exception.QuerySyntaxException;
-import mdbms.optimizer.lexer.ShaylaLexer;
 import mdbms.optimizer.parser.ShaylaParser;
 import org.junit.jupiter.api.Test;
 import static org.junit.jupiter.api.Assertions.*;
@@ -21,7 +20,7 @@ class QueryOptimizerPlanTest {
         catalog.addTable(new TableSchema("takes", List.of(
             new ColumnDefinition("id", DataType.INTEGER, 4, false),
             new ColumnDefinition("code", DataType.VARCHAR, 10, false)), List.of(), List.of()));
-        return new QueryOptimizer(catalog, new ShaylaParser(new ShaylaLexer("")));
+        return new QueryOptimizer(catalog, new ShaylaParser());
     }
 
     @Test
@@ -60,6 +59,26 @@ class QueryOptimizerPlanTest {
         assertThrows(QuerySemanticException.class, () -> optimizer().parseQuery(
             "SELECT name FROM students WHERE id = 'wrong type';"));
         assertThrows(QuerySyntaxException.class, () -> optimizer().parseQuery("SELECT FROM students;"));
+    }
+
+    @Test
+    void explainShowsBothPlansWithTheirTotalCosts() {
+        String explained = optimizer().explainQuery(
+            "SELECT students.name FROM students, takes WHERE students.id = takes.id;");
+
+        String[] parts = explained.split("\nAfter optimization\n");
+        assertEquals(2, parts.length, explained);
+        assertTrue(parts[0].startsWith("Before optimization\nTotal estimated cost: "), explained);
+        assertTrue(parts[0].contains("CARTESIAN\n"), explained);
+        assertTrue(parts[1].startsWith("Total estimated cost: "), explained);
+        assertTrue(parts[1].contains("JOIN [conditions=[(students.id = takes.id)], algorithm=BLOCK_NESTED_LOOP_JOIN]"),
+            explained);
+    }
+
+    @Test
+    void explainRejectsInvalidQueriesLikeParseQuery() {
+        assertThrows(QuerySyntaxException.class, () -> optimizer().explainQuery("SELECT FROM students;"));
+        assertThrows(QuerySemanticException.class, () -> optimizer().explainQuery("SELECT * FROM missing;"));
     }
 
     @Test

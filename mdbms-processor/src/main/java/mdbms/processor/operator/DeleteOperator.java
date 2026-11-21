@@ -44,7 +44,7 @@ public class DeleteOperator extends QueryUnaryOperator implements IWriteOperator
         for (RowId rowId : targetRowIds) {
             DataItem item = new DataItem(table, rowId);
             // 1. Protect data before consuming/validating before-image
-            AccessPermission.protectWrite(concurrency, txId, item);
+            AccessPermission.lockWrite(concurrency, txId, item);
 
             // 2. Capture valid before-image under write protection
             Row currentRow = access.fetchByRowId(rowId);

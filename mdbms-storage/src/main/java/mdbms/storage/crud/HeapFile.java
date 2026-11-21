@@ -175,23 +175,8 @@ public class HeapFile{
     }
     
     public Row update(RowId rowId, List<Object> values, long pageLsn){
-        byte[] record = serializer.serialize(values, schema);
-        Block block = pool.pin(fileName, rowId.blockNumber());
-        boolean dirty = false;
-
-        try{
-            SlottedPage page = SlottedPage.of(block.data);
-            int slot = rowId.slot();
-            boolean replaced = page.replaceRecord(slot, record);
-
-            if (replaced) {
-                writeBack(block, page);
-                dirty = true;
-                return new Row(rowId, values);
-            }
-
-        } finally{
-            pool.unpin(block, dirty, pageLsn);
+        if (updateInPlace(rowId, values)){
+            return new Row(rowId, values);
         }
 
         RowId moved = insert(values, pageLsn);
@@ -211,6 +196,50 @@ public class HeapFile{
 
     public Row delete(RowId rowId) {
         return delete(rowId, NO_LSN);
+    }
+    
+    // true kalau isi baru muat di slot yang sama, ga ngubah apa apa
+    // hasil nya bisa basi kalau ruang halaman keburu dipakai, jadi tetap pakai updateInPlace yang bisa nolak
+    public boolean canUpdateInPlace(RowId rowId, List<Object> values) {
+        return canUpdateInPlace(rowId, values, NO_LSN);
+    }
+
+    public boolean canUpdateInPlace(RowId rowId, List<Object> values, long pageLsn){
+        byte[] record = serializer.serialize(values, schema);
+        Block block = pool.pin(fileName, rowId.blockNumber());
+
+        try{
+            SlottedPage page = SlottedPage.of(block.data);
+            return page.canReplace(rowId.slot(), record.length);
+
+        } finally{
+            pool.unpin(block, false, pageLsn);
+        }
+    }
+
+    // ganti isi baris di slot yang sama, false kalau ga muat dan halaman ga diubah sama sekali
+    // ga pernah mindahin baris sendiri biar relokasi bisa dikunci dan dicatat dulu sama pemanggil
+    public boolean updateInPlace(RowId rowId, List<Object> values) {
+        return updateInPlace(rowId, values, NO_LSN);
+    }
+
+    public boolean updateInPlace(RowId rowId, List<Object> values, long pageLsn){
+        byte[] record = serializer.serialize(values, schema);
+        Block block = pool.pin(fileName, rowId.blockNumber());
+        boolean dirty = false;
+
+        try{
+            SlottedPage page = SlottedPage.of(block.data);
+            if (!page.replaceRecord(rowId.slot(), record)){
+                return false;
+            }
+            writeBack(block, page);
+            dirty = true;
+            return true;
+
+        } finally{
+            pool.unpin(block, dirty, pageLsn);
+        }
     }
 
     public Row delete(RowId rowId, long pageLsn){

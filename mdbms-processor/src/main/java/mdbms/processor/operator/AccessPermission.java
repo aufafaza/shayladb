@@ -18,7 +18,7 @@ final class AccessPermission {
                 () -> concurrencyControlManager.requestRead(transactionId, item));
     }
 
-    static void protectWrite(IConcurrencyControl concurrencyControlManager, int transactionId, DataItem item) {
+    static void lockWrite(IConcurrencyControl concurrencyControlManager, int transactionId, DataItem item) {
         awaitStatus(concurrencyControlManager, transactionId,
                 () -> concurrencyControlManager.requestWrite(transactionId, item));
     }

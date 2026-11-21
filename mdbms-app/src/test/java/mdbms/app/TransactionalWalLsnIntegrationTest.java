@@ -60,7 +60,7 @@ class TransactionalWalLsnIntegrationTest {
                 List.of()
         ));
 
-        QueryOptimizer optimizer = new QueryOptimizer(storage, new ShaylaParser(new ShaylaLexer(""))) {
+        QueryOptimizer optimizer = new QueryOptimizer(storage, new ShaylaParser()) {
             @Override
             public ParsedQuery optimizeQuery(ParsedQuery query) {
                 return query;

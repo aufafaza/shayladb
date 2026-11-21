@@ -1,6 +1,7 @@
 package mdbms.api;
 
 import java.util.List;
+import java.util.function.Supplier;
 
 import mdbms.models.data.DataItem;
 import mdbms.models.transaction.AccessStatus;
@@ -23,6 +24,12 @@ public interface IConcurrencyControl {
 
     default WriteContext requestWriteWithContext(int txId, DataItem data, Object oldVal, Object newVal) {
         return new WriteContext(txId, requestWrite(txId, data, oldVal, newVal), txId, data.tableName(), data.getRowId());
+    }
+    
+    /** Protects and logs both identities before executing the physical change. */
+    default <T> T executeRelocation(int txId, DataItem oldItem, DataItem newItem,
+            Object oldValues, Object newValues, Supplier<T> physicalChange) {
+        throw new UnsupportedOperationException("Transactional row updates are not supported");
     }
 
     Transaction getTransaction(int txId);
