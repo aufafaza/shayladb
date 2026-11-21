@@ -53,7 +53,7 @@ class StatisticsManagerTest {
     void emptyTableUsesSchemaSize() {
         Statistic stat = statistics.getStatistics("users", heap);
 
-        int lr = Integer.BYTES + (Integer.BYTES + 20) + 8;
+        int lr = Integer.BYTES + (Short.BYTES + 20) + 8;
         assertEquals(new Statistic("users", 0, 0, lr, BlockManager.BLOCK_SIZE / lr,
                 Map.of("id", 0, "name", 0, "city", 0)), stat);
     }
@@ -67,8 +67,8 @@ class StatisticsManagerTest {
 
         Statistic stat = statistics.getStatistics("users", heap);
 
-        // byte per baris, id 4, name 4 tambah panjang string, city 8 kalau ada
-        long total = (4 + 6 + 8) + (4 + 6 + 8) + (4 + 8);
+        // byte per baris, id 4, name 2 prefix tambah panjang string, city 8 kalau ada
+        long total = (4 + 4 + 8) + (4 + 4 + 8) + (4 + 6);
         int lr = (int) ((total + 2) / 3);
         assertEquals(3, stat.nr());
         assertEquals(1, stat.br());
@@ -156,6 +156,78 @@ class StatisticsManagerTest {
 
         assertEquals(11, stat.nr());
         assertEquals(11, stat.distinctValues().get("id"));
+    }
+
+    // DELETE menurunkan nr langsung dan V tak boleh melebihi jumlah baris yang tersisa
+    @Test
+    void deleteUpdatesStatisticsAndKeepsDistinctValuesWithinRowCount() {
+        List<mdbms.models.data.RowId> rowIds = new java.util.ArrayList<>();
+        for (int id = 1; id <= 11; id++) {
+            rowIds.add(heap.insert(List.of(id, "n" + id, "c" + id)));
+        }
+        assertEquals(11, statistics.getStatistics("users", heap).nr());
+
+        heap.delete(rowIds.get(0));
+        statistics.recordWrite("users", -1);
+        Statistic afterDelete = statistics.getStatistics("users", heap);
+        assertEquals(10, afterDelete.nr());
+        assertTrue(afterDelete.distinctValues().values().stream().allMatch(v -> v <= afterDelete.nr()));
+
+        for (int i = 1; i < rowIds.size(); i++) {
+            heap.delete(rowIds.get(i));
+            statistics.recordWrite("users", -1);
+        }
+        Statistic afterManyDeletes = statistics.getStatistics("users", heap);
+        assertEquals(0, afterManyDeletes.nr());
+        assertTrue(afterManyDeletes.distinctValues().values().stream().allMatch(v -> v == 0));
+    }
+
+    // UPDATE yang cukup banyak menghitung ulang V dari isi heap yang baru
+    @Test
+    void updateRefreshesDistinctValuesAfterManyChanges() {
+        List<mdbms.models.data.RowId> rowIds = new java.util.ArrayList<>();
+        for (int id = 1; id <= 10; id++) {
+            rowIds.add(heap.insert(List.of(id, "n" + id, "c" + id)));
+        }
+        assertEquals(10, statistics.getStatistics("users", heap).distinctValues().get("id"));
+
+        for (mdbms.models.data.RowId rowId : rowIds) {
+            heap.update(rowId, List.of(1, "same", "same"));
+            statistics.recordWrite("users", 0);
+        }
+
+        Statistic after = statistics.getStatistics("users", heap);
+        assertEquals(10, after.nr());
+        assertEquals(1, after.distinctValues().get("id"));
+        assertEquals(1, after.distinctValues().get("name"));
+        assertEquals(1, after.distinctValues().get("city"));
+    }
+
+    // ukuran nr/br berbeda tetap berasal dari heap dan statistik tabel masing-masing
+    @Test
+    void tableSizesRemainDifferentInOriginalStatistics() {
+        TableSchema smallSchema = new TableSchema("small", List.of(
+                new ColumnDefinition("id", DataType.INTEGER, 0, false)),
+                List.of("id"), List.of());
+        catalog.saveSchema(smallSchema);
+
+        for (int id = 1; id <= 400; id++) {
+            heap.insert(List.of(id, "name" + id, "city"));
+        }
+
+        BufferPool smallPool = new BufferPool(new BlockManager(directory.toString()), 8);
+        HeapFile smallHeap = new HeapFile(smallSchema, smallPool, new BinaryRecordSerializer());
+        Statistic small = statistics.getStatistics("small", smallHeap);
+
+        smallHeap.insert(List.of(1));
+        statistics.recordWrite("small", 1);
+        small = statistics.getStatistics("small", smallHeap);
+
+        Statistic users = statistics.getStatistics("users", heap);
+        assertEquals(1, small.nr());
+        assertEquals(400, users.nr());
+        assertEquals(1, small.br());
+        assertTrue(users.br() > small.br());
     }
 
     // recordWrite sebelum statistik pernah dihitung diabaikan, nr ga pernah negatif
