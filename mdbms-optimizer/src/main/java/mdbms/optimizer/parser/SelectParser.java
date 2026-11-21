@@ -72,14 +72,21 @@ public class SelectParser {
         }
         List<ColumnReference> columns = new ArrayList<>();
         do {
-            columns.add(parseColumnReference(stream));
+            columns.add(parseColumnReference(stream, true));
         } while (stream.match(TokenType.comma));
         return List.copyOf(columns);
     }
 
     private ColumnReference parseColumnReference(TokenStream stream) {
+        return parseColumnReference(stream, false);
+    }
+
+    private ColumnReference parseColumnReference(TokenStream stream, boolean allowWildcard) {
         Token first = expectIdentifier(stream);
         if (stream.match(TokenType.period)) {
+            if (allowWildcard && stream.match(TokenType.star)) {
+                return new ColumnReference(first.getLexeme(), "*");
+            }
             return new ColumnReference(first.getLexeme(), expectIdentifier(stream).getLexeme());
         }
         return new ColumnReference(null, first.getLexeme());
@@ -118,8 +125,12 @@ public class SelectParser {
 
     private QueryTree parseTable(TokenStream stream) {
         String tableName = expectIdentifier(stream).getLexeme();
-        return new QueryTree(QueryNodeType.TABLE_SCAN, PhysicalAlgorithm.DEFAULT, tableName,
+        QueryTree scan = new QueryTree(QueryNodeType.TABLE_SCAN, PhysicalAlgorithm.DEFAULT, tableName,
             List.of(), List.of(), 0);
+        if (stream.match(TokenType.asTok)) {
+            scan.setTableAlias(expectIdentifier(stream).getLexeme());
+        }
+        return scan;
     }
 
     private Token expectIdentifier(TokenStream stream) {
@@ -137,7 +148,7 @@ public class SelectParser {
             && "BY".equalsIgnoreCase(stream.getTokens().get(next).getLexeme());
     }
 
-    // JOIN/NATURAL are contextual keywords until the shared lexer defines dedicated tokens.
+    // Recognizes JOIN and NATURAL as contextual keywords.
     private boolean isKeyword(TokenStream stream, String keyword) {
         return stream.peek().getType() == TokenType.idTok
             && keyword.equalsIgnoreCase(stream.peek().getLexeme());

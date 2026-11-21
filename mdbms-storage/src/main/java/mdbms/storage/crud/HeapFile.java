@@ -191,6 +191,42 @@ public class HeapFile{
         return new Row(moved, values);
     }
 
+    // true kalau isi baru muat di slot yang sama, ga ngubah apa apa
+    // hasil nya bisa basi kalau ruang halaman keburu dipakai, jadi tetap pakai updateInPlace yang bisa nolak
+    public boolean canUpdateInPlace(RowId rowId, List<Object> values){
+        byte[] record = serializer.serialize(values, schema);
+        Block block = pool.pin(fileName, rowId.blockNumber());
+
+        try{
+            SlottedPage page = SlottedPage.of(block.data);
+            return page.canReplace(rowId.slot(), record.length);
+
+        } finally{
+            pool.unpin(block, false, NO_LSN);
+        }
+    }
+
+    // ganti isi baris di slot yang sama, false kalau ga muat dan halaman ga diubah sama sekali
+    // ga pernah mindahin baris sendiri biar relokasi bisa dikunci dan dicatat dulu sama pemanggil
+    public boolean updateInPlace(RowId rowId, List<Object> values){
+        byte[] record = serializer.serialize(values, schema);
+        Block block = pool.pin(fileName, rowId.blockNumber());
+        boolean dirty = false;
+
+        try{
+            SlottedPage page = SlottedPage.of(block.data);
+            if (!page.replaceRecord(rowId.slot(), record)){
+                return false;
+            }
+            writeBack(block, page);
+            dirty = true;
+            return true;
+
+        } finally{
+            pool.unpin(block, dirty, NO_LSN);
+        }
+    }
+
     public Row delete(RowId rowId){
         Block block = pool.pin(fileName, rowId.blockNumber());
         boolean dirty = false;
@@ -301,24 +337,22 @@ public class HeapFile{
     }
 
     private int findBlockWithSpace(int requiredBytes){
-        int blockCount = blockCount();
-        if (blockCount == 0) return appendEmptyPage();
+        for (int blockNumber = blockCount() - 1; blockNumber >= 0; blockNumber--){
+            if (hasSpace(blockNumber, requiredBytes)) return blockNumber;
+        }
 
-        int blockNumber = blockCount - 1;
+        return appendEmptyPage();
+    }
+
+    private boolean hasSpace(int blockNumber, int requiredBytes){
         Block block = pool.pin(fileName, blockNumber);
-        boolean hasSpace;
 
         try{
-            SlottedPage page = SlottedPage.of(block.data);
-            hasSpace = page.hasSpace(requiredBytes);
+            return SlottedPage.of(block.data).hasSpace(requiredBytes);
 
         } finally{
             pool.unpin(block, false, NO_LSN);
         }
-
-        if (hasSpace) return blockNumber;
-        
-        return appendEmptyPage();
     }
 
     // tambah block baru lalu isi header SlottedPage kosong, pin dari appendBlock langsung dilepas

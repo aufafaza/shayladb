@@ -231,4 +231,14 @@ class WalFileHandlerTest {
             reopened.close();
         }
     }
+
+    @Test
+    void testFlushUpToRejectsUnwrittenLsn() {
+        DataChangeLogRecord rec = new DataChangeLogRecord(
+                1L, 1, LogType.INSERT, Instant.now(), "users",
+                new RowId("users", 0, 0), null, new RecordImage(List.of(1, "A")));
+        assertTrue(walHandler.append(rec));
+        assertFalse(walHandler.flushUpTo(2L), "WAL tidak boleh mengklaim flush untuk LSN yang belum ditulis");
+        assertTrue(walHandler.flushUpTo(1L));
+    }
 }

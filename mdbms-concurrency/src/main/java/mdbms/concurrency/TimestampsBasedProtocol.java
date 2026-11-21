@@ -5,6 +5,7 @@ import mdbms.models.transaction.AccessStatus;
 import mdbms.models.transaction.Transaction;
 
 import java.util.Map;
+import java.util.List;
 import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -44,6 +45,25 @@ public class TimestampsBasedProtocol implements ConcurrencyProtocol {
             return AccessStatus.ABORTED;
         }
         timestampManager.updateWriteTS(data, tx.getTimestamp());
+        return AccessStatus.GRANTED;
+    }
+
+    @Override
+    public AccessStatus requestWriteBatch(Transaction tx, List<DataItem> dataItems) {
+        if (tx == null || dataItems == null || dataItems.isEmpty()) {
+            return AccessStatus.ABORTED;
+        }
+        transactionRegistry.put(tx.getId(), tx);
+        long timestamp = tx.getTimestamp();
+        for (DataItem data : dataItems) {
+            if (data == null || timestamp < timestampManager.getReadTS(data)
+                    || timestamp < timestampManager.getWriteTS(data)) {
+                return AccessStatus.ABORTED;
+            }
+        }
+        for (DataItem data : dataItems) {
+            timestampManager.updateWriteTS(data, timestamp);
+        }
         return AccessStatus.GRANTED;
     }
 

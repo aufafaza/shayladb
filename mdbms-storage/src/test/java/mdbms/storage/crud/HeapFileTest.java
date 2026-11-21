@@ -265,6 +265,41 @@ class HeapFileTest {
         assertEquals(List.of(1, "alice"), heapFile.fetch(rowId).values());
     }
 
+    // reservasi yang dilepas di block lama ruangnya kepakai lagi tanpa nambah block baru
+    @Test
+    void releasedReservationOnEarlierBlockIsReused(){
+        RowId early = heapFile.reserve(List.of(1, "a".repeat(1400)));
+        heapFile.insert(List.of(2, "b".repeat(1400)));
+        heapFile.insert(List.of(3, "c".repeat(1400)));
+        heapFile.insert(List.of(4, "d".repeat(1400)));
+        assertEquals(0, early.blockNumber());
+        assertEquals(2, heapFile.blockCount());
+
+        heapFile.releaseReservation(early);
+        RowId reused = heapFile.reserve(List.of(5, "e".repeat(1400)));
+
+        assertEquals(0, reused.blockNumber());
+        assertNotEquals(early.slot(), reused.slot());
+        assertEquals(2, heapFile.blockCount());
+    }
+
+    // ruang bekas baris yang dihapus di block lama dipakai insert berikutnya
+    @Test
+    void deletedRowSpaceOnEarlierBlockIsReused(){
+        RowId early = heapFile.insert(List.of(1, "a".repeat(1400)));
+        heapFile.insert(List.of(2, "b".repeat(1400)));
+        heapFile.insert(List.of(3, "c".repeat(1400)));
+        heapFile.insert(List.of(4, "d".repeat(1400)));
+        assertEquals(2, heapFile.blockCount());
+
+        heapFile.delete(early);
+        RowId reused = heapFile.insert(List.of(5, "e".repeat(1400)));
+
+        assertEquals(0, reused.blockNumber());
+        assertEquals(2, heapFile.blockCount());
+        assertEquals(List.of(5, "e".repeat(1400)), heapFile.fetch(reused).values());
+    }
+
     // deleteIfPresent balikin baris yang dihapus, lalu null buat baris, slot, atau block yang udah ga ada
     @Test
     void deleteIfPresentIsSafeToRepeat(){

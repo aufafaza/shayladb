@@ -13,6 +13,8 @@ public enum QueryNodeType{
     INSERT,
     DELETE,
     CREATE_INDEX,
+    CREATE_TABLE,
+    DROP_TABLE,
     BEGIN,
     COMMIT,
     ABORT
