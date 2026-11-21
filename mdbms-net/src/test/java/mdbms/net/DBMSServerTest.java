@@ -147,6 +147,46 @@ class DBMSServerTest {
         future.get(5, TimeUnit.SECONDS);
     }
 
+    @Test
+    void servesJsonAndInteractiveClientsOnSeparatePorts() throws Exception {
+        DBMSServer jsonServer = new DBMSServer(0, OK_PROCESSOR, STUB_CONCURRENCY);
+        InteractiveDBMSServer interactiveServer =
+                new InteractiveDBMSServer(0, OK_PROCESSOR, STUB_CONCURRENCY);
+        Future<?> jsonFuture = startAsync(jsonServer);
+        Future<?> interactiveFuture = startAsync(interactiveServer);
+
+        try {
+            assertTrue(jsonServer.awaitReady(5, TimeUnit.SECONDS));
+            assertTrue(interactiveServer.awaitReady(5, TimeUnit.SECONDS));
+            assertNotEquals(jsonServer.getBoundPort(), interactiveServer.getBoundPort());
+
+            try (Socket client = connect(jsonServer.getBoundPort())) {
+                assertEquals("OK", query(client, "SELECT 1;"));
+            }
+
+            try (Socket client = connect(interactiveServer.getBoundPort())) {
+                client.getOutputStream().write(new byte[] {(byte) 255, (byte) 253, 1});
+                client.getOutputStream().write("SELECT 1;\r\n".getBytes(StandardCharsets.UTF_8));
+                client.getOutputStream().flush();
+
+                InputStream input = client.getInputStream();
+                byte[] negotiation = input.readNBytes(6);
+                assertEquals(6, negotiation.length);
+                BufferedReader reader = new BufferedReader(new InputStreamReader(input, StandardCharsets.UTF_8));
+                assertEquals("ShaylaDB> SELECT 1;", reader.readLine());
+                assertTrue(reader.readLine().startsWith("Time: "));
+                assertEquals("(0 rows affected)", reader.readLine());
+                assertEquals("OK", reader.readLine());
+            }
+        } finally {
+            jsonServer.shutdown();
+            interactiveServer.shutdown();
+        }
+
+        jsonFuture.get(5, TimeUnit.SECONDS);
+        interactiveFuture.get(5, TimeUnit.SECONDS);
+    }
+
     private Future<?> startAsync(DBMSServer server) {
         return executor.submit(() -> { server.start(); return null; });
     }

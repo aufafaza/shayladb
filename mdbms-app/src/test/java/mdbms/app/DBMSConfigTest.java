@@ -15,6 +15,7 @@ class DBMSConfigTest {
         assertEquals(64, cfg.getBufferCapacity());
         assertEquals(ConcurrencyAlgorithm.TIMESTAMP_BASED, cfg.getConcurrencyAlgorithm());
         assertEquals(7654, cfg.getPort());
+        assertEquals(2323, cfg.getInteractivePort());
     }
 
     @Test
@@ -24,6 +25,7 @@ class DBMSConfigTest {
         assertEquals("dir", cfg.getDataDirectory());
         assertEquals(8, cfg.getBufferCapacity());
         assertEquals(ConcurrencyAlgorithm.LOCK_BASED, cfg.getConcurrencyAlgorithm());
+        assertEquals(2323, cfg.getInteractivePort());
     }
 
     @Test
@@ -37,5 +39,7 @@ class DBMSConfigTest {
                 () -> new DBMSConfig("dir", 8, ConcurrencyAlgorithm.TIMESTAMP_BASED, 0));
         assertThrows(IllegalArgumentException.class,
                 () -> new DBMSConfig("dir", 8, ConcurrencyAlgorithm.TIMESTAMP_BASED, 65536));
+        assertThrows(IllegalArgumentException.class,
+                () -> new DBMSConfig("dir", 8, ConcurrencyAlgorithm.TIMESTAMP_BASED, 7654, 7654));
     }
 }

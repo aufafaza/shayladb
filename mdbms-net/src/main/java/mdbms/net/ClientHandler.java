@@ -10,31 +10,49 @@ import mdbms.models.query.ExecutionResult;
 
 /** Executes one connection using either the interactive telnet or framed raw protocol. */
 public class ClientHandler implements Runnable {
+    enum Mode {
+        FRAMED_JSON,
+        INTERACTIVE
+    }
+
     private final Socket clientSocket;
     private final IQueryProcessor processor;
     private final SessionManager sessionManager;
     private final ClientSession session;
     private final IConcurrencyControl concurrencyControl;
+    private final Mode mode;
+
+    ClientHandler(
+            Socket clientSocket,
+            SessionManager sessionManager,
+            IQueryProcessor processor,
+            IConcurrencyControl concurrencyControl) {
+        this(clientSocket, sessionManager, processor, concurrencyControl, Mode.FRAMED_JSON);
+    }
 
     public ClientHandler(
             Socket clientSocket,
             SessionManager sessionManager,
             IQueryProcessor processor,
-            IConcurrencyControl concurrencyControl) {
+            IConcurrencyControl concurrencyControl,
+            Mode mode) {
         this.clientSocket = clientSocket;
         this.processor = processor;
         this.sessionManager = sessionManager;
         this.session = sessionManager.newSession();
         this.concurrencyControl = concurrencyControl;
+        this.mode = mode;
     }
 
     @Override
     public void run() {
-        try (TelnetHandler transport = new TelnetHandler(clientSocket)) {
-            if (transport.isTelnet()) {
-                runTelnet(new CommandLineInterface(clientSocket, transport));
+        try {
+            if (mode == Mode.INTERACTIVE) {
+                try (TelnetHandler transport = new TelnetHandler(clientSocket)) {
+                    runTelnet(new CommandLineInterface(clientSocket, transport));
+                }
             } else {
-                runFramed(new FramedJsonProtocol(clientSocket, transport.rawInput()));
+                runFramed(new FramedJsonProtocol(clientSocket, clientSocket.getInputStream()));
             }
         } catch (IOException e) {
             System.out.println("[ERROR] Client disconnected");
