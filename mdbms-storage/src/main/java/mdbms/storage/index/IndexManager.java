@@ -48,6 +48,8 @@ public final class IndexManager {
 
     // buka lagi semua index yang tercatat di katalog, dipanggil pas DBMS nyala dan setelah file data di restore
     // index yang file nya hilang dibikin kosong, isinya nyusul lewat rebuild
+    // file yang meta nya masih nol karena crash sebelum flush diinisialisasi BPlusTreeIndex pas pertama dipakai
+    // file yang isinya bukan nol tapi bukan index tetap ditolak karena itu rusak beneran, bukan sisa crash
     public void loadAll() {
         lock.writeLock().lock();
         try {

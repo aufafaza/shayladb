@@ -234,6 +234,49 @@ class StorageDurabilityTest {
         assertHeapMatchesIndexes(restarted);
     }
 
+    // katalog udah nyatet index tapi meta nya belum sempat ke flush sebelum crash, block 0 file index jadi nol semua (#62)
+    // StorageManager tetap harus bisa dibuka biar FRM bisa recovery, isi index nyusul lewat rebuild
+    @Test
+    void indexWithBlankMetaAfterCrashOpensAndIsRebuilt() throws Exception {
+        createItems();
+        insertItems();
+        storage.createIndex("idx_items_id", "items", "id");
+        storage.flushBuffer();
+        overwriteFirstBlock(directory.resolve("idx_items_id.idx"), new byte[4096]);
+
+        StorageManager restarted = open();
+        // redo FRM jalan duluan sebelum rebuild dan ikut ngubah index, index yang meta nya nol harus tetap bisa dipakai
+        restarted.writeBlock(new DataWrite("items", item(ROWS + 1, label("a", ROWS + 1)), List.of()));
+        restarted.rebuildIndexesAndReloadCatalog();
+
+        assertEquals(ROWS + 1, scan(restarted).size());
+        for (Row row : scan(restarted)) {
+            assertEquals(List.of(row.rowId()), restarted.searchIndex("idx_items_id", row.values().get(0)));
+        }
+    }
+
+    // file index yang isinya bukan nol tapi bukan index itu rusak beneran, bukan sisa crash, jadi tetap ditolak
+    @Test
+    void indexWithGarbageMetaIsStillRejected() throws Exception {
+        createItems();
+        insertItems();
+        storage.createIndex("idx_items_id", "items", "id");
+        storage.flushBuffer();
+        byte[] garbage = new byte[4096];
+        java.util.Arrays.fill(garbage, (byte) 7);
+        overwriteFirstBlock(directory.resolve("idx_items_id.idx"), garbage);
+
+        StorageException e = assertThrows(StorageException.class, this::open);
+        assertEquals(StorageErrorCode.INVALID_BLOCK, e.getCode());
+    }
+
+    private static void overwriteFirstBlock(Path file, byte[] block) throws Exception {
+        try (java.nio.channels.FileChannel channel = java.nio.channels.FileChannel.open(file,
+                java.nio.file.StandardOpenOption.WRITE)) {
+            channel.write(java.nio.ByteBuffer.wrap(block), 0);
+        }
+    }
+
     // slot dipesan yang dilepas normal ga ninggalin baris yang keliatan
     @Test
     void releasedReservationExposesNothing() {

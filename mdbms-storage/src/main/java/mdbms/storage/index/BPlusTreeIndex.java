@@ -41,6 +41,8 @@ public final class BPlusTreeIndex implements Index {
     private final KeyComparator comparator;
     private final NodeCodec nodeCodec;
     private final ReentrantReadWriteLock lock = new ReentrantReadWriteLock();
+    // true kalau file nya ada tapi meta nya masih nol, baru diinisialisasi pas index pertama kali dipakai
+    private volatile boolean pendingInit;
 
     // siapin index, kalau file nya udah ada meta langsung dibaca biar index lama kepake lagi
     public BPlusTreeIndex(IndexInfo info, ColumnDefinition column, int maxDegree, BufferPool pool,
@@ -58,7 +60,28 @@ public final class BPlusTreeIndex implements Index {
                     "maxDegree must be between " + MIN_DEGREE + " and " + limit + " for column " + column.name());
         }
         this.maxDegree = maxDegree;
-        if (pool.blockCount(fileName) > 0) readMeta();
+        if (pool.blockCount(fileName) > 0) {
+            if (isMetaBlank()) {
+                pendingInit = true;
+            } else {
+                readMeta();
+            }
+        }
+    }
+
+    // block meta yang nol semua itu sisa appendBlock yang udah sampai disk tapi meta nya belum sempat ke flush sebelum crash
+    // bukan file rusak, cukup diinisialisasi ulang karena index data turunan yang isinya nyusul lewat rebuild pas recovery
+    // inisialisasinya ditunda sampai index dipakai, soalnya pas StorageManager dibuka FRM belum dipasang jadi eviction belum bisa
+    private boolean isMetaBlank() {
+        for (byte b : pool.readBuffer(fileName, META_BLOCK)) {
+            if (b != 0) return false;
+        }
+        return true;
+    }
+
+    // inisialisasi index yang meta nya masih nol, dipanggil sebelum lock dipegang biar ga perlu naikin read lock ke write lock
+    private void ensureInitialized() {
+        if (pendingInit) clear();
     }
 
     // nama file tempat index ini disimpan di direktori data
@@ -81,22 +104,14 @@ public final class BPlusTreeIndex implements Index {
     // bikin file index berisi meta dan root leaf kosong, file lama dengan nama sama ditimpa
     @Override
     public void create() {
-        lock.writeLock().lock();
-        try {
-            while (pool.blockCount(fileName) <= FIRST_ROOT) {
-                Block block = pool.appendBlock(fileName);
-                pool.unpin(block, false, NO_LSN);
-            }
-            clear();
-        } finally {
-            lock.writeLock().unlock();
-        }
+        clear();
     }
 
     // daftarin RowId di bawah key, key null ga diindex, key baru dapet bucket baru dan bisa bikin split
     @Override
     public void insert(Object key, RowId rowId) {
         checkTable(rowId);
+        ensureInitialized();
         Object normalized = normalizer.normalize(key, column);
         if (normalized == null) return;
         lock.writeLock().lock();
@@ -127,6 +142,7 @@ public final class BPlusTreeIndex implements Index {
     @Override
     public void delete(Object key, RowId rowId) {
         checkTable(rowId);
+        ensureInitialized();
         Object normalized = normalizer.normalize(key, column);
         if (normalized == null) return;
         lock.writeLock().lock();
@@ -149,6 +165,7 @@ public final class BPlusTreeIndex implements Index {
     // ambil semua RowId buat key ini, key null ga pernah diindex jadi hasilnya kosong
     @Override
     public List<RowId> search(Object key) {
+        ensureInitialized();
         Object normalized = normalizer.normalize(key, column);
         List<RowId> result = new ArrayList<>();
         if (normalized == null) return result;
@@ -166,6 +183,7 @@ public final class BPlusTreeIndex implements Index {
     // mulai dari leaf tempat low lalu jalan ke kanan lewat nextLeaf sampai lewat high
     @Override
     public List<RowId> searchRange(Object low, Object high, boolean lowInclusive, boolean highInclusive) {
+        ensureInitialized();
         Object from = normalizer.normalize(low, column);
         Object to = normalizer.normalize(high, column);
         List<RowId> result = new ArrayList<>();
@@ -196,10 +214,16 @@ public final class BPlusTreeIndex implements Index {
     }
 
     // balikin index ke kondisi kosong, semua block selain meta dan root masuk free list buat dipakai ulang
+    // block meta dan root dibikin dulu kalau belum ada, jadi bisa dipakai juga buat file baru atau yang meta nya nol
     @Override
     public void clear() {
         lock.writeLock().lock();
         try {
+            while (pool.blockCount(fileName) <= FIRST_ROOT) {
+                Block block = pool.appendBlock(fileName);
+                pool.unpin(block, false, NO_LSN);
+            }
+            pendingInit = false;
             rootBlock = FIRST_ROOT;
             height = 1;
             freeListHead = NO_BLOCK;
@@ -219,6 +243,7 @@ public final class BPlusTreeIndex implements Index {
         lock.writeLock().lock();
         try {
             pool.discardFile(fileName);
+            pendingInit = false;
             rootBlock = NO_BLOCK;
             height = 0;
             freeListHead = NO_BLOCK;
