@@ -11,6 +11,7 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.Socket;
+import java.net.SocketTimeoutException;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
 import mdbms.models.query.ExecutionResult;
@@ -107,6 +108,21 @@ class CommandLineInterfaceTest {
 
         assertEquals("REQUEST_TOO_LARGE", error.code());
         assertTrue(error.closeConnection());
+    }
+
+    @Test
+    void readQueryEnforcesAbsoluteTelnetInputDeadlineWhileBytesKeepArriving() throws IOException {
+        byte[] telnetInput = new byte[] {(byte) 255, (byte) 253, 1};
+        byte[] queryInput = "SELECT 1234567890;\r\n".getBytes(StandardCharsets.UTF_8);
+        byte[] input = new byte[telnetInput.length + queryInput.length];
+        System.arraycopy(telnetInput, 0, input, 0, telnetInput.length);
+        System.arraycopy(queryInput, 0, input, telnetInput.length, queryInput.length);
+
+        TestSocket socket = new TestSocket(new DelayedInputStream(input, telnetInput.length, 35));
+        TelnetHandler handler = new TelnetHandler(socket);
+        CommandLineInterface cli = new CommandLineInterface(socket, handler, 1024, 120);
+
+        assertThrows(SocketTimeoutException.class, cli::readQuery);
     }
 
     @Test
@@ -215,9 +231,14 @@ class CommandLineInterfaceTest {
     private static final class TestSocket extends Socket {
         private final InputStream input;
         private final ByteArrayOutputStream output = new ByteArrayOutputStream();
+        private int timeout;
 
         private TestSocket(byte[] input) {
-            this.input = new ByteArrayInputStream(input);
+            this(new ByteArrayInputStream(input));
+        }
+
+        private TestSocket(InputStream input) {
+            this.input = input;
         }
 
         private void clearOutput() {
@@ -236,6 +257,43 @@ class CommandLineInterfaceTest {
         @Override
         public OutputStream getOutputStream() {
             return output;
+        }
+
+        @Override
+        public void setSoTimeout(int timeout) {
+            this.timeout = timeout;
+        }
+
+        @Override
+        public int getSoTimeout() {
+            return timeout;
+        }
+    }
+
+    private static final class DelayedInputStream extends InputStream {
+        private final ByteArrayInputStream input;
+        private final int delayStartingAt;
+        private final long delayMillis;
+        private int bytesRead;
+
+        private DelayedInputStream(byte[] input, int delayStartingAt, long delayMillis) {
+            this.input = new ByteArrayInputStream(input);
+            this.delayStartingAt = delayStartingAt;
+            this.delayMillis = delayMillis;
+        }
+
+        @Override
+        public int read() throws IOException {
+            if (bytesRead >= delayStartingAt) {
+                try {
+                    Thread.sleep(delayMillis);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    throw new IOException("Interrupted while simulating slow input", e);
+                }
+            }
+            bytesRead++;
+            return input.read();
         }
     }
 }

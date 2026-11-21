@@ -17,6 +17,7 @@ public class CommandLineInterface {
     private PrintWriter writer;
     private TelnetHandler telnetHandler;
     private final int maxTelnetQueryBytes;
+    private final int telnetInputTimeoutMillis;
 
     private boolean lastWasCR = false;
     StringBuilder inputBuffer = new StringBuilder();
@@ -31,17 +32,27 @@ public class CommandLineInterface {
     int stringDelimiter = '\'';
 
     public CommandLineInterface(Socket socket) throws IOException {
-        this(socket, new TelnetHandler(socket), MAX_TELNET_QUERY_BYTES);
+        this(socket, new TelnetHandler(socket), MAX_TELNET_QUERY_BYTES,
+                FramedJsonProtocol.REQUEST_TIMEOUT_MILLIS);
     }
     
     CommandLineInterface(Socket socket, TelnetHandler telnetHandler) throws IOException {
-        this(socket, telnetHandler, MAX_TELNET_QUERY_BYTES);
+        this(socket, telnetHandler, MAX_TELNET_QUERY_BYTES, FramedJsonProtocol.REQUEST_TIMEOUT_MILLIS);
     }
 
     CommandLineInterface(Socket socket, TelnetHandler telnetHandler, int maxTelnetQueryBytes) throws IOException {
+        this(socket, telnetHandler, maxTelnetQueryBytes, FramedJsonProtocol.REQUEST_TIMEOUT_MILLIS);
+    }
+
+    CommandLineInterface(
+            Socket socket,
+            TelnetHandler telnetHandler,
+            int maxTelnetQueryBytes,
+            int telnetInputTimeoutMillis) throws IOException {
         this.writer = new PrintWriter(socket.getOutputStream(), false, StandardCharsets.UTF_8);
         this.telnetHandler = telnetHandler;
         this.maxTelnetQueryBytes = maxTelnetQueryBytes;
+        this.telnetInputTimeoutMillis = telnetInputTimeoutMillis;
     }
 
     public String readQuery() throws IOException {
@@ -165,8 +176,10 @@ public class CommandLineInterface {
         }
 
         printPrompt();
+        long deadlineNanos = System.nanoTime()
+                + java.util.concurrent.TimeUnit.MILLISECONDS.toNanos(telnetInputTimeoutMillis);
         int ch;
-        while ((ch = telnetHandler.read()) != -1) {
+        while ((ch = telnetHandler.read(deadlineNanos)) != -1) {
             // Extra char after \r
             if (lastWasCR && (ch == '\n' || ch == 0)) {
                 lastWasCR = false;
@@ -180,9 +193,12 @@ public class CommandLineInterface {
                     lastWasCR = true;
 
                 writeToTelnet('\n');
-                inputBuffer.append('\n');
-                inputByteLength++;
-                ensureTelnetQuerySize();
+
+                if (!queryBuffer.isEmpty()) {
+                    inputBuffer.append('\n');
+                    inputByteLength++;
+                    ensureTelnetQuerySize();
+                }
 
                 flushBuffer();
                 if (!queuedQuery.isEmpty()) {
