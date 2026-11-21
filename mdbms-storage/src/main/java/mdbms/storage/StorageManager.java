@@ -371,6 +371,12 @@ public final class StorageManager implements IDataAccess, ISchemaCatalog, IStati
         bufferPool.flushBuffer();
     }
 
+    @Override public void close() {
+        bufferPool.flushBuffer();
+        bufferPool.discardAllFrames();
+        tables.clear();
+    }
+
 
     @Override
     public BufferStats getBufferStats(){
