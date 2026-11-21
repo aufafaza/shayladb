@@ -82,13 +82,6 @@ public class TelnetHandler implements AutoCloseable {
         return telnet;
     }
 
-    public InputStream rawInput() {
-        if (telnet) {
-            throw new IllegalStateException("Telnet connections do not expose a raw stream");
-        }
-        return input;
-    }
-
     public int read() throws IOException {
         return readCodePoint();
     }
