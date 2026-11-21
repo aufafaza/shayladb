@@ -9,7 +9,7 @@ import mdbms.api.IQueryProcessor;
 
 // Server TCP single use. Buat baru/restart kalau gagal bind atau setelah shutdown  
 public class DBMSServer {
-    public static final int DEFAULT_PORT = 3306;
+    public static final int DEFAULT_PORT = 7654;
     public static final int DEFAULT_POOL_SIZE = 10;
     public static final int DEFAULT_PENDING_CLIENTS = 10;
 
@@ -20,6 +20,7 @@ public class DBMSServer {
     private final int port;
     private final IQueryProcessor processor;
     private final IConcurrencyControl concurrencyControl;
+    private final ClientHandler.Mode mode;
     private final Set<Socket> activeClientSockets = ConcurrentHashMap.newKeySet();
     private final CountDownLatch readyLatch = new CountDownLatch(1);
     private final CountDownLatch stoppedLatch = new CountDownLatch(1);
@@ -30,9 +31,18 @@ public class DBMSServer {
     private volatile ThreadPoolExecutor workerPool;
 
     public DBMSServer(int port, IQueryProcessor processor, IConcurrencyControl concurrencyControl) {
+        this(port, processor, concurrencyControl, ClientHandler.Mode.FRAMED_JSON);
+    }
+
+    protected DBMSServer(
+            int port,
+            IQueryProcessor processor,
+            IConcurrencyControl concurrencyControl,
+            ClientHandler.Mode mode) {
         this.port = port;
         this.processor = processor;
         this.concurrencyControl = concurrencyControl;
+        this.mode = mode;
     }
 
     public void start() throws IOException {
@@ -149,13 +159,13 @@ public class DBMSServer {
             clientSocket.setSoTimeout(FramedJsonProtocol.REQUEST_TIMEOUT_MILLIS);
             workerPool.execute(() -> {
                 try {
-                    new ClientHandler(clientSocket, sessionManager, processor, concurrencyControl).run();
+                    new ClientHandler(clientSocket, sessionManager, processor, concurrencyControl, mode).run();
                 } finally {
                     releaseClient(clientSocket);
                 }
             });
         } catch (RejectedExecutionException | IOException e) {
-            if (e instanceof RejectedExecutionException) {
+            if (e instanceof RejectedExecutionException && mode == ClientHandler.Mode.FRAMED_JSON) {
                 try {
                     new FramedJsonProtocol(clientSocket, clientSocket.getInputStream())
                             .writeResponse(FramedJsonProtocol.Response.error(

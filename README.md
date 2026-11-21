@@ -47,5 +47,6 @@ java -jar mdbms-app/target/mdbms.jar
 ## Network protocol
 
 Programmatic clients use the framed raw-TCP protocol documented in
-[`mdbms-net/PROTOCOL.md`](mdbms-net/PROTOCOL.md). Interactive telnet remains
-available on the same listener.
+[`mdbms-net/PROTOCOL.md`](mdbms-net/PROTOCOL.md) on port 7654 by default.
+Interactive Telnet clients connect to the separate port 2323 by default. The
+ports are represented separately in `DBMSConfig`.

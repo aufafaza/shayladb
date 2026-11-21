@@ -73,7 +73,9 @@ public class TelnetHandler implements AutoCloseable {
 
         this.telnetDataInputStream = new TelnetDataInputStream();
         this.characterReader = new InputStreamReader(telnetDataInputStream, StandardCharsets.UTF_8);
-        detectTelnet(socket);
+        
+        telnet = true;
+        negotiate();
     }
 
     public boolean isTelnet() {
@@ -175,6 +177,7 @@ public class TelnetHandler implements AutoCloseable {
         return value;
     }
 
+    @Deprecated 
     private void detectTelnet(Socket socket) throws IOException {
         int oldTimeout = socket.getSoTimeout();
 

@@ -1,17 +1,20 @@
 # ShaylaDB network protocol
 
-The server accepts interactive telnet clients and programmatic raw-TCP clients
-on the same listener. A valid telnet negotiation selects the interactive CLI;
-all other connections use the framed protocol below.
+The server provides two separate listeners: framed JSON over raw TCP (default
+port 7654) and the interactive Telnet CLI (default port 2323). Configure these
+ports independently and do not send Telnet traffic to the JSON listener or
+framed JSON traffic to the interactive listener.
 
 ## Raw TCP framing
 
 Each message is a four-byte unsigned big-endian payload length followed by that
 many UTF-8 bytes. Frames are limited to 1,048,576 bytes. A client must finish
-the complete header and payload within 30 seconds. The server applies the same
-deadline to telnet input and to response writes. Telnet queries are limited to
-the same 1,048,576-byte UTF-8 size. A timeout, incomplete frame, or oversized
-frame closes the connection after an error response when one can be written.
+the complete header and payload within 30 seconds. Telnet input has a 30-second
+absolute deadline per `readQuery()` call, which incoming bytes do not extend.
+The server applies a 30-second deadline to response writes. Telnet queries are
+limited to the same 1,048,576-byte UTF-8 size. A timeout, incomplete frame, or
+oversized frame closes the connection after an error response when one can be
+written.
 
 Each request is one JSON object:
 
