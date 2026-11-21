@@ -118,3 +118,33 @@ ports are represented separately in `DBMSConfig`.
 In the **failed state**, the transaction that caused it keeps its locks, so no other transaction can read or overwrite its rows. New transactions are rejected with `Engine is in failed state, restart required`, and the checkpoint barrier (`awaitNoActiveTransactions`) fails with the same error instead of waiting forever. Restart the server: crash recovery replays the WAL and decides whether the transaction committed.
 
 Known limitation: undoing an `UPDATE` that moved a row to another page is not supported yet (#55). Aborting such a transaction moves the engine to the failed state.
+
+### Coordinated shutdown
+
+`Main` registers both TCP listeners with `DBMS.registerServer` and uses the same
+`DBMS.shutdown()` path on normal exit and JVM shutdown. Embedded applications must
+register their listeners too. Shutdown stops transaction and socket admission,
+closes client sockets, cancels lock waits cooperatively, and waits for workers and
+executing queries. A statement already executing may finish and commit before its
+worker exits; remaining open transactions are rolled back. Successfully committed
+data survives reopening. After quiescence the engine checkpoints, flushes and
+releases storage buffers, then forces and closes the WAL. Storage data channels
+are scoped to individual operations and are already closed before this point.
+
+`DBMS.checkpoint()` serializes maintenance with shutdown. Optional periodic
+checkpoints started by `startCheckpointScheduler(interval, unit)` belong to the
+engine and stop during shutdown. A checkpoint waiting for transactions is
+cancelled; checkpoint disk I/O is allowed to finish without interruption.
+
+The default caller wait is 15 seconds; `shutdown(timeout, unit)` accepts a custom
+positive bound. Each listener allows workers five seconds plus a final one-second
+termination wait. Uncooperative work or disk I/O causes a visible failure or
+timeout, rather than a successful shutdown. A timeout stops admission immediately;
+cleanup may continue in the background, and WAL resources stay open while queries
+or checkpoints can still use them. Do not reopen that directory until the old
+work has finished. Rollback, checkpoint, flush, and WAL-close failures propagate
+to the caller. A failed engine cannot resume service.
+
+Repeated successful shutdown calls are harmless; repeated calls after a failed
+shutdown continue to report failure. Engine and listener instances are single-use
+after shutdown: create fresh instances to reopen a directory or rebind a port.

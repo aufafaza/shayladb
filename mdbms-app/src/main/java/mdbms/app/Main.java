@@ -22,11 +22,9 @@ public final class Main {
                 cfg.getPort(), dbms.getQueryProcessor(), dbms.getConcurrencyControl());
         InteractiveDBMSServer interactiveServer = new InteractiveDBMSServer(
                 cfg.getInteractivePort(), dbms.getQueryProcessor(), dbms.getConcurrencyControl());
-        Runtime.getRuntime().addShutdownHook(new Thread(() -> {
-            shutdownServer(interactiveServer);
-            shutdownServer(jsonServer);
-            dbms.shutdown();
-        }, "mdbms-shutdown"));
+        dbms.registerServer(jsonServer);
+        dbms.registerServer(interactiveServer);
+        Runtime.getRuntime().addShutdownHook(new Thread(dbms::shutdown, "mdbms-shutdown"));
 
         Thread interactiveThread = new Thread(() -> {
             try {
@@ -47,15 +45,8 @@ public final class Main {
             }
             jsonServer.start();
         } finally {
-            shutdownServer(interactiveServer);
+            dbms.shutdown();
         }
     }
 
-    private static void shutdownServer(DBMSServer server) {
-        try {
-            server.shutdown();
-        } catch (IOException e) {
-            System.err.println("[ERROR] Could not stop server: " + e.getMessage());
-        }
-    }
 }
