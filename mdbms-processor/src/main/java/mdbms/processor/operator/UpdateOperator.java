@@ -75,6 +75,8 @@ public class UpdateOperator extends QueryUnaryOperator implements IWriteOperator
             protectedRow.setRowId(current.rowId());
             List<Object> newValues = new ArrayList<>(oldValues);
             newValues.set(columnIndex, ColumnTypes.toColumnType(ExpressionEvaluator.evaluate(newValue, protectedRow), columnType));
+            // primary key baru ga boleh sama dengan baris lain, baris yang lagi di update sendiri dilewatin
+            dataAccess.checkPrimaryKey(tableName, newValues, current.rowId());
 
             if (dataAccess.canUpdateInPlace(current.rowId(), newValues)) {
                 concurrencyControlManager.executeRelocation(transactionId, item, item, oldValues, newValues, () -> {

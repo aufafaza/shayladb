@@ -756,4 +756,57 @@ class StorageManagerTest {
         assertEquals(1, storage.getStatistics("users").nr());
         assertEquals(1, storage.getStatistics("users").br());
     }
+
+    // primary key duplikat ditolak lewat writeBlock maupun checkPrimaryKey, isi tabel ga berubah
+    @Test
+    void duplicatePrimaryKeyIsRejectedWithoutIndex() {
+        createUsers();
+        RowId alice = storage.writeBlock(new DataWrite("users", user(1, "Alice", 3.5f), List.of())).get(0);
+
+        StorageException insert = assertThrows(StorageException.class,
+                () -> storage.writeBlock(new DataWrite("users", user(1, "Duplicate", 1.0f), List.of())));
+        assertEquals(StorageErrorCode.DUPLICATE_KEY, insert.getCode());
+        assertEquals(StorageErrorCode.DUPLICATE_KEY, assertThrows(StorageException.class,
+                () -> storage.checkPrimaryKey("users", List.of(1, "Duplicate", 1.0f), null)).getCode());
+
+        assertEquals(1, storage.readBlock(new DataRetrieval("users", List.of(), List.of())).rows().size());
+        assertEquals(List.of(1, "Alice", 3.5f), storage.fetchByRowId(alice).values());
+    }
+
+    // jalur lewat index kolom primary key kasih hasil yang sama dengan jalur scan
+    @Test
+    void duplicatePrimaryKeyIsRejectedThroughIndex() {
+        createUsers();
+        storage.writeBlock(new DataWrite("users", user(1, "Alice", 3.5f), List.of()));
+        storage.createIndex("idx_users_id", "users", "id");
+
+        assertEquals(StorageErrorCode.DUPLICATE_KEY, assertThrows(StorageException.class,
+                () -> storage.checkPrimaryKey("users", List.of(1, "Duplicate", 1.0f), null)).getCode());
+        assertDoesNotThrow(() -> storage.checkPrimaryKey("users", List.of(2, "Bob", 1.0f), null));
+    }
+
+    // UPDATE boleh ngubah baris nya sendiri, tapi ga boleh ganti primary key jadi punya baris lain
+    @Test
+    void updateCannotTakeAnotherRowsPrimaryKey() {
+        createUsers();
+        RowId alice = storage.writeBlock(new DataWrite("users", user(1, "Alice", 3.5f), List.of())).get(0);
+        RowId bob = storage.writeBlock(new DataWrite("users", user(2, "Bob", 2.0f), List.of())).get(0);
+
+        assertDoesNotThrow(() -> storage.checkPrimaryKey("users", List.of(1, "Alice baru", 3.5f), alice));
+        assertEquals(StorageErrorCode.DUPLICATE_KEY, assertThrows(StorageException.class,
+                () -> storage.checkPrimaryKey("users", List.of(1, "Bob", 2.0f), bob)).getCode());
+        assertEquals(StorageErrorCode.DUPLICATE_KEY, assertThrows(StorageException.class,
+                () -> storage.writeBlock(new DataWrite("users", Map.of("id", 1), List.of(
+                        new Condition("id", ComparisonOperator.EQ, 2))))).getCode());
+        assertEquals(List.of(2, "Bob", 2.0f), storage.fetchByRowId(bob).values());
+    }
+
+    // nilai yang salah tipe tetap dapet error validasi biasa, bukan error primary key
+    @Test
+    void checkPrimaryKeyKeepsNormalValidationErrors() {
+        createUsers();
+
+        assertEquals(StorageErrorCode.SCHEMA_VIOLATION, assertThrows(StorageException.class,
+                () -> storage.checkPrimaryKey("users", List.of("bukan angka", "Alice", 1.0f), null)).getCode());
+    }
 }
