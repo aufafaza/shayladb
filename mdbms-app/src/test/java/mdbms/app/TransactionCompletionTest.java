@@ -29,7 +29,6 @@ import mdbms.models.transaction.AccessStatus;
 import mdbms.models.transaction.Transaction;
 import mdbms.models.transaction.TransactionState;
 import mdbms.optimizer.QueryOptimizer;
-import mdbms.optimizer.lexer.ShaylaLexer;
 import mdbms.optimizer.parser.ShaylaParser;
 import mdbms.processor.QueryProcessor;
 import mdbms.processor.operator.CreateTableOperator;
@@ -246,7 +245,7 @@ class TransactionCompletionTest {
                         throw failure.getCause();
                     }
                 });
-        QueryOptimizer optimizer = new QueryOptimizer(storage, new ShaylaParser(new ShaylaLexer(""))) {
+        QueryOptimizer optimizer = new QueryOptimizer(storage, new ShaylaParser()) {
             @Override public ParsedQuery optimizeQuery(ParsedQuery query) { return query; }
         };
         processor = new QueryProcessor(optimizer, failingStorage, storage, recovery, ccm);
