@@ -29,13 +29,22 @@ public class CrashRecoveryManager {
             LogManager logManager,
             RollbackManager rollbackManager,
             CheckpointManager checkpointManager,
-            IDataAccess dataAccess,
+            RecordApplier recordApplier,
             IDurableStorage durableStorage) {
         this.logManager = logManager;
         this.rollbackManager = rollbackManager;
         this.checkpointManager = checkpointManager;
-        this.recordApplier = new RecordApplier(dataAccess);
+        this.recordApplier = recordApplier != null ? recordApplier : new RecordApplier();
         this.durableStorage = durableStorage;
+    }
+
+    public CrashRecoveryManager(
+            LogManager logManager,
+            RollbackManager rollbackManager,
+            CheckpointManager checkpointManager,
+            IDataAccess dataAccess,
+            IDurableStorage durableStorage) {
+        this(logManager, rollbackManager, checkpointManager, new RecordApplier(dataAccess), durableStorage);
     }
 
     /**
@@ -44,57 +53,75 @@ public class CrashRecoveryManager {
      * @apiNote Hanya dipanggil sekali ketika mDBMS diinisialisasi
      * @return hasil recovery
      */
+    
     public RecoveryResult performCrashRecovery() {
         List<LogRecord> allLogs = logManager.readLogs(null);
         if (allLogs.isEmpty()) {
+            if (durableStorage != null) {
+                durableStorage.rebuildIndexesAndReloadCatalog();
+            }
             return new RecoveryResult(true, 0L, logManager.getMaxTxId(), "RECOVERY: Log kosong, tidak ada pemulihan");
         }
 
-        // Cari indeks CHECKPOINT terakhir yang selesai
-        CheckpointLogRecord lastCp = checkpointManager != null
-                ? checkpointManager.findLastCompletedCheckpoint()
-                : null;
+        if (recordApplier.getDataAccess() == null || durableStorage == null) {
+            return new RecoveryResult(
+                    false,
+                    -1L,
+                    logManager.getMaxTxId(),
+                    "RECOVERY: Layanan storage (IDataAccess/IDurableStorage) tidak tersedia");
+        }
 
-        int startIdx = 0;
-        if (lastCp != null) {
-            for (int i = allLogs.size() - 1; i >= 0; i--) {
-                if (allLogs.get(i).getLsn() == lastCp.getLsn()) {
-                    startIdx = i + 1;
-                    break;
+        try {
+            CheckpointLogRecord lastCp = checkpointManager != null
+                    ? checkpointManager.findLastCompletedCheckpoint()
+                    : null;
+
+            int startIdx = 0;
+            if (lastCp != null) {
+                for (int i = allLogs.size() - 1; i >= 0; i--) {
+                    if (allLogs.get(i).getLsn() == lastCp.getLsn()) {
+                        startIdx = i + 1;
+                        break;
+                    }
                 }
             }
-        }
 
-        AnalysisState state = runAnalysisPhase(allLogs, lastCp, startIdx);
+            AnalysisState state = runAnalysisPhase(allLogs, lastCp, startIdx);
 
-        boolean redoOk = runRedoPhase(allLogs, startIdx, state.committedTxs);
-        if (!redoOk) {
-            return new RecoveryResult(false, -1L, logManager.getMaxTxId(), "RECOVERY: Gagal pada fase Redo");
-        }
+            boolean redoOk = runRedoPhase(allLogs, startIdx, state.committedTxs);
+            if (!redoOk) {
+                return new RecoveryResult(false, -1L, logManager.getMaxTxId(), "RECOVERY: Gagal pada fase Redo");
+            }
 
-        boolean undoOk = runUndoPhase(allLogs, state.activeTxs);
-        if (!undoOk) {
-            return new RecoveryResult(false, -1L, logManager.getMaxTxId(), "RECOVERY: Gagal pada fase Undo");
-        }
+            boolean undoOk = runUndoPhase(allLogs, state.activeTxs);
+            if (!undoOk) {
+                return new RecoveryResult(false, -1L, logManager.getMaxTxId(), "RECOVERY: Gagal pada fase Undo");
+            }
 
-        // Pastikan seluruh hasil pemulihan tersimpan permanen di disk sebelum menulis
-        // ABORT final
-        if (durableStorage != null) {
             durableStorage.flushBuffer();
-        }
+            durableStorage.rebuildIndexesAndReloadCatalog();
 
-        long finalLsn = allLogs.get(allLogs.size() - 1).getLsn();
-        for (Integer uncommittedTxId : state.activeTxs) {
-            TransactionLogRecord abortRec = logManager.appendTransactionLog(uncommittedTxId, LogType.ABORT);
-            finalLsn = abortRec.getLsn();
-        }
-        logManager.flushUpTo(finalLsn);
+            long finalLsn = allLogs.get(allLogs.size() - 1).getLsn();
+            for (Integer uncommittedTxId : state.activeTxs) {
+                TransactionLogRecord abortRec = logManager.appendTransactionLog(uncommittedTxId, LogType.ABORT);
+                finalLsn = abortRec.getLsn();
+            }
+            if (!logManager.flushUpTo(finalLsn)) {
+                return new RecoveryResult(false, -1L, logManager.getMaxTxId(), "RECOVERY: Gagal flush WAL pasca-recovery");
+            }
 
-        return new RecoveryResult(
-                true,
-                finalLsn,
-                logManager.getMaxTxId(),
-                "RECOVERY: Crash recovery selesai (Redo=" + state.committedTxs + ", Undo=" + state.activeTxs + ")");
+            return new RecoveryResult(
+                    true,
+                    finalLsn,
+                    logManager.getMaxTxId(),
+                    "RECOVERY: Crash recovery selesai (Redo=" + state.committedTxs + ", Undo=" + state.activeTxs + ")");
+        } catch (RuntimeException e) {
+            return new RecoveryResult(
+                    false,
+                    -1L,
+                    logManager.getMaxTxId(),
+                    "RECOVERY: Kegagalan saat pemulihan: " + e.getMessage());
+        }
     }
 
     /**

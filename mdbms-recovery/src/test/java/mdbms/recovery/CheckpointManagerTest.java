@@ -14,6 +14,13 @@ import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
+import java.io.UncheckedIOException;
+import mdbms.api.IDataAccess;
+import mdbms.models.access.DataDeletion;
+import mdbms.models.access.DataRetrieval;
+import mdbms.models.access.DataWrite;
+import mdbms.models.data.Row;
+import mdbms.models.data.Rows;
 import mdbms.api.IDurableStorage;
 import mdbms.models.access.BufferStats;
 import mdbms.models.data.RowId;
@@ -125,7 +132,7 @@ class CheckpointManagerTest {
     }
 
     @Test
-    void executeCheckpoint_withNullStorageManager_succeeds() {
+    void executeCheckpoint_withNullStorageManager_fails() {
         CheckpointManager cmWithoutStorage = new CheckpointManager(
             logManager,
             null,
@@ -137,8 +144,8 @@ class CheckpointManagerTest {
         logManager.appendTransactionLog(1, LogType.BEGIN);
         RecoveryResult result = cmWithoutStorage.executeCheckpoint();
 
-        assertTrue(result.isSuccess());
-        assertNotNull(cmWithoutStorage.findLastCompletedCheckpoint());
+        assertFalse(result.isSuccess());
+        assertNull(cmWithoutStorage.findLastCompletedCheckpoint());
     }
 
     @Test
@@ -241,7 +248,8 @@ class CheckpointManagerTest {
         assertTrue(result.isSuccess());
         assertEquals(5L, result.getLsn());
         assertEquals("snapshot-state", Files.readString(tableFile));
-        assertTrue(storageManager.bufferPool.discardedFiles.contains("users.dat"));
+        assertTrue(storageManager.invalidatedFiles.contains("users.dat"));
+        assertEquals(1, storageManager.rebuildCount);
         assertEquals(List.of(2L), recordApplier.redoneLsns);
 
         List<LogRecord> remainingLogs = logManager.readLogs(null);
@@ -288,7 +296,8 @@ class CheckpointManagerTest {
         assertTrue(result.isSuccess());
         assertEquals(tx3Commit.getLsn(), result.getLsn());
         assertEquals("initial-orders", Files.readString(tableFile));
-        assertTrue(storageManager.bufferPool.discardedFiles.contains("orders.dat"));
+        assertTrue(storageManager.invalidatedFiles.contains("orders.dat"));
+        assertEquals(1, storageManager.rebuildCount);
         assertEquals(List.of(tx1Insert.getLsn(), tx3Delete.getLsn()), recordApplier.redoneLsns);
 
         List<LogRecord> remainingLogs = logManager.readLogs(null);
@@ -324,22 +333,63 @@ class CheckpointManagerTest {
     }
 
 
-    private static class TestBufferPool {
-        final Set<String> discardedFiles = new HashSet<>();
+    @Test
+    void executeCheckpoint_failsWhenStorageFlushThrows() {
+        storageManager.throwOnFlush = true;
+        logManager.appendTransactionLog(1, LogType.BEGIN);
 
-        @SuppressWarnings("unused")
-        public void discardFile(String fileName) {
-            discardedFiles.add(fileName);
-        }
+        RecoveryResult result = checkpointManager.executeCheckpoint();
+
+        assertFalse(result.isSuccess());
+        assertNull(checkpointManager.findLastCompletedCheckpoint());
+    }
+
+    @Test
+    void recoverToPointInTime_failsWhenRedoFails() throws IOException {
+        Path tableFile = dataDir.resolve("users.dat");
+        Files.writeString(tableFile, "snapshot-state");
+        checkpointManager.createSnapshot();
+
+        Instant t1 = Instant.parse("2026-11-19T10:00:00Z");
+        Instant targetTime = Instant.parse("2026-11-19T10:00:10Z");
+        walFileHandler.append(new TransactionLogRecord(1L, 1, LogType.BEGIN, t1));
+        walFileHandler.append(new DataChangeLogRecord(
+            2L, 1, LogType.INSERT, t1, "users", new RowId("users", 0, 0),
+            null, new RecordImage(List.of(1, "Alice"))
+        ));
+        walFileHandler.append(new TransactionLogRecord(3L, 1, LogType.COMMIT, t1));
+        walFileHandler.flushUpTo(3L);
+
+        recordApplier.redoResult = false;
+        RecoveryResult result = checkpointManager.recoverToPointInTime(targetTime);
+
+        assertFalse(result.isSuccess());
     }
 
     private static class TestDurableStorage implements IDurableStorage {
-        final TestBufferPool bufferPool = new TestBufferPool();
+        final Set<String> invalidatedFiles = new HashSet<>();
         int flushCount = 0;
+        int rebuildCount = 0;
+        boolean throwOnFlush = false;
 
         @Override
         public void flushBuffer() {
+            if (throwOnFlush) {
+                throw new UncheckedIOException(new IOException("Simulated flush failure"));
+            }
             flushCount++;
+        }
+
+        @Override
+        public void invalidateAndReload(Set<String> affectedFiles) {
+            if (affectedFiles != null) {
+                invalidatedFiles.addAll(affectedFiles);
+            }
+        }
+
+        @Override
+        public void rebuildIndexesAndReloadCatalog() {
+            rebuildCount++;
         }
 
         @Override
@@ -350,15 +400,30 @@ class CheckpointManagerTest {
 
     private static class RecordingRecordApplier extends RecordApplier {
         final List<Long> redoneLsns = new ArrayList<>();
+        boolean redoResult = true;
 
         RecordingRecordApplier() {
-            super(null);
+            super(new NoOpDataAccess());
         }
 
         @Override
         public boolean redo(DataChangeLogRecord record) {
             redoneLsns.add(record.getLsn());
-            return true;
+            return redoResult;
         }
+    }
+
+    private static class NoOpDataAccess implements IDataAccess {
+        @Override public Rows readBlock(DataRetrieval request) { return null; }
+        @Override public List<RowId> writeBlock(DataWrite request) { return List.of(); }
+        @Override public int deleteBlock(DataDeletion request) { return 0; }
+        @Override public Row fetchByRowId(RowId rowId) { return null; }
+        @Override public RowId reserveRowId(String table, List<Object> values) { return null; }
+        @Override public void releaseRowId(RowId rowId) {}
+        @Override public void insertAt(RowId rowId, List<Object> values) {}
+        @Override public Row updateByRowId(RowId rowId, List<Object> values) { return null; }
+        @Override public Row deleteByRowId(RowId rowId) { return null; }
+        @Override public List<RowId> searchIndex(String indexName, Object key) { return List.of(); }
+        @Override public List<RowId> searchIndexRange(String indexName, Object low, Object high, boolean lowInc, boolean highInc) { return List.of(); }
     }
 }

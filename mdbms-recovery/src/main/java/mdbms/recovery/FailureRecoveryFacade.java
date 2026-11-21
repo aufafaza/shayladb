@@ -13,7 +13,7 @@ import mdbms.models.log.LogType;
 import mdbms.models.log.RecordImage;
 import mdbms.models.log.RecoveryResult;
 import mdbms.models.log.TransactionLogRecord;
-public class FailureRecoveryFacade implements IFailureRecoveryManager {
+public class FailureRecoveryFacade implements IFailureRecoveryManager, AutoCloseable {
 
     private final LogManager logManager;
     private final RollbackManager rollbackManager;
@@ -38,23 +38,29 @@ public class FailureRecoveryFacade implements IFailureRecoveryManager {
             ? logDir.getParent()
             : logDir;
 
-        this.logManager = new LogManager(new WalFileHandler(walFilePath));
-        RecordApplier recordApplier = new RecordApplier(dataAccess);
-        this.rollbackManager = new RollbackManager(logManager, recordApplier, durableStorage);
-        this.checkpointManager = new CheckpointManager(
-            logManager,
-            durableStorage,
-            recordApplier,
-            dataDirPath != null ? dataDirPath.toString() : null,
-            snapshotDir != null ? snapshotDir.toString() : null
-        );
-        this.crashRecoveryManager = new CrashRecoveryManager(
-            logManager,
-            rollbackManager,
-            checkpointManager,
-            dataAccess,
-            durableStorage
-        );
+        WalFileHandler wal = new WalFileHandler(walFilePath);
+        try {
+            this.logManager = new LogManager(wal);
+            RecordApplier recordApplier = new RecordApplier(dataAccess);
+            this.rollbackManager = new RollbackManager(logManager, recordApplier, durableStorage);
+            this.checkpointManager = new CheckpointManager(
+                logManager,
+                durableStorage,
+                recordApplier,
+                dataDirPath != null ? dataDirPath.toString() : null,
+                snapshotDir != null ? snapshotDir.toString() : null
+            );
+            this.crashRecoveryManager = new CrashRecoveryManager(
+                logManager,
+                rollbackManager,
+                checkpointManager,
+                recordApplier,
+                durableStorage
+            );
+        } catch (RuntimeException | Error failure) {
+            wal.close();
+            throw failure;
+        }
     }
 
     public FailureRecoveryFacade(
@@ -117,6 +123,35 @@ public class FailureRecoveryFacade implements IFailureRecoveryManager {
     }
 
     @Override
+    public RecoveryResult writeRelocationLog(
+            int txId,
+            String table,
+            RowId oldRid,
+            RowId newRid,
+            RecordImage beforeImg,
+            RecordImage afterImg) {
+        if (txId <= 0 || table == null || oldRid == null || newRid == null) {
+            return new RecoveryResult(false, -1L, logManager.getMaxTxId(), "Invalid relocation log parameters");
+        }
+        if (oldRid.equals(newRid)) {
+            return writeDataLog(txId, LogType.UPDATE, table, oldRid, beforeImg, afterImg);
+        }
+        try {
+            DataChangeLogRecord record = logManager.appendRelocationLog(
+                    txId, table, oldRid, newRid, beforeImg, afterImg);
+            return new RecoveryResult(
+                    true,
+                    record.getLsn(),
+                    logManager.getMaxTxId(),
+                    "Relocation log UPDATE recorded on table " + table
+                            + " (" + oldRid + " -> " + newRid + ") for txId=" + txId
+            );
+        } catch (Exception e) {
+            return new RecoveryResult(false, -1L, logManager.getMaxTxId(), e.getMessage());
+        }
+    }
+
+    @Override
     public boolean flushLogUpTo(long lsn) {
         return logManager.flushUpTo(lsn);
     }
@@ -155,6 +190,7 @@ public class FailureRecoveryFacade implements IFailureRecoveryManager {
         return logManager.formatLogTable(readLogs(filterTxId));
     }
 
+    @Override
     public void close() {
         logManager.getWalFileHandler().close();
     }
