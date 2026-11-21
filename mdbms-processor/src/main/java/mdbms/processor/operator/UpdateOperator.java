@@ -7,11 +7,14 @@ import mdbms.api.IDataAccess;
 import mdbms.api.ISchemaCatalog;
 import mdbms.models.data.DataItem;
 import mdbms.models.data.Row;
+import mdbms.models.data.RowId;
 import mdbms.models.query.ExpressionTree;
 import mdbms.models.schema.ColumnDefinition;
 import mdbms.models.schema.DataType;
 import mdbms.processor.ExpressionEvaluator;
 import mdbms.processor.IResultRow;
+import mdbms.processor.ResultRow;
+import mdbms.processor.exception.QueryExecutionException;
 
 public class UpdateOperator extends QueryUnaryOperator implements IWriteOperator {
     private final IDataAccess dataAccess;
@@ -26,6 +29,7 @@ public class UpdateOperator extends QueryUnaryOperator implements IWriteOperator
     private DataType columnType;
     private List<IResultRow> targetRows;
     private int affectedRows;
+    private boolean done;
 
     public UpdateOperator(IQueryOperator childOperator, IDataAccess dataAccess, ISchemaCatalog schemaCatalog,
             IConcurrencyControl concurrencyControlManager, int transactionId, String tableName,
@@ -41,6 +45,8 @@ public class UpdateOperator extends QueryUnaryOperator implements IWriteOperator
     }
 
     public void open() {
+        done = false;
+        affectedRows = 0;
         List<ColumnDefinition> columns = schemaCatalog.getTableSchema(tableName).columns();
         columnNames = columns.stream()
                 .map(ColumnDefinition::name)
@@ -58,24 +64,47 @@ public class UpdateOperator extends QueryUnaryOperator implements IWriteOperator
     }
 
     public IResultRow next() {
+        if (done) return null;
+        done = true;
         for (IResultRow row : targetRows) {
-            List<Object> oldValues = new ArrayList<>();
-            for (String name : columnNames) {
-                oldValues.add(row.get(name));
-            }
-            List<Object> newValues = new ArrayList<>(oldValues);
-            newValues.set(columnIndex, ColumnTypes.toColumnType(ExpressionEvaluator.evaluate(newValue, row), columnType));
-
             DataItem item = new DataItem(tableName, row.getRowId());
-            AccessPermission.write(concurrencyControlManager, transactionId, item, oldValues, newValues);
-            Row updated = dataAccess.updateByRowId(row.getRowId(), newValues);
-            if (!updated.rowId().equals(row.getRowId())) {
-                AccessPermission.write(concurrencyControlManager, transactionId, item, newValues, null);
-                AccessPermission.write(concurrencyControlManager, transactionId,
-                        new DataItem(tableName, updated.rowId()), null, newValues);
+            AccessPermission.lockWrite(concurrencyControlManager, transactionId, item);
+            Row current = dataAccess.fetchByRowId(row.getRowId());
+            List<Object> oldValues = new ArrayList<>(current.values());
+            ResultRow protectedRow = new ResultRow(row.getSchema(), oldValues);
+            protectedRow.setRowId(current.rowId());
+            List<Object> newValues = new ArrayList<>(oldValues);
+            newValues.set(columnIndex, ColumnTypes.toColumnType(ExpressionEvaluator.evaluate(newValue, protectedRow), columnType));
+
+            if (dataAccess.canUpdateInPlace(current.rowId(), newValues)) {
+                concurrencyControlManager.executeRelocation(transactionId, item, item, oldValues, newValues, () -> {
+                    if (!dataAccess.updateInPlace(current.rowId(), newValues)) {
+                        // Abort instead of committing an UPDATE log whose row would silently move.
+                        throw new QueryExecutionException("Row no longer fits in place; retry the transaction");
+                    }
+                    return null;
+                });
+            } else {
+                RowId destination = dataAccess.reserveRowId(tableName, newValues);
+                try {
+                    concurrencyControlManager.executeRelocation(transactionId, item,
+                            new DataItem(tableName, destination), oldValues, newValues, () -> {
+                                dataAccess.insertAt(destination, newValues);
+                                dataAccess.deleteByRowId(current.rowId());
+                                return null;
+                            });
+                } catch (RuntimeException failure) {
+                    try {
+                        dataAccess.releaseRowId(destination);
+                    } catch (RuntimeException cleanupFailure) {
+                        // Undo may already have released it. Preserve any other cleanup error as well.
+                        failure.addSuppressed(cleanupFailure);
+                    }
+                    throw failure;
+                }
             }
+            affectedRows++;
         }
-        affectedRows = targetRows.size();
         return null;
     }
 

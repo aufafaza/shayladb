@@ -47,6 +47,7 @@ public enum TokenType {
     updateTok,
     setTok,
     createTok,
+    dropTok,
     tableTok,
     viewTok,
     asTok,

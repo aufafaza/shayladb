@@ -4,6 +4,7 @@ import java.util.List;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.Set;
 import java.nio.charset.StandardCharsets;
 import mdbms.api.IDataAccess;
 import mdbms.api.IDurableStorage;
@@ -21,6 +22,7 @@ import mdbms.models.data.Condition;
 import mdbms.models.schema.IndexInfo;
 import mdbms.models.schema.Statistic;
 import mdbms.models.schema.TableSchema;
+import mdbms.models.schema.DropBehavior;
 import mdbms.models.schema.ColumnDefinition;
 import mdbms.storage.exception.StorageErrorCode;
 import mdbms.storage.exception.StorageException;
@@ -232,6 +234,41 @@ public final class StorageManager implements IDataAccess, ISchemaCatalog, IStati
         }
     }
 
+    // cek isi baru muat di slot yang sama atau ga, dipanggil QP sebelum minta lock dan nulis log
+    // false berarti UPDATE harus lewat relokasi, jalur ini ga ngubah apa apa
+    @Override
+    public boolean canUpdateInPlace(RowId rowId, List<Object> values){
+        TableSchema schema = requireSchema(rowId.tableName());
+
+        validateRow(schema, values);
+
+        return heapFileOf(rowId.tableName()).canUpdateInPlace(rowId, values);
+    }
+
+    // UPDATE yang ga pernah mindahin baris, false kalau ga muat dan heap sama index ga berubah
+    // bisa false walau canUpdateInPlace tadi true kalau ruang halaman keburu dipakai, pemanggil lanjut lewat relokasi
+    @Override
+    public boolean updateInPlace(RowId rowId, List<Object> values){
+        TableSchema schema = requireSchema(rowId.tableName());
+
+        validateRow(schema, values);
+
+        HeapFile heapFile = heapFileOf(rowId.tableName());
+
+        Row oldRow = heapFile.fetch(rowId);
+        if (!heapFile.updateInPlace(rowId, values)){
+            return false;
+        }
+
+        try{
+            afterWrite(rowId.tableName(), oldRow, new Row(rowId, new ArrayList<>(values)));
+            return true;
+        } catch (RuntimeException e){
+            undo(e, () -> heapFile.updateInPlace(oldRow.rowId(), oldRow.values()));
+            throw e;
+        }
+    }
+
     // hapus baris lewat RowId lalu buang dari semua index, null kalau barisnya udah ga ada
     // dibikin aman diulang biar redo DELETE dan undo INSERT dari FRM ga gagal walau perubahannya udah sampai disk
     @Override
@@ -284,13 +321,19 @@ public final class StorageManager implements IDataAccess, ISchemaCatalog, IStati
 
     @Override
     public void dropTable(String table){
+        dropTable(table, DropBehavior.RESTRICT);
+    }
+
+    @Override
+    public void dropTable(String table, DropBehavior behavior){
         requireSchema(table);
+        catalog.validateDrop(table, behavior);
 
         indexManager.dropIndexesOf(table);
         bufferPool.discardFile(table + ".tbl");
         tables.remove(table);
         statistics.invalidate(table);
-        catalog.dropTable(table);
+        catalog.dropTable(table, behavior);
     }
 
     // kosongin semua baris tabel tapi tabelnya tetap ada, index tabel ikut dikosongin dan statistik dihitung ulang
@@ -320,6 +363,11 @@ public final class StorageManager implements IDataAccess, ISchemaCatalog, IStati
         }
     }
 
+    // hapus satu index dari katalog dan file nya, dipakai bootstrap schema buat batalin index yang baru dibuat
+    public void dropIndex(String name){
+        indexManager.dropIndex(name);
+    }
+
     @Override
     public Statistic getStatistics(String table){
         return statistics.getStatistics(table, heapFileOf(table));
@@ -328,6 +376,12 @@ public final class StorageManager implements IDataAccess, ISchemaCatalog, IStati
     @Override
     public void flushBuffer(){
         bufferPool.flushBuffer();
+    }
+
+    @Override public void close() {
+        bufferPool.flushBuffer();
+        bufferPool.discardAllFrames();
+        tables.clear();
     }
 
 
@@ -340,6 +394,42 @@ public final class StorageManager implements IDataAccess, ISchemaCatalog, IStati
     // perubahan di buffer yang belum di flush sengaja dibuang karena isi disk yang jadi acuan
     public void reloadFromDisk(){
         bufferPool.discardAllFrames();
+        reloadCatalogAndIndexes();
+    }
+
+    // versi IDurableStorage dari reloadFromDisk, cuma frame file yang diganti yang dibuang biar perubahan file lain ga hilang
+    @Override
+    public void invalidateAndReload(Set<String> affectedFiles){
+        if (affectedFiles == null || affectedFiles.isEmpty()){
+            reloadFromDisk();
+            return;
+        }
+        for (String fileName : affectedFiles){
+            bufferPool.discardFrames(fileName);
+        }
+        reloadCatalogAndIndexes();
+    }
+
+    // dipanggil FRM setelah recovery selesai, buffer ga dibuang karena hasil redo undo bisa belum ke flush
+    @Override
+    public void rebuildIndexesAndReloadCatalog(){
+        reloadCatalogAndIndexes();
+        releaseOrphanReservations();
+        rebuildIndexes();
+    }
+
+    // lepas slot dipesan yang nyangkut di disk dari transaksi yang ga sempat selesai sebelum crash
+    // cuma boleh dipanggil pas ga ada transaksi aktif, balikin jumlah slot yang dilepas
+    public int releaseOrphanReservations(){
+        int released = 0;
+        for (String table : catalog.listTables()){
+            released += heapFileOf(table).releaseAllReservations();
+        }
+        return released;
+    }
+
+    // kosongin cache heap dan statistik lalu baca ulang katalog dan buka ulang index sesuai katalog terbaru
+    private void reloadCatalogAndIndexes(){
         tables.clear();
         for (String table : catalog.listTables()){
             statistics.invalidate(table);

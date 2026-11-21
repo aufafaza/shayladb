@@ -3,14 +3,26 @@ package mdbms.processor.operator;
 import java.util.ArrayList;
 import java.util.List;
 import mdbms.processor.IResultRow;
+import mdbms.processor.ResultTableSchema;
 
-public class CartesianJoinOperator extends QueryBinaryOperator {
+public class CartesianJoinOperator extends QueryBinaryOperator implements IRowProducingOperator {
     private final List<IResultRow> rightRows = new ArrayList<>();
     private IResultRow currentLeft;
     private int rightIndex;
 
     public CartesianJoinOperator(IQueryOperator left, IQueryOperator right) {
         super(left, right);
+    }
+
+    @Override
+    public ResultTableSchema getSchema() {
+        if (leftOperator instanceof IRowProducingOperator
+                && rightOperator instanceof IRowProducingOperator) {
+            ResultTableSchema left = ((IRowProducingOperator) leftOperator).getSchema();
+            ResultTableSchema right = ((IRowProducingOperator) rightOperator).getSchema();
+            if (left != null && right != null) return JoinRowUtil.combineSchema(left, right, false);
+        }
+        return null;
     }
 
     @Override

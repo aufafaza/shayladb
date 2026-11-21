@@ -12,12 +12,13 @@ import mdbms.processor.IResultRow;
 import mdbms.processor.ResultRow;
 import mdbms.processor.ResultTableSchema;
 
-public class IndexScanOperator implements IQueryOperator {
+public class IndexScanOperator implements IQueryOperator, IRowProducingOperator {
     private final IDataAccess dataAccess;
     private final ISchemaCatalog schemaCatalog;
     private final IConcurrencyControl concurrencyControlManager;
     private final int transactionId;
     private final String tableName;
+    private final String qualifier;
     private final IndexScanSpec spec;
     private ResultTableSchema schema;
     private List<RowId> rowIds;
@@ -26,18 +27,35 @@ public class IndexScanOperator implements IQueryOperator {
     public IndexScanOperator(IDataAccess dataAccess, ISchemaCatalog schemaCatalog,
             IConcurrencyControl concurrencyControlManager, int transactionId, String tableName,
             IndexScanSpec spec) {
+        this(dataAccess, schemaCatalog, concurrencyControlManager, transactionId, tableName, tableName, spec);
+    }
+
+    public IndexScanOperator(IDataAccess dataAccess, ISchemaCatalog schemaCatalog,
+            IConcurrencyControl concurrencyControlManager, int transactionId, String tableName,
+            String qualifier, IndexScanSpec spec) {
         this.dataAccess = dataAccess;
         this.schemaCatalog = schemaCatalog;
         this.concurrencyControlManager = concurrencyControlManager;
         this.transactionId = transactionId;
         this.tableName = tableName;
+        this.qualifier = qualifier;
         this.spec = spec;
+    }
+
+    @Override
+    public ResultTableSchema getSchema() {
+        if (schema == null) {
+            mdbms.models.schema.TableSchema tableSchema = schemaCatalog.getTableSchema(tableName);
+            if (tableSchema == null) throw new IllegalArgumentException("Tabel tidak ditemukan: "+tableName);
+            schema = new ResultTableSchema(tableSchema, qualifier);
+        }
+        return schema;
     }
 
     @Override public void open() {
         if(schemaCatalog.getTableSchema(tableName)==null) throw new IllegalArgumentException("Tabel tidak ditemukan: "+tableName);
 
-        schema = new ResultTableSchema(schemaCatalog.getTableSchema(tableName));
+        schema = new ResultTableSchema(schemaCatalog.getTableSchema(tableName), qualifier);
         rowIds = lookup();
         position = 0;
     }

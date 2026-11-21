@@ -21,10 +21,9 @@ import mdbms.optimizer.exception.QueryErrorCollector;
 import mdbms.optimizer.exception.QueryLexicalException;
 import mdbms.optimizer.exception.QueryProcessingException;
 import mdbms.optimizer.exception.QuerySyntaxException;
-import mdbms.optimizer.lexer.ShaylaLexer;
 
 class ShaylaParserTest {
-    private final ShaylaParser parser = new ShaylaParser(new ShaylaLexer("old input"));
+    private final ShaylaParser parser = new ShaylaParser();
 
     @Test
     void parsesFullSelectSourceIntoTheExistingUnboundTree() {
@@ -192,10 +191,10 @@ class ShaylaParserTest {
     @Test
     void rethrowsRecordedUnknownSymbolErrorsWithoutDuplicateSyntaxDiagnostics() {
         QueryErrorCollector collector = new QueryErrorCollector();
-        ShaylaParser contextual = new ShaylaParser(new ShaylaLexer("", collector));
+        ShaylaParser contextual = new ShaylaParser();
         String sql = "SELECT @, ? FROM a";
 
-        QueryLexicalException error = assertThrows(QueryLexicalException.class, () -> contextual.parseToTree(sql));
+        QueryLexicalException error = assertThrows(QueryLexicalException.class, () -> contextual.parseToTree(sql, collector));
 
         assertEquals(2, collector.getAllExceptions().size());
         assertSame(error, collector.getAllExceptions().get(0));
@@ -211,9 +210,9 @@ class ShaylaParserTest {
     void fatalLexerErrorsPropagateOnceWithSourceAndCategory() {
         for (String sql : List.of("SELECT 'unterminated FROM a", "INSERT INTO a VALUES (12.34.56)")) {
             QueryErrorCollector collector = new QueryErrorCollector();
-            ShaylaParser contextual = new ShaylaParser(new ShaylaLexer("", collector));
+            ShaylaParser contextual = new ShaylaParser();
 
-            QueryLexicalException error = assertThrows(QueryLexicalException.class, () -> contextual.parseToTree(sql));
+            QueryLexicalException error = assertThrows(QueryLexicalException.class, () -> contextual.parseToTree(sql, collector));
 
             assertEquals(ErrorCategory.LEXICAL_ERROR, error.getCategory());
             assertEquals(sql, error.getSqlSource());
@@ -222,18 +221,15 @@ class ShaylaParserTest {
     }
 
     @Test
-    void reusesTheInjectedLexerWithNewInputAfterSuccessAndFailure() {
-        ShaylaLexer lexer = new ShaylaLexer("stale source");
-        IQueryParser entryPoint = new ShaylaParser(lexer);
+    void parsesNewInputAfterSuccessAndFailure() {
+        IQueryParser entryPoint = new ShaylaParser();
         assertEquals(QueryNodeType.PROJECT, entryPoint.parseToTree("SELECT * FROM a").getNodeType());
-        assertEquals("SELECT * FROM a", lexer.getInput());
         assertThrows(QuerySyntaxException.class, () -> entryPoint.parseToTree("UPDATE a SET"));
         assertThrows(QueryLexicalException.class, () -> entryPoint.parseToTree("SELECT @ FROM a"));
         assertThrows(QueryLexicalException.class, () -> entryPoint.parseToTree("INSERT INTO a VALUES ('"));
 
         assertEquals(QueryNodeType.ABORT, entryPoint.parseToTree("ABORT").getNodeType());
         QueryTree next = entryPoint.parseToTree("SELECT nama FROM siswa WHERE id = 2 ORDER BY nama");
-        assertEquals("SELECT nama FROM siswa WHERE id = 2 ORDER BY nama", lexer.getInput());
         assertEquals(QueryNodeType.SORT, next.getChildren().get(0).getNodeType());
         assertEquals(ExpressionNode.Type.COMPARISON,
             next.getChildren().get(0).getChildren().get(0).getConditions().get(0).getRoot().getType());
@@ -242,30 +238,29 @@ class ShaylaParserTest {
     @Test
     void historicalCollectorErrorsArePreservedWithoutBlockingLaterValidInput() {
         QueryErrorCollector collector = new QueryErrorCollector();
-        ShaylaParser contextual = new ShaylaParser(new ShaylaLexer("", collector));
-        QuerySyntaxException previous = assertThrows(QuerySyntaxException.class, () -> contextual.parseToTree("UPDATE a"));
+        ShaylaParser contextual = new ShaylaParser();
+        QuerySyntaxException previous = assertThrows(QuerySyntaxException.class, () -> contextual.parseToTree("UPDATE a", collector));
 
-        assertEquals(QueryNodeType.COMMIT, contextual.parseToTree("COMMIT;").getNodeType());
+        assertEquals(QueryNodeType.COMMIT, contextual.parseToTree("COMMIT;", collector).getNodeType());
         assertEquals(List.of(previous), collector.getAllExceptions());
         QueryLexicalException lexical = assertThrows(QueryLexicalException.class,
-            () -> contextual.parseToTree("SELECT @ FROM a"));
+            () -> contextual.parseToTree("SELECT @ FROM a", collector));
         assertEquals(List.of(previous, lexical), collector.getAllExceptions());
-        assertEquals(QueryNodeType.DELETE, contextual.parseToTree("DELETE FROM a").getNodeType());
+        assertEquals(QueryNodeType.DELETE, contextual.parseToTree("DELETE FROM a", collector).getNodeType());
         assertEquals(List.of(previous, lexical), collector.getAllExceptions());
     }
 
     @Test
-    void usesTheCurrentCollectorConfiguredOnTheInjectedLexer() {
-        ShaylaLexer lexer = new ShaylaLexer("");
-        ShaylaParser contextual = new ShaylaParser(lexer);
-        assertEquals(QueryNodeType.COMMIT, contextual.parseToTree("COMMIT").getNodeType());
-        QueryErrorCollector collector = new QueryErrorCollector();
-        lexer.setErrorCollector(collector);
-
+    void acceptsARequestOwnedCollectorWithoutKeepingPreviousDiagnostics() {
+        ShaylaParser contextual = new ShaylaParser();
+        QueryErrorCollector firstCollector = new QueryErrorCollector();
         QuerySyntaxException error = assertThrows(QuerySyntaxException.class,
-            () -> contextual.parseToTree("SELECT FROM a"));
+            () -> contextual.parseToTree("SELECT FROM a", firstCollector));
+        QueryErrorCollector collector = new QueryErrorCollector();
 
-        assertEquals(List.of(error), collector.getAllExceptions());
+        assertEquals(QueryNodeType.COMMIT, contextual.parseToTree("COMMIT", collector).getNodeType());
+        assertEquals(List.of(error), firstCollector.getAllExceptions());
+        assertTrue(collector.getAllExceptions().isEmpty());
     }
 
     @Test
@@ -282,9 +277,9 @@ class ShaylaParserTest {
 
     private static QuerySyntaxException assertSyntax(String sql, String lexeme) {
         QueryErrorCollector collector = new QueryErrorCollector();
-        ShaylaParser contextual = new ShaylaParser(new ShaylaLexer("old input", collector));
+        ShaylaParser contextual = new ShaylaParser();
 
-        QuerySyntaxException error = assertThrows(QuerySyntaxException.class, () -> contextual.parseToTree(sql), sql);
+        QuerySyntaxException error = assertThrows(QuerySyntaxException.class, () -> contextual.parseToTree(sql, collector), sql);
 
         assertEquals(lexeme, error.getLexeme(), sql);
         assertEquals(sql, error.getSqlSource(), sql);
