@@ -191,7 +191,7 @@ public final class StorageManager implements IDataAccess, ISchemaCatalog, IStati
     @Override
     public void releaseRowId(RowId rowId, long pageLsn){
         HeapFile heapFile = heapFileOf(rowId.tableName());
-        heapFile.releaseReservation(rowId);
+        heapFile.releaseReservation(rowId, pageLsn);
     }
 
     // taruh baris di RowId hasil reserveRowId atau dari redo FRM, kalau barisnya udah ada dengan isi sama dianggap beres
@@ -267,7 +267,7 @@ public final class StorageManager implements IDataAccess, ISchemaCatalog, IStati
 
         validateRow(schema, values);
 
-        return heapFileOf(rowId.tableName()).canUpdateInPlace(rowId, values);
+        return heapFileOf(rowId.tableName()).canUpdateInPlace(rowId, values, pageLsn);
     }
 
     // UPDATE yang ga pernah mindahin baris, false kalau ga muat dan heap sama index ga berubah
@@ -286,7 +286,7 @@ public final class StorageManager implements IDataAccess, ISchemaCatalog, IStati
         HeapFile heapFile = heapFileOf(rowId.tableName());
 
         Row oldRow = heapFile.fetch(rowId);
-        if (!heapFile.updateInPlace(rowId, values)){
+        if (!heapFile.updateInPlace(rowId, values, pageLsn)){
             return false;
         }
 
@@ -294,7 +294,7 @@ public final class StorageManager implements IDataAccess, ISchemaCatalog, IStati
             afterWrite(rowId.tableName(), oldRow, new Row(rowId, new ArrayList<>(values)), pageLsn);
             return true;
         } catch (RuntimeException e){
-            undo(e, () -> heapFile.updateInPlace(oldRow.rowId(), oldRow.values()));
+            undo(e, () -> heapFile.updateInPlace(oldRow.rowId(), oldRow.values(), pageLsn));
             throw e;
         }
     }

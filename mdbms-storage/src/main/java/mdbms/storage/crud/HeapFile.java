@@ -175,7 +175,7 @@ public class HeapFile{
     }
     
     public Row update(RowId rowId, List<Object> values, long pageLsn){
-        if (updateInPlace(rowId, values)){
+        if (updateInPlace(rowId, values, pageLsn)){
             return new Row(rowId, values);
         }
 
