@@ -21,7 +21,7 @@ class CommandLineInterfaceTest {
 
     @Test
     void readQueryReturnsQueryThroughSemicolon() throws IOException {
-        CommandLineInterface cli = new CommandLineInterface(
+        CommandLineInterface cli = newCli(
                 new TestSocket("SELECT * FROM users;".getBytes(StandardCharsets.UTF_8)));
 
         assertEquals("SELECT * FROM users;", cli.readQuery());
@@ -29,7 +29,7 @@ class CommandLineInterfaceTest {
 
     @Test
     void readQueryReturnsOneQueryAtATime() throws IOException {
-        CommandLineInterface cli = new CommandLineInterface(
+        CommandLineInterface cli = newCli(
                 new TestSocket("SELECT 1;SELECT 2;".getBytes(StandardCharsets.UTF_8)));
 
         assertEquals("SELECT 1;", cli.readQuery());
@@ -38,7 +38,7 @@ class CommandLineInterfaceTest {
 
     @Test
     void readQueryPreservesUnicodeAndMultipleRawTcpQueries() throws IOException {
-        CommandLineInterface cli = new CommandLineInterface(
+        CommandLineInterface cli = newCli(
                 new TestSocket("SELECT 'café 😀';SELECT '東京';".getBytes(StandardCharsets.UTF_8)));
 
         assertEquals("SELECT 'café 😀';", cli.readQuery());
@@ -52,8 +52,7 @@ class CommandLineInterfaceTest {
         input.write("SELECT 'café 😀';\r\n".getBytes(StandardCharsets.UTF_8));
 
         TestSocket socket = new TestSocket(input.toByteArray());
-        CommandLineInterface cli = new CommandLineInterface(socket);
-        socket.clearOutput();
+        CommandLineInterface cli = newCli(socket);
 
         assertEquals("SELECT 'café 😀';", cli.readQuery());
         assertEquals("ShaylaDB> SELECT 'café 😀';\n", socket.outputAsString());
@@ -61,9 +60,8 @@ class CommandLineInterfaceTest {
 
     @Test
     void readQueryKeepsEscapedSingleQuoteAndSemicolonInsideString() throws IOException {
-        CommandLineInterface cli = new CommandLineInterface(
-                new TestSocket("SELECT 'escaped \\' quote; still inside';SELECT 2;"
-                        .getBytes(StandardCharsets.UTF_8)));
+        CommandLineInterface cli = newCli(new TestSocket(
+                "SELECT 'escaped \\' quote; still inside';SELECT 2;".getBytes(StandardCharsets.UTF_8)));
 
         assertEquals("SELECT 'escaped \\' quote; still inside';", cli.readQuery());
         assertEquals("SELECT 2;", cli.readQuery());
@@ -71,9 +69,8 @@ class CommandLineInterfaceTest {
 
     @Test
     void readQueryKeepsEscapedDoubleQuoteAndSemicolonInsideString() throws IOException {
-        CommandLineInterface cli = new CommandLineInterface(
-                new TestSocket("SELECT \"escaped \\\" quote; still inside\";SELECT 2;"
-                        .getBytes(StandardCharsets.UTF_8)));
+        CommandLineInterface cli = newCli(new TestSocket(
+                "SELECT \"escaped \\\" quote; still inside\";SELECT 2;".getBytes(StandardCharsets.UTF_8)));
 
         assertEquals("SELECT \"escaped \\\" quote; still inside\";", cli.readQuery());
         assertEquals("SELECT 2;", cli.readQuery());
@@ -81,14 +78,14 @@ class CommandLineInterfaceTest {
 
     @Test
     void readQueryReturnsNullWhenInputEnds() throws IOException {
-        CommandLineInterface cli = new CommandLineInterface(new TestSocket(new byte[0]));
+        CommandLineInterface cli = newCli(new TestSocket(new byte[0]));
 
         assertNull(cli.readQuery());
     }
 
     @Test
     void readQueryGetBackspaced() throws IOException {
-        CommandLineInterface cli = new CommandLineInterface(
+        CommandLineInterface cli = newCli(
                 new TestSocket("SELECT * FROM users__\b\b;".getBytes(StandardCharsets.UTF_8)));
 
         assertEquals("SELECT * FROM users;", cli.readQuery());
@@ -111,7 +108,7 @@ class CommandLineInterfaceTest {
     }
 
     @Test
-    void readQueryEnforcesAbsoluteTelnetInputDeadlineWhileBytesKeepArriving() throws IOException {
+    void readQueryRejectsTelnetInputTrickledPastAbsoluteDeadline() throws IOException {
         byte[] telnetInput = new byte[] {(byte) 255, (byte) 253, 1};
         byte[] queryInput = "SELECT 1234567890;\r\n".getBytes(StandardCharsets.UTF_8);
         byte[] input = new byte[telnetInput.length + queryInput.length];
@@ -128,7 +125,7 @@ class CommandLineInterfaceTest {
     @Test
     void printResultWritesResponseToSocket() throws IOException {
         TestSocket socket = new TestSocket(new byte[0]);
-        CommandLineInterface cli = new CommandLineInterface(socket);
+        CommandLineInterface cli = newCli(socket);
         String newline = System.lineSeparator();
 
         cli.printResult(new ExecutionResult(
@@ -184,7 +181,7 @@ class CommandLineInterfaceTest {
     @Test
     void printResultWritesTheAffectedRows() throws IOException {
         TestSocket socket = new TestSocket(new byte[0]);
-        CommandLineInterface cli = new CommandLineInterface(socket);
+        CommandLineInterface cli = newCli(socket);
         String newline = System.lineSeparator();
 
         // Print zero row
@@ -220,7 +217,7 @@ class CommandLineInterfaceTest {
     @Test
     void printExecutionTimeTest() throws IOException {
         TestSocket socket = new TestSocket(new byte[0]);
-        CommandLineInterface cli = new CommandLineInterface(socket);
+        CommandLineInterface cli = newCli(socket);
 
         cli.printExecutionTime(10001000);
         String newline = System.lineSeparator();
@@ -268,6 +265,12 @@ class CommandLineInterfaceTest {
         public int getSoTimeout() {
             return timeout;
         }
+    }
+
+    private static CommandLineInterface newCli(TestSocket socket) throws IOException {
+        CommandLineInterface cli = new CommandLineInterface(socket);
+        socket.clearOutput();
+        return cli;
     }
 
     private static final class DelayedInputStream extends InputStream {
