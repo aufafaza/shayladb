@@ -8,4 +8,7 @@ public interface IQueryOptimizer {
     ParsedQuery optimizeQuery(ParsedQuery query);
 
     int getCost(ParsedQuery query);
+
+    // Teks plan sebelum dan sesudah optimasi beserta biaya totalnya, dipakai perintah EXPLAIN
+    String explainQuery(String query);
 }

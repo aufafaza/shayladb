@@ -152,6 +152,20 @@ class QueryEndToEndTest {
         assertEquals(List.of(42, 1), reopened.readBlock(new DataRetrieval("grades", List.of(), List.of())).rows().get(0).values());
     }
 
+    @Test
+    void explainShowsAliasedPlansWithoutExecutingTheQuery() {
+        useOptimizer();
+        ExecutionResult explained = execute("explain\n  SELECT * FROM users AS u WHERE u.id = 1;");
+        assertTrue(explained.success(), explained.message());
+        assertEquals(List.of(), explained.columns());
+        assertTrue(explained.message().contains("Before optimization"), explained.message());
+        assertTrue(explained.message().contains("After optimization"), explained.message());
+        assertTrue(explained.message().contains("TABLE_SCAN [table=users, alias=u]"), explained.message());
+
+        assertTrue(execute("EXPLAIN INSERT INTO users VALUES (1, 'Alice');").success());
+        assertEquals(List.of(), execute("SELECT * FROM users;").rows(), "EXPLAIN must not insert");
+    }
+
     private void useOptimizer() {
         processor = new QueryProcessor(new QueryOptimizer(storage, new ShaylaParser(new ShaylaLexer(""))),
             storage, storage, recovery, concurrency);
