@@ -27,6 +27,15 @@ import org.junit.jupiter.api.Test;
 
 class FramedJsonProtocolTest {
     @Test
+    void preservesSqlEscapedQuoteAndQuotedSemicolonInFramedRequest() throws Exception {
+        String sql = "SELECT 'it''s; still part of the string';";
+        TestSocket socket = new TestSocket(frame("{\"sql\":\"" + sql + "\"}"));
+        FramedJsonProtocol protocol = new FramedJsonProtocol(socket, socket.getInputStream());
+
+        assertEquals(sql, protocol.readSql());
+    }
+
+    @Test
     void readsUnicodeAndMultipleRequestsWithoutScanningSemicolons() throws Exception {
         TestSocket socket = new TestSocket(concat(
                 frame("{\"sql\":\"SELECT 'café; 😀'\"}"),
@@ -131,6 +140,36 @@ class FramedJsonProtocolTest {
         assertTrue(readFrame(socket.output.toByteArray()).contains("\"code\":\"ADMISSION_REJECTED\""));
     }
 
+    @Test
+    void disconnectCleanupContinuesWhenTransactionRollbackFails() {
+        TestSocket socket = new TestSocket(frame("{\"sql\":\"BEGIN\"}"));
+        TrackingSessionManager sessionManager = new TrackingSessionManager();
+        int[] abortAttempts = {0};
+        IConcurrencyControl concurrencyControl = new IConcurrencyControl() {
+            @Override public int beginTransaction() { return 42; }
+            @Override public void commitTransaction(int txId) { }
+            @Override public void abortTransaction(int txId, String reason) {
+                abortAttempts[0]++;
+                throw new IllegalStateException("rollback failed");
+            }
+            @Override public AccessStatus requestRead(int txId, DataItem data) { return AccessStatus.ABORTED; }
+            @Override public AccessStatus requestWrite(int txId, DataItem data, Object oldVal, Object newVal) {
+                return AccessStatus.ABORTED;
+            }
+            @Override public AccessStatus requestWrite(int txId, DataItem data) { return AccessStatus.ABORTED; }
+            @Override public Transaction getTransaction(int txId) { return null; }
+            @Override public boolean verifySchedule(List<Operation> manualSchedule) { return false; }
+        };
+        IQueryProcessor processor = (query, txId) -> new ExecutionResult(true, null, null, -1, null);
+
+        new ClientHandler(socket, sessionManager, processor, concurrencyControl).run();
+
+        assertEquals(1, abortAttempts[0]);
+        assertTrue(sessionManager.removedSession);
+        assertFalse(sessionManager.session.isTransacting());
+        assertTrue(socket.closed);
+    }
+
     private static byte[] frame(String payload) {
         byte[] body = payload.getBytes(StandardCharsets.UTF_8);
         return concat(ByteBuffer.allocate(4).putInt(body.length).array(), body);
@@ -156,6 +195,7 @@ class FramedJsonProtocolTest {
         private final InputStream input;
         private final ByteArrayOutputStream output = new ByteArrayOutputStream();
         private int timeout;
+        private boolean closed;
 
         private TestSocket(byte[] input) {
             this.input = new ByteArrayInputStream(input);
@@ -165,5 +205,26 @@ class FramedJsonProtocolTest {
         @Override public OutputStream getOutputStream() { return output; }
         @Override public void setSoTimeout(int timeout) { this.timeout = timeout; }
         @Override public int getSoTimeout() { return timeout; }
+        @Override public void close() throws IOException {
+            closed = true;
+            super.close();
+        }
+    }
+
+    private static final class TrackingSessionManager extends SessionManager {
+        private ClientSession session;
+        private boolean removedSession;
+
+        @Override
+        public ClientSession newSession() {
+            session = super.newSession();
+            return session;
+        }
+
+        @Override
+        public void removeSession(String sessionId) {
+            removedSession = true;
+            super.removeSession(sessionId);
+        }
     }
 }
