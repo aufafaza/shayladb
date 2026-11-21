@@ -10,6 +10,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.lang.reflect.Field;
 import java.lang.reflect.Proxy;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
@@ -255,6 +256,24 @@ class StorageManagerTest {
         assertCode(StorageErrorCode.SCHEMA_VIOLATION, () -> storage.writeBlock(new DataWrite("users", values, List.of())));
 
         assertTrue(readUsers().isEmpty());
+    }
+
+    // teks khusus dan spasi akhir char tetap sama setelah disimpan lalu dibaca
+    @Test
+    void specialTextRoundTripsThroughStorage() {
+        storage.updateTableSchema(new TableSchema("texts", List.of(
+                new ColumnDefinition("id", DataType.INTEGER, 0, false),
+                new ColumnDefinition("fixed", DataType.CHAR, 4, false),
+                new ColumnDefinition("varying", DataType.VARCHAR, 4, false)),
+                List.of("id"), List.of()));
+
+        assertEquals(4, "😀".getBytes(StandardCharsets.UTF_8).length);
+        List<String> samples = List.of("😀", "é", "\"a\"", "a'b", "a,b", "a|b", "a\nb", "a  ");
+        for (int i = 0; i < samples.size(); i++) {
+            String text = samples.get(i);
+            RowId rowId = storage.writeBlock(new DataWrite("texts", Map.of("id", i + 1, "fixed", text, "varying", text), List.of())).get(0);
+            assertEquals(List.of(i + 1, text, text), storage.fetchByRowId(rowId).values());
+        }   
     }
 
     // FRM palsu yang selalu bilang log udah aman biar flush bisa jalan
