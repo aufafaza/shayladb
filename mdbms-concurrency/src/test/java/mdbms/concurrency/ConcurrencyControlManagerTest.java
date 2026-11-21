@@ -2,6 +2,8 @@ package mdbms.concurrency;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
@@ -34,10 +36,13 @@ class ConcurrencyControlManagerTest {
     private StubProtocol protocol;
     private IConcurrencyControl ccm;
 
+    private List<String> events;
+
     @BeforeEach
     void setUp() {
-        frm = new RecordingRecoveryManager();
-        protocol = new StubProtocol();
+        events = new ArrayList<>();
+        frm = new RecordingRecoveryManager(events);
+        protocol = new StubProtocol(events);
         ccm = new ConcurrencyControlManager(protocol, frm);
     }
 
@@ -197,9 +202,143 @@ class ConcurrencyControlManagerTest {
         assertEquals(AccessStatus.GRANTED, locks.requestWrite(first, other));
     }
 
+    // commit harus flush dulu baru lepas akses
+    @Test
+    void commitFlushesLogBeforeReleasingAccess() {
+        int txId = ccm.beginTransaction();
+
+        ccm.commitTransaction(txId);
+
+        assertEquals(List.of("log BEGIN", "log COMMIT", "flush", "release " + txId), events);
+    }
+
+    // flush gagal tapi rollback berhasil, transaksi bersih ter abort dan error asli ga hilang
+    @Test
+    void commitFlushFailureRollsBackBeforeReleaseAndNeverReportsSuccess() {
+        int txId = ccm.beginTransaction();
+        Transaction tx = ccm.getTransaction(txId);
+        frm.flushSucceeds = false;
+
+        IllegalStateException failure = assertThrows(IllegalStateException.class, () -> ccm.commitTransaction(txId));
+
+        assertTrue(failure.getMessage().contains("commit log"));
+        assertEquals(TransactionState.ABORTED, tx.getState());
+        assertEquals(List.of("log BEGIN", "log COMMIT", "flush", "rollback " + txId, "release " + txId), events);
+        assertNull(ccm.getTransaction(txId));
+        assertFalse(((ConcurrencyControlManager) ccm).isFailed());
+    }
+
+    // exception dari append COMMIT disimpan sebagai cause
+    @Test
+    void commitLogExceptionKeepsOriginalCause() {
+        int txId = ccm.beginTransaction();
+        RuntimeException appendFailure = new RuntimeException("disk full");
+        frm.commitLogFailure = appendFailure;
+
+        IllegalStateException failure = assertThrows(IllegalStateException.class, () -> ccm.commitTransaction(txId));
+
+        assertSame(appendFailure, failure.getCause());
+        assertEquals(List.of(txId), frm.rolledBack);
+        assertNull(ccm.getTransaction(txId));
+    }
+
+    // COMMIT udah ketulis tapi flush gagal dan rollback nolak, hasilnya ga pasti jadi engine failed dan lock tetap dipegang
+    @Test
+    void uncertainCommitOutcomeRetainsProtectionAndFailsEngine() throws Exception {
+        ConcurrencyControlManager manager = (ConcurrencyControlManager) ccm;
+        int txId = ccm.beginTransaction();
+        Transaction tx = ccm.getTransaction(txId);
+        frm.flushSucceeds = false;
+        frm.rollbackSucceeds = false;
+
+        IllegalStateException failure = assertThrows(IllegalStateException.class, () -> ccm.commitTransaction(txId));
+
+        assertTrue(failure.getMessage().contains("commit log"));
+        assertEquals(1, failure.getSuppressed().length);
+        assertTrue(manager.isFailed());
+        assertEquals(TransactionState.FAILED, tx.getState());
+        assertTrue(protocol.released.isEmpty());
+        assertSame(tx, ccm.getTransaction(txId));
+        assertThrows(IllegalStateException.class, ccm::beginTransaction);
+        assertThrows(IllegalStateException.class, manager::awaitNoActiveTransactions);
+
+        // abort ulang ga boleh rollback kedua kali
+        assertThrows(IllegalStateException.class, () -> ccm.abortTransaction(txId, "retry"));
+        assertEquals(List.of(txId), frm.rolledBack);
+    }
+
+    // rollback gagal waktu abort biasa, akses tetap diproteksi
+    @Test
+    void failedRollbackRetainsProtectionAndFailsEngine() {
+        int txId = ccm.beginTransaction();
+        frm.rollbackSucceeds = false;
+
+        assertThrows(IllegalStateException.class, () -> ccm.abortTransaction(txId, "test"));
+
+        assertTrue(((ConcurrencyControlManager) ccm).isFailed());
+        assertTrue(protocol.released.isEmpty());
+        assertEquals(TransactionState.FAILED, ccm.getTransaction(txId).getState());
+    }
+
+    // rollback yang lempar exception juga diperlakukan sama
+    @Test
+    void rollbackExceptionRetainsProtectionAndFailsEngine() {
+        int txId = ccm.beginTransaction();
+        RuntimeException undoFailure = new RuntimeException("undo failed");
+        frm.rollbackFailure = undoFailure;
+
+        IllegalStateException failure = assertThrows(IllegalStateException.class, () -> ccm.abortTransaction(txId, "test"));
+
+        assertSame(undoFailure, failure.getCause());
+        assertTrue(((ConcurrencyControlManager) ccm).isFailed());
+        assertTrue(protocol.released.isEmpty());
+    }
+
+    // abort selesai rollback dulu baru lepas akses
+    @Test
+    void abortRollsBackBeforeReleasingAccess() {
+        int txId = ccm.beginTransaction();
+
+        ccm.abortTransaction(txId, "test");
+
+        assertEquals(List.of("log BEGIN", "rollback " + txId, "release " + txId), events);
+    }
+
+    // waiter checkpoint dibangunin pas engine masuk failed state
+    @Test
+    void awaitNoActiveTransactionsWakesUpWhenEngineFails() throws Exception {
+        ConcurrencyControlManager manager = (ConcurrencyControlManager) ccm;
+        int txId = ccm.beginTransaction();
+        frm.rollbackSucceeds = false;
+        List<Throwable> outcome = new ArrayList<>();
+        Thread waiter = new Thread(() -> {
+            try {
+                manager.awaitNoActiveTransactions();
+            } catch (Throwable t) {
+                synchronized (outcome) { outcome.add(t); }
+            }
+        });
+        waiter.start();
+        Thread.sleep(50);
+
+        assertThrows(IllegalStateException.class, () -> ccm.abortTransaction(txId, "test"));
+        waiter.join(2000);
+
+        assertFalse(waiter.isAlive());
+        synchronized (outcome) {
+            assertEquals(1, outcome.size());
+            assertTrue(outcome.get(0) instanceof IllegalStateException);
+        }
+    }
+
     private static final class StubProtocol implements ConcurrencyProtocol {
         private AccessStatus status = AccessStatus.GRANTED;
         private final List<Integer> released = new ArrayList<>();
+        private final List<String> events;
+
+        private StubProtocol(List<String> events) {
+            this.events = events;
+        }
 
         @Override
         public AccessStatus requestRead(Transaction tx, DataItem data) {
@@ -219,13 +358,23 @@ class ConcurrencyControlManagerTest {
         @Override
         public void releaseResources(Transaction tx) {
             released.add(tx.getId());
+            events.add("release " + tx.getId());
         }
     }
 
     private static final class RecordingRecoveryManager implements IFailureRecoveryManager {
         private boolean logSucceeds = true;
+        private boolean flushSucceeds = true;
+        private boolean rollbackSucceeds = true;
+        private RuntimeException commitLogFailure;
+        private RuntimeException rollbackFailure;
         private final List<LogType> transactionLogs = new ArrayList<>();
         private final List<Integer> rolledBack = new ArrayList<>();
+        private final List<String> events;
+
+        private RecordingRecoveryManager(List<String> events) {
+            this.events = events;
+        }
 
         private RecoveryResult result(boolean success) {
             return new RecoveryResult(success, 1L, 0, "test");
@@ -234,6 +383,8 @@ class ConcurrencyControlManagerTest {
         @Override
         public RecoveryResult writeTransactionLog(int txId, LogType eventType) {
             transactionLogs.add(eventType);
+            events.add("log " + eventType);
+            if (eventType == LogType.COMMIT && commitLogFailure != null) throw commitLogFailure;
             return result(logSucceeds);
         }
 
@@ -251,12 +402,16 @@ class ConcurrencyControlManagerTest {
 
         @Override
         public boolean flushLogUpTo(long lsn) {
-            return true;
+            events.add("flush");
+            return flushSucceeds;
         }
 
         @Override
         public RecoveryResult rollbackTransaction(int txId) {
             rolledBack.add(txId);
+            events.add("rollback " + txId);
+            if (rollbackFailure != null) throw rollbackFailure;
+            if (!rollbackSucceeds) return result(false);
             transactionLogs.add(LogType.ABORT);
             return result(true);
         }

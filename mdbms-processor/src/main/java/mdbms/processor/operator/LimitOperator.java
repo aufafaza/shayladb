@@ -1,8 +1,9 @@
 package mdbms.processor.operator;
 
 import mdbms.processor.IResultRow;
+import mdbms.processor.ResultTableSchema;
 
-public class LimitOperator extends QueryUnaryOperator {
+public class LimitOperator extends QueryUnaryOperator implements IRowProducingOperator {
     private final long limit;
     private long count;
 
@@ -10,6 +11,14 @@ public class LimitOperator extends QueryUnaryOperator {
         super(child);
         if (limit < 0) throw new IllegalArgumentException("LIMIT tidak boleh negatif");
         this.limit = limit;
+    }
+
+    @Override
+    public ResultTableSchema getSchema() {
+        if (childOperator instanceof IRowProducingOperator) {
+            return ((IRowProducingOperator) childOperator).getSchema();
+        }
+        return null;
     }
 
     @Override
