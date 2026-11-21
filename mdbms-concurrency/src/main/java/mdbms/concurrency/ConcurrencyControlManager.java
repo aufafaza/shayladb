@@ -34,7 +34,8 @@ public final class ConcurrencyControlManager implements IConcurrencyControl {
     private final Object lifecycleMonitor = new Object();
     private volatile ConcurrencyProtocol protocol;
     private volatile boolean isRecovered = true;
-    private boolean acceptingTransactions = true;
+    private volatile boolean acceptingTransactions = true;
+    private volatile boolean stopping;
     private volatile String failureReason;
 
     /** Uses timestamp ordering when no startup configuration is supplied. */
@@ -73,16 +74,28 @@ public final class ConcurrencyControlManager implements IConcurrencyControl {
     /** Returns a stable display name for startup diagnostics and monitoring. */
     public String getActiveProtocolName() { return protocol.getClass().getSimpleName(); }
 
-    /** Prevents new transactions from starting; existing transactions may finish. */
-    public void pauseTransactions() {
+    /** Wait for a begin call already inside the admission gate to finish. */
+    public void awaitAdmissionStopped() {
         synchronized (lifecycleMonitor) {
-            acceptingTransactions = false;
+            if (acceptingTransactions && !stopping) throw new IllegalStateException("Admission is still open");
         }
+    }
+
+    public void stopTransactions() {
+        stopping = true;
+        pauseTransactions();
+    }
+
+    @Override public boolean isStopping() { return stopping; }
+
+    public void pauseTransactions() {
+        acceptingTransactions = false;
     }
 
     /** Allows new transactions after a checkpoint or maintenance operation. */
     public void resumeTransactions() {
         synchronized (lifecycleMonitor) {
+            if (stopping) throw new IllegalStateException("Engine is stopping");
             acceptingTransactions = true;
             lifecycleMonitor.notifyAll();
         }
@@ -93,7 +106,8 @@ public final class ConcurrencyControlManager implements IConcurrencyControl {
         synchronized (lifecycleMonitor) {
             while (!activeTransactions.isEmpty()) {
                 requireNotFailed();
-                lifecycleMonitor.wait();
+                if (stopping) throw new IllegalStateException("Engine is stopping");
+                lifecycleMonitor.wait(50);
             }
         }
     }
@@ -110,9 +124,25 @@ public final class ConcurrencyControlManager implements IConcurrencyControl {
 
     public int getActiveTransactionCount() { return activeTransactions.size(); }
 
+    public int getLockCount() {
+        if (protocol instanceof LockBasedProtocol lockBased) {
+            return lockBased.getLockManager().getLockTableSnapshot().values().stream()
+                    .mapToInt(java.util.List::size)
+                    .sum();
+        }
+        return 0;
+    }
+
+    public int getWaitingRequestCount() {
+        if (protocol instanceof LockBasedProtocol lockBased) {
+            return lockBased.getLockManager().getWaitingRequestsSnapshot().size();
+        }
+        return 0;
+    }
+
     public boolean isAcceptingTransactions() {
         synchronized (lifecycleMonitor) {
-            return acceptingTransactions;
+            return acceptingTransactions && !stopping;
         }
     }
 
@@ -152,7 +182,7 @@ public final class ConcurrencyControlManager implements IConcurrencyControl {
         synchronized (lifecycleMonitor) {
             requireNotFailed();
             if (!isRecovered) throw new IllegalStateException("Recovery has not completed");
-            if (!acceptingTransactions) throw new IllegalStateException("Transaction admission is paused");
+            if (stopping || !acceptingTransactions) throw new IllegalStateException("Transaction admission is paused");
             int id = transactionCounter.getAndIncrement();
             long now = System.currentTimeMillis();
             long ts = timestampCounter.updateAndGet(prev -> Math.max(now, prev + 1));
@@ -265,6 +295,7 @@ public final class ConcurrencyControlManager implements IConcurrencyControl {
      * across the callback prevents commit/abort from releasing protection
      * between the WAL preparation and the physical move.
      */
+    @Override
     public <T> T executeRelocation(
             int txId,
             DataItem oldItem,
@@ -301,6 +332,10 @@ public final class ConcurrencyControlManager implements IConcurrencyControl {
                 }
             }
             LockSupport.parkNanos(10_000_000L);
+            if (stopping || Thread.currentThread().isInterrupted()) {
+                abortTransaction(txId, "Relocation cancelled");
+                throw new IllegalStateException("Relocation cancelled for transaction " + txId);
+            }
         }
     }
 
@@ -431,6 +466,7 @@ public final class ConcurrencyControlManager implements IConcurrencyControl {
     private void failAndAbort(Transaction tx, String reason, RuntimeException cause) {
         synchronized (tx) {
             if (tx.getState() != TransactionState.FAILED) tx.setState(TransactionState.FAILED);
+            RuntimeException rollbackFailure = null;
             if (frm != null) {
                 RecoveryResult rollback;
                 RuntimeException rollbackError = null;
@@ -458,6 +494,9 @@ public final class ConcurrencyControlManager implements IConcurrencyControl {
             activeTransactions.remove(tx.getId(), tx);
             synchronized (lifecycleMonitor) {
                 lifecycleMonitor.notifyAll();
+            }
+            if (rollbackFailure != null) {
+                throw rollbackFailure;
             }
         }
     }
