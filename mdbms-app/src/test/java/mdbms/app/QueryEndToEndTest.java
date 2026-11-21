@@ -90,6 +90,23 @@ class QueryEndToEndTest {
         assertEquals(List.of(List.of(1, "Alice")), selected.rows());
     }
 
+    @Test
+    void explainReturnsThePlanWithoutExecutingTheQuery() {
+        System.out.println("\n=== EXPLAIN ===");
+        ExecutionResult explained = execute("EXPLAIN INSERT INTO users VALUES (1, 'Alice');");
+        assertTrue(explained.success(), explained.message());
+        assertEquals(List.of(), explained.columns());
+        assertEquals(0, explained.affectedRows());
+        assertTrue(explained.message().contains("Before optimization"), explained.message());
+        assertTrue(explained.message().contains("After optimization"), explained.message());
+        assertTrue(explained.message().contains("INSERT [table=users"), explained.message());
+        System.out.print(explained.message());
+
+        ExecutionResult selected = execute("explain\n  SELECT name FROM users WHERE id = 1;");
+        assertTrue(selected.message().contains("TABLE_SCAN [table=users]"), selected.message());
+        assertEquals(List.of(), execute("SELECT id, name FROM users;").rows(), "EXPLAIN must not insert");
+    }
+
     private StorageManager openStorage() {
         StorageManager manager = new StorageManager(directory.toString(), 8, 4);
         manager.attachRecoveryManager(recovery);
@@ -97,7 +114,7 @@ class QueryEndToEndTest {
     }
 
     private QueryProcessor processorFor(StorageManager manager) {
-        QueryOptimizer optimizer = new QueryOptimizer(manager, new ShaylaParser(new ShaylaLexer(""))) {
+        QueryOptimizer optimizer = new QueryOptimizer(manager, new ShaylaParser()) {
             @Override public ParsedQuery optimizeQuery(ParsedQuery query) { return query; }
         };
         return new QueryProcessor(optimizer, manager, manager, recovery, concurrency);
