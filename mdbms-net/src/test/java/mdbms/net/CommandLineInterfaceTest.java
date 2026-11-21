@@ -1,6 +1,7 @@
 package mdbms.net;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -56,6 +57,23 @@ class CommandLineInterfaceTest {
 
         assertEquals("SELECT 'café 😀';", cli.readQuery());
         assertEquals("ShaylaDB> SELECT 'café 😀';\n", socket.outputAsString());
+    }
+
+    @Test
+    void readQueryReturnsToMainPromptAfterTerminatingAContinuedStatement() throws IOException {
+        ByteArrayOutputStream input = new ByteArrayOutputStream();
+        input.write("What\r\ndeheck;\r\nHumm;\r\n".getBytes(StandardCharsets.UTF_8));
+        TestSocket socket = new TestSocket(input.toByteArray());
+        CommandLineInterface cli = newCli(socket);
+
+        assertEquals("What\ndeheck;", cli.readQuery());
+        assertEquals("Humm;", cli.readQuery());
+        assertNull(cli.readQuery());
+
+        String output = socket.outputAsString();
+        assertTrue(output.contains("ShaylaDB> What\n\t-> deheck;\n"));
+        assertTrue(output.contains("\nShaylaDB> Humm;\n"));
+        assertFalse(output.contains("\t-> Humm;"));
     }
 
     @Test
