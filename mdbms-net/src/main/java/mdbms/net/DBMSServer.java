@@ -11,6 +11,7 @@ import mdbms.api.IQueryProcessor;
 public class DBMSServer {
     public static final int DEFAULT_PORT = 3306;
     public static final int DEFAULT_POOL_SIZE = 10;
+    public static final int DEFAULT_PENDING_CLIENTS = 10;
 
     public enum State { NEW, RUNNING, STOPPING, STOPPED, FAILED }
 
@@ -24,7 +25,7 @@ public class DBMSServer {
     long shutdownTimeoutMs = 5_000L;
     private volatile State state = State.NEW;
     private volatile ServerSocket serverSocket;
-    private volatile ExecutorService workerPool;
+    private volatile ThreadPoolExecutor workerPool;
 
     public DBMSServer(int port, IQueryProcessor processor, IConcurrencyControl concurrencyControl) {
         this.port = port;
@@ -43,7 +44,18 @@ public class DBMSServer {
                 terminate(State.FAILED);
                 throw e;
             }
-            workerPool = Executors.newFixedThreadPool(DEFAULT_POOL_SIZE);
+            workerPool = new ThreadPoolExecutor(
+                    DEFAULT_POOL_SIZE,
+                    DEFAULT_POOL_SIZE,
+                    0L,
+                    TimeUnit.MILLISECONDS,
+                    new ArrayBlockingQueue<>(DEFAULT_PENDING_CLIENTS),
+                    r -> {
+                        Thread thread = new Thread(r, "mdbms-net-client");
+                        thread.setDaemon(false);
+                        return thread;
+                    },
+                    new ThreadPoolExecutor.AbortPolicy());
             state = State.RUNNING;
             readyLatch.countDown();
         }
@@ -109,6 +121,7 @@ public class DBMSServer {
             activeClientSockets.add(clientSocket);
         }
         try {
+            clientSocket.setSoTimeout(FramedJsonProtocol.REQUEST_TIMEOUT_MILLIS);
             workerPool.execute(() -> {
                 try {
                     new ClientHandler(clientSocket, sessionManager, processor, concurrencyControl).run();
@@ -116,7 +129,18 @@ public class DBMSServer {
                     releaseClient(clientSocket);
                 }
             });
-        } catch (RejectedExecutionException e) {
+        } catch (RejectedExecutionException | IOException e) {
+            if (e instanceof RejectedExecutionException) {
+                try {
+                    new FramedJsonProtocol(clientSocket, clientSocket.getInputStream())
+                            .writeResponse(FramedJsonProtocol.Response.error(
+                                    "CAPACITY_REACHED",
+                                    "Server client capacity is exhausted",
+                                    0));
+                } catch (IOException ignored) {
+                    // The socket may already be unavailable.
+                }
+            }
             releaseClient(clientSocket);
         }
     }
