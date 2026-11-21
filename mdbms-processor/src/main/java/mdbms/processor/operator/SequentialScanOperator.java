@@ -26,24 +26,40 @@ public final class SequentialScanOperator implements IQueryOperator, IRowProduci
     private final IConcurrencyControl concurrency;
     private final int txId;
     private final String table; 
+<<<<<<< HEAD
     private final boolean protectRange;
+=======
+    private final String qualifier;
+>>>>>>> origin/dev
     private List<Row> rows=List.of();
     private int pos;
     private ResultTableSchema tableSchema;
 
     public SequentialScanOperator(IDataAccess access, ISchemaCatalog catalog,
             IConcurrencyControl concurrency, int txId, String table) {
+<<<<<<< HEAD
         this(access, catalog, concurrency, txId, table, true);
     }
 
     public SequentialScanOperator(IDataAccess access, ISchemaCatalog catalog,
             IConcurrencyControl concurrency, int txId, String table, boolean protectRange) {
+=======
+        this(access, catalog, concurrency, txId, table, table);
+    }
+
+    public SequentialScanOperator(IDataAccess access, ISchemaCatalog catalog,
+            IConcurrencyControl concurrency, int txId, String table, String qualifier) {
+>>>>>>> origin/dev
         this.access=access; 
         this.catalog=catalog; 
         this.concurrency=concurrency;
         this.txId=txId; 
         this.table=table;
+<<<<<<< HEAD
         this.protectRange=protectRange;
+=======
+        this.qualifier=qualifier;
+>>>>>>> origin/dev
     }
 
     @Override
@@ -51,7 +67,7 @@ public final class SequentialScanOperator implements IQueryOperator, IRowProduci
         if (tableSchema == null) {
             TableSchema schema = catalog.getTableSchema(table);
             if (schema == null) throw new IllegalArgumentException("Tabel tidak ditemukan: "+table);
-            tableSchema = new ResultTableSchema(schema);
+            tableSchema = new ResultTableSchema(schema, qualifier);
         }
         return tableSchema;
     }
@@ -59,8 +75,7 @@ public final class SequentialScanOperator implements IQueryOperator, IRowProduci
     @Override public void open() {
         TableSchema schema=catalog.getTableSchema(table);
         if(schema==null) throw new IllegalArgumentException("Tabel tidak ditemukan: "+table);
-        tableSchema=new ResultTableSchema(schema);
-        if (protectRange) AccessPermission.read(concurrency,txId,DataItem.tableRange(table));
+        tableSchema=new ResultTableSchema(schema, qualifier);
         rows=access.readBlock(new DataRetrieval(table,
                 schema.columns().stream().map(ColumnDefinition::name).toList(), List.of())).rows();
         pos=0;

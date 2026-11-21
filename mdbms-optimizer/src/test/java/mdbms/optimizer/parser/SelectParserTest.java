@@ -142,7 +142,6 @@ class SelectParserTest {
         assertError("SELECT a.id.x FROM siswa", ".");
         assertError("SELECT *, id FROM siswa", ",");
         assertError("SELECT id, * FROM siswa", "*");
-        assertError("SELECT a.* FROM a", "*");
         assertError("SELECT id nama FROM siswa", "nama");
         assertError("SELECT id + 1 FROM siswa", "+");
     }

@@ -109,7 +109,7 @@ public class JoinConversionRule implements IOptimizationRule {
     static Set<String> tablesIn(QueryTree node, BindingContext bindings) {
         Set<String> result = new HashSet<>();
         if (node.getNodeType() == QueryNodeType.TABLE_SCAN) {
-            result.add(tableKey(node.getTableName(), bindings));
+            result.add(tableKey(node.getBindingName(), bindings));
         }
         for (QueryTree child : node.getChildren()) {
             result.addAll(tablesIn(child, bindings));
