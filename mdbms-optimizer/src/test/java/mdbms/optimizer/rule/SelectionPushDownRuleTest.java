@@ -205,7 +205,7 @@ class SelectionPushDownRuleTest {
         assertEquals(
             "CARTESIAN\n"
                 + "  SELECT [conditions=[(Students.gpa > 3.0)]]\n"
-                + "    TABLE_SCAN [table=STUDENTS]\n"
+                + "    TABLE_SCAN [table=students]\n"
                 + "  TABLE_SCAN [table=takes]\n",
             optimizeSelection("SELECT name FROM STUDENTS, takes WHERE Students.gpa > 3.0;"));
     }

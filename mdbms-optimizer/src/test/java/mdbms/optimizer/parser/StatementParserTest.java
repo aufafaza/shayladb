@@ -263,7 +263,7 @@ class StatementParserTest {
         assertError(";", ";");
         assertError("SELECT * FROM a", "SELECT");
         assertError("something a", "something");
-        assertError("CREATE TABLE a (id INT)", "TABLE");
+        assertError("CREATE VIEW a AS SELECT id FROM b", "VIEW");
         assertError("ROLLBACK", "ROLLBACK");
         assertError("START TRANSACTION", "START");
     }
@@ -372,19 +372,16 @@ class StatementParserTest {
         assertEquals(1, missingIndexColumn.getColumn());
     }
 
-    // DDL yang ga didukung dari klien ditolak dengan pesan yang nyebut statement nya
+    // Menerima DDL tabel dan menolak jenis DDL yang belum didukung.
     @Test
-    void rejectsUnsupportedDdlExplicitly() {
-        QuerySyntaxException createTable = assertThrows(QuerySyntaxException.class,
-            () -> parse("CREATE TABLE t (id INTEGER);"));
-        assertTrue(createTable.getMessage().contains("Unsupported statement 'CREATE TABLE'"), createTable.getMessage());
+    void acceptsTableDdlAndRejectsUnsupportedDdl() {
+        assertEquals(QueryNodeType.CREATE_TABLE, parse("CREATE TABLE t (id INTEGER);").getNodeType());
 
         QuerySyntaxException createView = assertThrows(QuerySyntaxException.class,
             () -> parse("CREATE VIEW v;"));
         assertTrue(createView.getMessage().contains("Unsupported statement 'CREATE VIEW'"), createView.getMessage());
 
-        QuerySyntaxException drop = assertThrows(QuerySyntaxException.class, () -> parse("DROP TABLE t;"));
-        assertTrue(drop.getMessage().contains("Unsupported statement 'DROP'"), drop.getMessage());
+        assertEquals(QueryNodeType.DROP_TABLE, parse("DROP TABLE t;").getNodeType());
 
         QuerySyntaxException alter = assertThrows(QuerySyntaxException.class, () -> parse("ALTER TABLE t;"));
         assertTrue(alter.getMessage().contains("Unsupported statement 'ALTER'"), alter.getMessage());

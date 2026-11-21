@@ -56,6 +56,7 @@ public final class SequentialScanOperator implements IQueryOperator, IRowProduci
         return tableSchema;
     }
 
+
     @Override public void open() {
         TableSchema schema=catalog.getTableSchema(table);
         if(schema==null) throw new IllegalArgumentException("Tabel tidak ditemukan: "+table);
