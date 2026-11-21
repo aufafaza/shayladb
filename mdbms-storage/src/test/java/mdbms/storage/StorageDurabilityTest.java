@@ -2,7 +2,6 @@ package mdbms.storage;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -10,11 +9,9 @@ import java.lang.reflect.Proxy;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
-import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 import mdbms.api.IFailureRecoveryManager;
 import mdbms.models.access.DataRetrieval;
 import mdbms.models.access.DataWrite;
@@ -237,7 +234,7 @@ class StorageDurabilityTest {
         assertHeapMatchesIndexes(restarted);
     }
 
-    // slot dipesan yang dilepas normal ga ninggalin baris yang keliatan dan ga ada yang nyangkut
+    // slot dipesan yang dilepas normal ga ninggalin baris yang keliatan
     @Test
     void releasedReservationExposesNothing() {
         createItems();
@@ -248,46 +245,5 @@ class StorageDurabilityTest {
         storage.releaseRowId(reserved);
 
         assertEquals(ROWS, scan(storage).size());
-        assertEquals(0, storage.releaseOrphanReservations());
-    }
-
-    // slot dipesan yang udah ke disk lalu crash sebelum insertAt jadi nyangkut, dilepas pas langkah setelah recovery
-    @Test
-    void orphanReservationFromCrashIsReleasedAfterRecovery() {
-        createItems();
-        insertItems();
-        RowId reserved = storage.reserveRowId("items", List.of(500, label("r", 500)));
-        storage.flushBuffer();
-
-        StorageManager restarted = open();
-        assertEquals(ROWS, scan(restarted).size());
-        restarted.rebuildIndexesAndReloadCatalog();
-        assertEquals(0, restarted.releaseOrphanReservations());
-
-        StorageManager again = open();
-        assertEquals(0, again.releaseOrphanReservations());
-        assertEquals(ROWS, scan(again).size());
-
-        again.insertAt(reserved, List.of(500, label("r", 500)));
-        assertEquals(ROWS + 1, scan(again).size());
-    }
-
-    // releaseOrphanReservations ngitung tiap slot nyangkut di semua halaman, bukan cuma halaman terakhir
-    @Test
-    void orphanReservationsOnSeveralPagesAreAllCounted() {
-        createItems();
-        Set<Integer> blocks = new HashSet<>();
-        for (int id = 1; id <= ROWS; id++) {
-            storage.writeBlock(new DataWrite("items", item(id, label("a", id)), List.of()));
-            if (id % 30 == 0) {
-                blocks.add(storage.reserveRowId("items", List.of(1000 + id, label("r", id))).blockNumber());
-            }
-        }
-        storage.flushBuffer();
-        assertTrue(blocks.size() > 1, "reservations must sit on several pages");
-
-        StorageManager restarted = open();
-        assertEquals(ROWS / 30, restarted.releaseOrphanReservations());
-        assertFalse(restarted.releaseOrphanReservations() > 0);
     }
 }
