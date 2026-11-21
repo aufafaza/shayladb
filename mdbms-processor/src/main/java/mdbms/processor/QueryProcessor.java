@@ -17,6 +17,7 @@ import mdbms.models.schema.ColumnDefinition;
 import mdbms.models.transaction.Transaction;
 import mdbms.models.transaction.TransactionState;
 import mdbms.processor.exception.QueryExecutionException;
+import mdbms.processor.exception.TransactionCompletionException;
 import mdbms.processor.operator.IQueryMessage;
 import mdbms.processor.operator.IQueryOperator;
 import mdbms.processor.operator.IRowProducingOperator;
@@ -87,7 +88,7 @@ public class QueryProcessor implements IQueryProcessor {
                 rows.add(row);
             }
         } catch (QueryExecutionException e) {
-            if (!(e instanceof mdbms.processor.exception.TransactionCompletionException)) {
+            if (!(e instanceof TransactionCompletionException)) {
                 abortIfActive(txId);
             }
             return new ExecutionResult(false, null, null, 0, "Error: " + e.getMessage());
