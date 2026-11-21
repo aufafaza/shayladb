@@ -5,6 +5,7 @@ import static org.junit.jupiter.api.Assertions.*;
 import java.io.*;
 import java.lang.reflect.Proxy;
 import java.net.*;
+import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.concurrent.*;
@@ -107,6 +108,85 @@ class DBMSServerTest {
         } finally { block.countDown(); }
     }
 
+    @Test
+    void rejectsClientsWhenWorkerAndQueueCapacityAreFull() throws Exception {
+        CountDownLatch entered = new CountDownLatch(DBMSServer.DEFAULT_POOL_SIZE);
+        CountDownLatch block = new CountDownLatch(1);
+        DBMSServer server = new DBMSServer(0, (sql, txId) -> {
+            entered.countDown();
+            try {
+                block.await();
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+            return new ExecutionResult(false, List.of(), List.of(), 0, "interrupted");
+        }, STUB_CONCURRENCY);
+
+        Future<?> future = startAsync(server);
+        assertTrue(server.awaitReady(5, TimeUnit.SECONDS));
+        List<Socket> accepted = new CopyOnWriteArrayList<>();
+        try {
+            for (int i = 0; i < DBMSServer.DEFAULT_POOL_SIZE + DBMSServer.DEFAULT_PENDING_CLIENTS; i++) {
+                Socket client = connect(server.getBoundPort());
+                accepted.add(client);
+                send(client, "SELECT 1;");
+            }
+            assertTrue(entered.await(5, TimeUnit.SECONDS));
+
+            try (Socket rejected = connect(server.getBoundPort())) {
+                send(rejected, "SELECT 1;");
+                rejected.setSoTimeout(2_000);
+                String response = readFrame(rejected);
+                assertTrue(response.contains("\"code\":\"CAPACITY_REACHED\""));
+            }
+        } finally {
+            accepted.forEach(DBMSServerTest::closeQuietly);
+            server.shutdown();
+            block.countDown();
+        }
+        future.get(5, TimeUnit.SECONDS);
+    }
+
+    @Test
+    void servesJsonAndInteractiveClientsOnSeparatePorts() throws Exception {
+        DBMSServer jsonServer = new DBMSServer(0, OK_PROCESSOR, STUB_CONCURRENCY);
+        InteractiveDBMSServer interactiveServer =
+                new InteractiveDBMSServer(0, OK_PROCESSOR, STUB_CONCURRENCY);
+        Future<?> jsonFuture = startAsync(jsonServer);
+        Future<?> interactiveFuture = startAsync(interactiveServer);
+
+        try {
+            assertTrue(jsonServer.awaitReady(5, TimeUnit.SECONDS));
+            assertTrue(interactiveServer.awaitReady(5, TimeUnit.SECONDS));
+            assertNotEquals(jsonServer.getBoundPort(), interactiveServer.getBoundPort());
+
+            try (Socket client = connect(jsonServer.getBoundPort())) {
+                assertEquals("OK", query(client, "SELECT 1;"));
+            }
+
+            try (Socket client = connect(interactiveServer.getBoundPort())) {
+                client.getOutputStream().write(new byte[] {(byte) 255, (byte) 253, 1});
+                client.getOutputStream().write("SELECT 1;\r\n".getBytes(StandardCharsets.UTF_8));
+                client.getOutputStream().flush();
+
+                InputStream input = client.getInputStream();
+                byte[] negotiation = input.readNBytes(6);
+                assertEquals(6, negotiation.length);
+                BufferedReader reader = new BufferedReader(new InputStreamReader(input, StandardCharsets.UTF_8));
+                assertEquals("ShaylaDB> SELECT 1;", reader.readLine());
+                assertTrue(reader.readLine().startsWith("Time: "));
+                assertEquals("(0 rows affected)", reader.readLine());
+                assertEquals("OK", reader.readLine());
+            }
+        } finally {
+            jsonServer.shutdown();
+            interactiveServer.shutdown();
+        }
+
+        jsonFuture.get(5, TimeUnit.SECONDS);
+        interactiveFuture.get(5, TimeUnit.SECONDS);
+    }
+
     private Future<?> startAsync(DBMSServer server) {
         return executor.submit(() -> { server.start(); return null; });
     }
@@ -118,12 +198,30 @@ class DBMSServerTest {
     }
 
     private static void send(Socket socket, String sql) throws IOException {
-        socket.getOutputStream().write(sql.getBytes(StandardCharsets.UTF_8));
+        byte[] payload = ("{\"sql\":\"" + sql.replace("\"", "\\\"") + "\"}")
+                .getBytes(StandardCharsets.UTF_8);
+        socket.getOutputStream().write(ByteBuffer.allocate(4).putInt(payload.length).array());
+        socket.getOutputStream().write(payload);
         socket.getOutputStream().flush();
     }
 
     private static String query(Socket socket, String sql) throws IOException {
         send(socket, sql);
-        return new BufferedReader(new InputStreamReader(socket.getInputStream(), StandardCharsets.UTF_8)).readLine();
+        String response = readFrame(socket);
+        return response.contains("\"message\":\"OK\"") ? "OK" : response;
+    }
+
+    private static String readFrame(Socket socket) throws IOException {
+        DataInputStream input = new DataInputStream(socket.getInputStream());
+        int length = input.readInt();
+        byte[] payload = input.readNBytes(length);
+        return new String(payload, StandardCharsets.UTF_8);
+    }
+
+    private static void closeQuietly(Socket socket) {
+        try {
+            socket.close();
+        } catch (IOException ignored) {
+        }
     }
 }

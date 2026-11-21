@@ -2,15 +2,11 @@ package mdbms.processor;
 
 import java.util.ArrayList;
 import java.util.List;
-import java.util.function.BiPredicate;
 
 import mdbms.api.IConcurrencyControl;
 import mdbms.api.IDataAccess;
-import mdbms.api.IFailureRecoveryManager;
-import mdbms.api.IQueryOptimizer;
 import mdbms.api.ISchemaCatalog;
 import mdbms.models.query.ParsedQuery;
-import mdbms.models.query.ColumnReference;
 import mdbms.models.query.QueryTree;
 import mdbms.models.query.SortDirection;
 import mdbms.models.schema.IndexInfo;
@@ -21,7 +17,6 @@ import mdbms.processor.operator.CartesianJoinOperator;
 import mdbms.processor.operator.CommitOperator;
 import mdbms.processor.operator.CreateIndexOperator;
 import mdbms.processor.operator.DeleteOperator;
-import mdbms.processor.operator.GroupByOperator;
 import mdbms.processor.operator.IQueryOperator;
 import mdbms.processor.operator.IndexScanOperator;
 import mdbms.processor.operator.InsertOperator;
@@ -92,7 +87,7 @@ public class PlanTranslator {
             case GROUP_BY:
                 // return new GroupByOperator(childOperators.get(0), queryTree.getValue(),
                 // false);
-                return new GroupByOperator(childOperators.get(0));
+                return emptyOperator();
             case INSERT:
                 return new InsertOperator(dataAccess, schemaCatalog, concurrencyControl, txId,
                         queryTree.getTableName(), queryTree.getInsertValues());

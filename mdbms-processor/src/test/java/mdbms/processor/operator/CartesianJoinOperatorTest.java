@@ -21,7 +21,7 @@ class CartesianJoinOperatorTest {
         MockOperator right = new MockOperator();
         right.addColumn(new ColumnReference("course", "id"));
         right.addColumn(new ColumnReference("course", "title"));
-        right.newRow(3170, "Databases");
+        right.newRow(3170, "Artificial Intelligence");
         right.newRow(3140, "Database System");
 
         CartesianJoinOperator operator = new CartesianJoinOperator(left, right);
