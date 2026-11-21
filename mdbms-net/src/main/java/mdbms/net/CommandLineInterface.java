@@ -12,8 +12,8 @@ import java.util.Queue;
 import mdbms.models.query.ExecutionResult;
 
 public class CommandLineInterface {
-    static final int MAX_TELNET_QUERY_BYTES = FramedJsonProtocol.MAX_FRAME_BYTES;
-    static final int TELNET_REQUEST_TIMEOUT_MILLIS = 5 * 60 * 1000; // 5 minutes
+    public static final int MAX_TELNET_QUERY_BYTES = FramedJsonProtocol.MAX_FRAME_BYTES;
+    public static final int TELNET_REQUEST_TIMEOUT_MILLIS = 5 * 60 * 1000; // 5 minutes
 
     private PrintWriter writer;
     private TelnetHandler telnetHandler;

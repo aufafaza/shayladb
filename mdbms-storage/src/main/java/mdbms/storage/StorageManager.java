@@ -234,6 +234,41 @@ public final class StorageManager implements IDataAccess, ISchemaCatalog, IStati
         }
     }
 
+    // cek isi baru muat di slot yang sama atau ga, dipanggil QP sebelum minta lock dan nulis log
+    // false berarti UPDATE harus lewat relokasi, jalur ini ga ngubah apa apa
+    @Override
+    public boolean canUpdateInPlace(RowId rowId, List<Object> values){
+        TableSchema schema = requireSchema(rowId.tableName());
+
+        validateRow(schema, values);
+
+        return heapFileOf(rowId.tableName()).canUpdateInPlace(rowId, values);
+    }
+
+    // UPDATE yang ga pernah mindahin baris, false kalau ga muat dan heap sama index ga berubah
+    // bisa false walau canUpdateInPlace tadi true kalau ruang halaman keburu dipakai, pemanggil lanjut lewat relokasi
+    @Override
+    public boolean updateInPlace(RowId rowId, List<Object> values){
+        TableSchema schema = requireSchema(rowId.tableName());
+
+        validateRow(schema, values);
+
+        HeapFile heapFile = heapFileOf(rowId.tableName());
+
+        Row oldRow = heapFile.fetch(rowId);
+        if (!heapFile.updateInPlace(rowId, values)){
+            return false;
+        }
+
+        try{
+            afterWrite(rowId.tableName(), oldRow, new Row(rowId, new ArrayList<>(values)));
+            return true;
+        } catch (RuntimeException e){
+            undo(e, () -> heapFile.updateInPlace(oldRow.rowId(), oldRow.values()));
+            throw e;
+        }
+    }
+
     // hapus baris lewat RowId lalu buang dari semua index, null kalau barisnya udah ga ada
     // dibikin aman diulang biar redo DELETE dan undo INSERT dari FRM ga gagal walau perubahannya udah sampai disk
     @Override
@@ -341,6 +376,12 @@ public final class StorageManager implements IDataAccess, ISchemaCatalog, IStati
     @Override
     public void flushBuffer(){
         bufferPool.flushBuffer();
+    }
+
+    @Override public void close() {
+        bufferPool.flushBuffer();
+        bufferPool.discardAllFrames();
+        tables.clear();
     }
 
 

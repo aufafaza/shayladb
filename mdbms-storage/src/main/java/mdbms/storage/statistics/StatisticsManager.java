@@ -26,7 +26,7 @@ public final class StatisticsManager {
         return switch(col.type()){
             case INTEGER, FLOAT -> Integer.BYTES;
             case CHAR -> col.length();
-            case VARCHAR -> Integer.BYTES + val.toString().getBytes(StandardCharsets.UTF_8).length;
+            case VARCHAR -> Short.BYTES + val.toString().getBytes(StandardCharsets.UTF_8).length;
         };
     }
     private static long estimateSchemaRecSize(TableSchema schema){ //helper buat estimate record size schema
@@ -35,7 +35,7 @@ public final class StatisticsManager {
             size += switch(c.type()){
                 case INTEGER, FLOAT -> Integer.BYTES;
                 case CHAR -> c.length();
-                case VARCHAR -> Integer.BYTES + c.length();
+                case VARCHAR -> Short.BYTES + c.length();
             };
         }
         return size;
@@ -80,7 +80,13 @@ public final class StatisticsManager {
             return;
         }
         int nr = Math.max(0, cached.nr() + rowDelta);
-        cache.put(table, new Statistic(cached.tableName(), nr, cached.br(), cached.lr(), cached.fr(), cached.distinctValues()));
+        Map<String, Integer> normalizedDistinctValues = new HashMap<>();
+        if(cached.distinctValues() != null){
+            cached.distinctValues().forEach((column, count) ->
+                    normalizedDistinctValues.put(column, Math.min(count == null ? 0 : count, nr)));
+        }
+        cache.put(table, new Statistic(cached.tableName(), nr, cached.br(), cached.lr(), cached.fr(),
+                Map.copyOf(normalizedDistinctValues)));
         changes.put(table, changed);
     }
     private synchronized Statistic compute(HeapFile file, TableSchema schema){

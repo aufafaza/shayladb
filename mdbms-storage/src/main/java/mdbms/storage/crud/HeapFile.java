@@ -151,23 +151,8 @@ public class HeapFile{
 
     // ganti isi baris di tempat, kalau ga muat baris baru di insert dulu baru yang lama dihapus biar data ga hilang kalau gagal
     public Row update(RowId rowId, List<Object> values){
-        byte[] record = serializer.serialize(values, schema);
-        Block block = pool.pin(fileName, rowId.blockNumber());
-        boolean dirty = false;
-
-        try{
-            SlottedPage page = SlottedPage.of(block.data);
-            int slot = rowId.slot();
-            boolean replaced = page.replaceRecord(slot, record);
-
-            if (replaced) {
-                writeBack(block, page);
-                dirty = true;
-                return new Row(rowId, values);
-            }
-
-        } finally{
-            pool.unpin(block, dirty, NO_LSN);
+        if (updateInPlace(rowId, values)){
+            return new Row(rowId, values);
         }
 
         RowId moved = insert(values);
@@ -183,6 +168,42 @@ public class HeapFile{
         }
 
         return new Row(moved, values);
+    }
+
+    // true kalau isi baru muat di slot yang sama, ga ngubah apa apa
+    // hasil nya bisa basi kalau ruang halaman keburu dipakai, jadi tetap pakai updateInPlace yang bisa nolak
+    public boolean canUpdateInPlace(RowId rowId, List<Object> values){
+        byte[] record = serializer.serialize(values, schema);
+        Block block = pool.pin(fileName, rowId.blockNumber());
+
+        try{
+            SlottedPage page = SlottedPage.of(block.data);
+            return page.canReplace(rowId.slot(), record.length);
+
+        } finally{
+            pool.unpin(block, false, NO_LSN);
+        }
+    }
+
+    // ganti isi baris di slot yang sama, false kalau ga muat dan halaman ga diubah sama sekali
+    // ga pernah mindahin baris sendiri biar relokasi bisa dikunci dan dicatat dulu sama pemanggil
+    public boolean updateInPlace(RowId rowId, List<Object> values){
+        byte[] record = serializer.serialize(values, schema);
+        Block block = pool.pin(fileName, rowId.blockNumber());
+        boolean dirty = false;
+
+        try{
+            SlottedPage page = SlottedPage.of(block.data);
+            if (!page.replaceRecord(rowId.slot(), record)){
+                return false;
+            }
+            writeBack(block, page);
+            dirty = true;
+            return true;
+
+        } finally{
+            pool.unpin(block, dirty, NO_LSN);
+        }
     }
 
     public Row delete(RowId rowId){
