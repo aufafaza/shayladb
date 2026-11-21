@@ -46,6 +46,7 @@ public class InsertOperator implements IQueryOperator, IWriteOperator {
     public IResultRow next() {
         // primary key duplikat ditolak sebelum ada slot yang dipesan atau log yang ditulis
         dataAccess.checkPrimaryKey(tableName, rowValues, null);
+        AccessPermission.write(concurrencyControlManager, transactionId, DataItem.tableRange(tableName), null, null);
         RowId rowId = dataAccess.reserveRowId(tableName, rowValues);
         WriteContext ctx;
         try {

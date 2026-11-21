@@ -576,6 +576,9 @@ public final class ConcurrencyControlManager implements IConcurrencyControl {
     // cause dipakai buat nyimpen error asli biar ga ketimpa error rollback
     private void failAndAbort(Transaction tx, String reason, RuntimeException cause) {
         synchronized (tx) {
+            if (tx.getState() == TransactionState.ABORTED || tx.getState() == TransactionState.COMMITTED) {
+                return;
+            }
             if (tx.getState() != TransactionState.FAILED) tx.setState(TransactionState.FAILED);
             RuntimeException rollbackFailure = null;
             if (frm != null) {
