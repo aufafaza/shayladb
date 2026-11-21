@@ -107,6 +107,22 @@ class ConcurrencyControlManagerTest {
     }
 
     @Test
+    void rollbackFailureStillReleasesResourcesAndRemovesTransaction() {
+        int txId = ccm.beginTransaction();
+        Transaction tx = ccm.getTransaction(txId);
+        frm.rollbackSucceeds = false;
+
+        IllegalStateException failure = assertThrows(IllegalStateException.class,
+                () -> ccm.abortTransaction(txId, "disconnect"));
+
+        assertTrue(failure.getMessage().contains("Rollback failed"));
+        assertEquals(TransactionState.ABORTED, tx.getState());
+        assertEquals(List.of(txId), frm.rolledBack);
+        assertEquals(List.of(txId), protocol.released);
+        assertNull(ccm.getTransaction(txId));
+    }
+
+    @Test
     void requestsReturnProtocolDecision() {
         int txId = ccm.beginTransaction();
 
@@ -224,6 +240,7 @@ class ConcurrencyControlManagerTest {
 
     private static final class RecordingRecoveryManager implements IFailureRecoveryManager {
         private boolean logSucceeds = true;
+        private boolean rollbackSucceeds = true;
         private final List<LogType> transactionLogs = new ArrayList<>();
         private final List<Integer> rolledBack = new ArrayList<>();
 
@@ -258,7 +275,7 @@ class ConcurrencyControlManagerTest {
         public RecoveryResult rollbackTransaction(int txId) {
             rolledBack.add(txId);
             transactionLogs.add(LogType.ABORT);
-            return result(true);
+            return result(rollbackSucceeds);
         }
 
         @Override

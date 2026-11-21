@@ -219,17 +219,32 @@ public class ClientHandler implements Runnable {
         if (autoCommit) {
             session.beginTransaction(txId);
         }
+        session.markInFlight(txId);
 
         try {
             ExecutionResult result = processor.executeQuery(query, txId);
-            if (result == null) {
-                abortIfActive(txId, "Query processor returned no result");
+            if (session.isDisconnected()) {
                 session.clearTransaction();
+                return result == null
+                        ? new ExecutionResult(false, null, null, 0, "Client disconnected")
+                        : result;
+            }
+            if (result == null) {
+                RuntimeException rollbackFailure = abortIfActive(txId, "Query processor returned no result");
+                session.clearTransaction();
+                if (rollbackFailure != null) {
+                    return new ExecutionResult(false, null, null, 0,
+                            "ROLLBACK failed: " + rollbackFailure.getMessage());
+                }
                 return new ExecutionResult(false, null, null, 0, "Query processor returned no result");
             }
             if (!result.success()) {
-                abortIfActive(txId, "Query execution failed");
+                RuntimeException rollbackFailure = abortIfActive(txId, "Query execution failed");
                 session.clearTransaction();
+                if (rollbackFailure != null) {
+                    return new ExecutionResult(false, null, null, 0,
+                            "ROLLBACK failed: " + rollbackFailure.getMessage());
+                }
                 return result;
             }
 
@@ -245,8 +260,12 @@ public class ClientHandler implements Runnable {
             }
             return result;
         } catch (RuntimeException e) {
-            abortIfActive(txId, "Failed to execute query: " + e.getMessage());
+            RuntimeException rollbackFailure = abortIfActive(txId, "Failed to execute query: " + e.getMessage());
             session.clearTransaction();
+            if (rollbackFailure != null) {
+                return new ExecutionResult(false, null, null, 0,
+                        "ROLLBACK failed: " + rollbackFailure.getMessage());
+            }
             return new ExecutionResult(false, null, null, 0,
                     FramedJsonProtocol.messageOrDefault(e.getMessage(), "Query execution failed"));
         }
@@ -261,24 +280,39 @@ public class ClientHandler implements Runnable {
         return parts[0].toUpperCase();
     }
 
-    private void abortIfActive(int txId, String reason) {
+    private RuntimeException abortIfActive(int txId, String reason) {
         try {
             concurrencyControl.abortTransaction(txId, reason);
+            return null;
+        } catch (RuntimeException e) {
+            return e;
+        }
+    }
+
+    public void disconnect() {
+        session.markDisconnected();
+        int txId = session.getInFlightTxId();
+        if (txId == 0) {
+            txId = session.isTransacting() ? session.getCurrentTxId() : 0;
+        }
+        if (txId != 0) {
+            try {
+                concurrencyControl.abortTransaction(txId, "Client disconnected");
+            } catch (RuntimeException e) {
+                System.err.println("[ERROR] Could not abort transaction " + txId + ": " + e.getMessage());
+            } finally {
+                session.clearTransaction();
+            }
+        }
+        try {
+            clientSocket.close();
         } catch (Exception ignored) {
-            // QueryProcessor may already have aborted and removed the transaction.
+            // Socket cleanup is best-effort; transaction resolution is attempted above.
         }
     }
 
     private void closeSession() {
-        if (session.isTransacting()) {
-            int txId = session.getCurrentTxId();
-            try {
-                concurrencyControl.abortTransaction(txId, "Client disconnected");
-            } catch (Exception e) {
-                System.err.println("[ERROR] Could not abort transaction " + txId + ": " + e.getMessage());
-            }
-            session.clearTransaction();
-        }
+        disconnect();
 
         sessionManager.removeSession(session.getSessionId());
         try {

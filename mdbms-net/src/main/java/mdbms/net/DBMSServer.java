@@ -22,6 +22,7 @@ public class DBMSServer {
     private final IConcurrencyControl concurrencyControl;
     private final ClientHandler.Mode mode;
     private final Set<Socket> activeClientSockets = ConcurrentHashMap.newKeySet();
+    private final Map<Socket, ClientHandler> activeHandlers = new ConcurrentHashMap<>();
     private final CountDownLatch readyLatch = new CountDownLatch(1);
     private final CountDownLatch stoppedLatch = new CountDownLatch(1);
 
@@ -158,9 +159,15 @@ public class DBMSServer {
                     + clientSocket.getInetAddress() + ":" + clientSocket.getPort());
             clientSocket.setSoTimeout(FramedJsonProtocol.REQUEST_TIMEOUT_MILLIS);
             workerPool.execute(() -> {
+                ClientHandler handler = null;
                 try {
-                    new ClientHandler(clientSocket, sessionManager, processor, concurrencyControl, mode).run();
+                    handler = new ClientHandler(clientSocket, sessionManager, processor, concurrencyControl, mode);
+                    activeHandlers.put(clientSocket, handler);
+                    handler.run();
                 } finally {
+                    if (handler != null) {
+                        activeHandlers.remove(clientSocket, handler);
+                    }
                     releaseClient(clientSocket);
                 }
             });
@@ -208,7 +215,13 @@ public class DBMSServer {
         } catch (IOException e) {
             closeError = e;
         } finally {
-            clientsToClose.forEach(DBMSServer::closeQuietly);
+            clientsToClose.forEach(socket -> {
+                ClientHandler handler = activeHandlers.remove(socket);
+                if (handler != null) {
+                    handler.disconnect();
+                }
+                closeQuietly(socket);
+            });
         }
         return closeError;
     }
