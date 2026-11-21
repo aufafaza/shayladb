@@ -8,8 +8,19 @@ import mdbms.models.data.DataItem;
 import mdbms.models.transaction.AccessStatus;
 import mdbms.processor.exception.TransactionAbortedException;
 
-final class AccessPermission {
+public final class AccessPermission {
+    private static final long DEFAULT_WAIT_TIMEOUT_NANOS = 5_000_000_000L;
+    private static volatile long waitTimeoutNanos = DEFAULT_WAIT_TIMEOUT_NANOS;
+
     private AccessPermission() {
+    }
+
+    public static void setWaitTimeoutMillis(long timeoutMillis) {
+        waitTimeoutNanos = Math.max(1L, timeoutMillis) * 1_000_000L;
+    }
+
+    public static void resetWaitTimeout() {
+        waitTimeoutNanos = DEFAULT_WAIT_TIMEOUT_NANOS;
     }
 
     static void read(IConcurrencyControl concurrencyControlManager, int transactionId, DataItem item) {
@@ -26,10 +37,21 @@ final class AccessPermission {
     }
 
     private static void await(IConcurrencyControl concurrency, int transactionId, Supplier<AccessStatus> request) {
+        long deadline = System.nanoTime() + waitTimeoutNanos;
         AccessStatus status = request.get();
         while (status == AccessStatus.WAITING) {
-            if (concurrency.isStopping() || Thread.currentThread().isInterrupted()) throw new TransactionAbortedException(transactionId);
-            LockSupport.parkNanos(10_000_000);
+            boolean interrupted = Thread.interrupted();
+            if (concurrency.isStopping() || interrupted || System.nanoTime() >= deadline) {
+                try {
+                    concurrency.abortTransaction(transactionId, "Access wait cancelled or timed out");
+                } catch (RuntimeException ignored) {
+                }
+                if (interrupted) {
+                    Thread.currentThread().interrupt();
+                }
+                throw new TransactionAbortedException(transactionId);
+            }
+            LockSupport.parkNanos(2_000_000);
             status = request.get();
         }
         if (status == AccessStatus.ABORTED) {
