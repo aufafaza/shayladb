@@ -263,7 +263,7 @@ class StatementParserTest {
         assertError(";", ";");
         assertError("SELECT * FROM a", "SELECT");
         assertError("something a", "something");
-        assertError("CREATE TABLE a (id INT)", "TABLE");
+        assertError("CREATE VIEW a AS SELECT id FROM b", "VIEW");
         assertError("ROLLBACK", "ROLLBACK");
         assertError("START TRANSACTION", "START");
     }

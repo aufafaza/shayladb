@@ -2,11 +2,16 @@ package mdbms.models.query;
 
 import java.util.List;
 import java.util.Objects;
+import mdbms.models.schema.DropBehavior;
+import mdbms.models.schema.TableSchema;
 
 public class QueryTree {
     private final QueryNodeType nodeType;
     private PhysicalAlgorithm algorithm;
-    private final String tableName;
+    private String tableName;
+    private String tableAlias;
+    private TableSchema tableDefinition;
+    private DropBehavior dropBehavior = DropBehavior.RESTRICT;
     private List<ExpressionTree> conditions;
     private final List<QueryTree> children;
     private int estimatedCost;
@@ -19,6 +24,63 @@ public class QueryTree {
     private List<ExpressionTree> insertValues = List.of();
     private String indexName;
     private ColumnReference indexColumn;
+    private IndexScanSpec indexScan;
+
+    public IndexScanSpec getIndexScan() {
+        return indexScan;
+    }
+
+    public void setIndexScan(IndexScanSpec spec) {
+        requireNodeType(QueryNodeType.TABLE_SCAN);
+        indexScan = Objects.requireNonNull(spec, "spec");
+    }
+
+    public String getTableAlias() {
+        return tableAlias;
+    }
+
+    public String getBindingName() {
+        return tableAlias == null ? tableName : tableAlias;
+    }
+
+    public void setTableAlias(String alias) {
+        requireNodeType(QueryNodeType.TABLE_SCAN);
+        if (alias != null && alias.isBlank()) {
+            throw new IllegalArgumentException("Table alias must not be blank");
+        }
+        tableAlias = alias;
+    }
+
+    /** Records the catalog's canonical physical name after binding. */
+    public void setTableName(String name) {
+        if (name == null || name.isBlank()) {
+            throw new IllegalArgumentException("Table name must not be blank");
+        }
+        tableName = name;
+    }
+
+    public TableSchema getTableDefinition() {
+        return tableDefinition;
+    }
+
+    public void setTableDefinition(TableSchema schema) {
+        requireNodeType(QueryNodeType.CREATE_TABLE);
+        Objects.requireNonNull(schema, "schema");
+        if (!Objects.equals(tableName, schema.tableName())) {
+            throw new IllegalArgumentException("Table definition must match the node's table name");
+        }
+        tableDefinition = new TableSchema(schema.tableName(), List.copyOf(schema.columns()),
+            List.copyOf(schema.primaryKey()), List.copyOf(schema.foreignKeys()));
+    }
+
+    public DropBehavior getDropBehavior() {
+        return dropBehavior;
+    }
+
+    public void setDropBehavior(DropBehavior behavior) {
+        requireNodeType(QueryNodeType.DROP_TABLE);
+        dropBehavior = Objects.requireNonNull(behavior, "behavior");
+    }
 
     public QueryTree(
         QueryNodeType nodeType,
@@ -227,6 +289,15 @@ public class QueryTree {
         java.util.List<String> details = new java.util.ArrayList<>();
         if (node.tableName != null) {
             details.add("table=" + node.tableName);
+        }
+        if (node.tableAlias != null) {
+            details.add("alias=" + node.tableAlias);
+        }
+        if (node.tableDefinition != null) {
+            details.add("definition=" + node.tableDefinition);
+        }
+        if (node.nodeType == QueryNodeType.DROP_TABLE) {
+            details.add("behavior=" + node.dropBehavior);
         }
         if (!node.projectionColumns.isEmpty()) {
             details.add("columns=" + node.projectionColumns);
