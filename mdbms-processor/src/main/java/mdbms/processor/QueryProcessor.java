@@ -48,10 +48,7 @@ public class QueryProcessor implements IQueryProcessor {
         if (explain.matches()) {
             return new ExecutionResult(true, List.of(), List.of(), 0, queryOptimizer.explainQuery(explain.group(1)));
         }
-        ParsedQuery parsedQuery = queryOptimizer.parseQuery(query);
-        ParsedQuery optimizedQuery = queryOptimizer.optimizeQuery(parsedQuery);
-        IQueryOperator translatedQuery = planTranslator.translate(optimizedQuery, txId);
-
+        IQueryOperator translatedQuery = null;
         List<String> columns = new ArrayList<>();
         List<List<Object>> rows = new ArrayList<>();
         try {
