@@ -19,7 +19,6 @@ import mdbms.optimizer.binder.BindingContext;
 import mdbms.optimizer.binder.QueryBinder;
 import mdbms.optimizer.cost.CardinalityEstimator;
 import mdbms.optimizer.cost.SystemCostEstimator;
-import mdbms.optimizer.lexer.ShaylaLexer;
 import mdbms.optimizer.parser.ShaylaParser;
 import org.junit.jupiter.api.Test;
 
@@ -57,7 +56,7 @@ class RuleBasedOptimizerIntegrationTest {
 
     private static Run run(String sql) {
         IndexedCatalog catalog = catalog();
-        QueryTree tree = new ShaylaParser(new ShaylaLexer("")).parseToTree(sql);
+        QueryTree tree = new ShaylaParser().parseToTree(sql);
         BindingContext bindings = new QueryBinder(catalog).bind(tree);
         SystemCostEstimator estimator = new SystemCostEstimator(catalog, new CardinalityEstimator());
         OptimizationContext context = new OptimizationContext(bindings, catalog, catalog, estimator);
@@ -76,7 +75,7 @@ class RuleBasedOptimizerIntegrationTest {
 
         assertEquals("""
             PROJECT [columns=[students.name, takes.code]]
-              JOIN [conditions=[(students.id = takes.nim)]]
+              JOIN [conditions=[(students.id = takes.nim)], algorithm=BLOCK_NESTED_LOOP_JOIN]
                 PROJECT [columns=[students.id, students.name]]
                   TABLE_SCAN [table=students, conditions=[(students.id = 7)], indexScan=idx_students_id id EQ 7, algorithm=INDEX_SCAN]
                 PROJECT [columns=[takes.nim, takes.code]]
@@ -104,7 +103,7 @@ class RuleBasedOptimizerIntegrationTest {
 
         assertEquals("""
             PROJECT [columns=[students.id, students.name, students.gpa, takes.nim, takes.code, takes.grade]]
-              JOIN [conditions=[(students.id = takes.nim)]]
+              JOIN [conditions=[(students.id = takes.nim)], algorithm=BLOCK_NESTED_LOOP_JOIN]
                 TABLE_SCAN [table=students, conditions=[(students.id = 7)], indexScan=idx_students_id id EQ 7, algorithm=INDEX_SCAN]
                 TABLE_SCAN [table=takes]
             """, print(run.optimized()));
@@ -144,7 +143,7 @@ class RuleBasedOptimizerIntegrationTest {
     @Test
     void originalTreeIsLeftUntouched() {
         String sql = "SELECT students.name FROM students, takes WHERE students.id = takes.nim AND students.id = 7";
-        QueryTree fresh = new ShaylaParser(new ShaylaLexer("")).parseToTree(sql);
+        QueryTree fresh = new ShaylaParser().parseToTree(sql);
         new QueryBinder(catalog()).bind(fresh);
 
         Run run = run(sql);

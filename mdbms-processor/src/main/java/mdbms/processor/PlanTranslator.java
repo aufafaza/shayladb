@@ -16,8 +16,6 @@ import mdbms.processor.operator.BeginOperator;
 import mdbms.processor.operator.CartesianJoinOperator;
 import mdbms.processor.operator.CommitOperator;
 import mdbms.processor.operator.CreateIndexOperator;
-import mdbms.processor.operator.CreateTableOperator;
-import mdbms.processor.operator.DropTableOperator;
 import mdbms.processor.operator.DeleteOperator;
 import mdbms.processor.operator.IQueryOperator;
 import mdbms.processor.operator.IndexScanOperator;
