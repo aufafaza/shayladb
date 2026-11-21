@@ -13,7 +13,9 @@ public class DBMSServer {
     public static final int DEFAULT_POOL_SIZE = 10;
     public static final int DEFAULT_PENDING_CLIENTS = 10;
 
-    public enum State { NEW, RUNNING, STOPPING, STOPPED, FAILED }
+    public enum State {
+        NEW, RUNNING, STOPPING, STOPPED, FAILED
+    }
 
     private final int port;
     private final IQueryProcessor processor;
@@ -40,6 +42,7 @@ public class DBMSServer {
             }
             try {
                 serverSocket = new ServerSocket(port);
+                System.out.println("[INFO] DBMS Server successfully bind to port " + port);
             } catch (IOException | RuntimeException e) {
                 terminate(State.FAILED);
                 throw e;
@@ -67,7 +70,8 @@ public class DBMSServer {
                 try {
                     dispatchClient(serverSocket.accept(), sessionManager);
                 } catch (IOException e) {
-                    if (state == State.RUNNING) acceptError = e;
+                    if (state == State.RUNNING)
+                        acceptError = e;
                     break;
                 }
             }
@@ -86,7 +90,8 @@ public class DBMSServer {
                 serverSocket = null;
                 terminate(State.STOPPED);
             }
-            if (acceptError != null) throw acceptError;
+            if (acceptError != null)
+                throw acceptError;
         }
     }
 
@@ -97,30 +102,50 @@ public class DBMSServer {
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
         }
-        if (closeError != null) throw closeError;
+        if (closeError != null)
+            throw closeError;
     }
 
-    public boolean isRunning() { return state == State.RUNNING; }
-    public State getState() { return state; }
+    public boolean isRunning() {
+        return state == State.RUNNING;
+    }
+
+    public State getState() {
+        return state;
+    }
+
     public int getBoundPort() {
         ServerSocket socket = serverSocket;
         return state == State.RUNNING && socket != null ? socket.getLocalPort() : -1;
     }
+
     public boolean awaitReady(long timeout, TimeUnit unit) throws InterruptedException {
         return readyLatch.await(timeout, unit) && state == State.RUNNING;
     }
+
     public boolean awaitStopped(long timeout, TimeUnit unit) throws InterruptedException {
         return stoppedLatch.await(timeout, unit);
     }
-    int getActiveClientCount() { return activeClientSockets.size(); }
-    boolean isWorkerPoolTerminated() { return workerPool == null || workerPool.isTerminated(); }
+
+    int getActiveClientCount() {
+        return activeClientSockets.size();
+    }
+
+    boolean isWorkerPoolTerminated() {
+        return workerPool == null || workerPool.isTerminated();
+    }
 
     private void dispatchClient(Socket clientSocket, SessionManager sessionManager) {
         synchronized (this) {
-            if (state != State.RUNNING) { closeQuietly(clientSocket); return; }
+            if (state != State.RUNNING) {
+                closeQuietly(clientSocket);
+                return;
+            }
             activeClientSockets.add(clientSocket);
         }
         try {
+            System.out.println("[INFO] Client connected from: "
+                    + clientSocket.getInetAddress() + ":" + clientSocket.getPort());
             clientSocket.setSoTimeout(FramedJsonProtocol.REQUEST_TIMEOUT_MILLIS);
             workerPool.execute(() -> {
                 try {
@@ -137,6 +162,10 @@ public class DBMSServer {
                                     "CAPACITY_REACHED",
                                     "Server client capacity is exhausted",
                                     0));
+                    System.out
+                            .println("[INFO] Capacity reached. Rejected client from: "
+                                    + clientSocket.getInetAddress()
+                                    + ":" + clientSocket.getPort());
                 } catch (IOException ignored) {
                     // The socket may already be unavailable.
                 }
@@ -149,17 +178,23 @@ public class DBMSServer {
         ServerSocket socketToClose;
         List<Socket> clientsToClose;
         synchronized (this) {
-            if (state == State.NEW) { terminate(State.STOPPED); return null; }
-            if (state == State.STOPPED || state == State.FAILED) return null;
+            if (state == State.NEW) {
+                terminate(State.STOPPED);
+                return null;
+            }
+            if (state == State.STOPPED || state == State.FAILED)
+                return null;
             state = State.STOPPING;
             socketToClose = serverSocket;
             clientsToClose = List.copyOf(activeClientSockets);
             activeClientSockets.clear();
-            if (workerPool != null) workerPool.shutdown();
+            if (workerPool != null)
+                workerPool.shutdown();
         }
         IOException closeError = null;
         try {
-            if (socketToClose != null && !socketToClose.isClosed()) socketToClose.close();
+            if (socketToClose != null && !socketToClose.isClosed())
+                socketToClose.close();
         } catch (IOException e) {
             closeError = e;
         } finally {
@@ -169,14 +204,28 @@ public class DBMSServer {
     }
 
     private void terminate(State finalState) {
+        System.out.println("[INFO] Server terminated");
         state = finalState;
         readyLatch.countDown();
         stoppedLatch.countDown();
     }
 
-    private void releaseClient(Socket clientSocket) { activeClientSockets.remove(clientSocket); closeQuietly(clientSocket); }
+    private void releaseClient(Socket clientSocket) {
+        try {
+            System.out.println("[INFO] Releasing client from: "
+                    + clientSocket.getInetAddress() + ":" + clientSocket.getPort());
+        } finally {
+            activeClientSockets.remove(clientSocket);
+            closeQuietly(clientSocket);
+        }
+    }
 
     private static void closeQuietly(AutoCloseable resource) {
-        if (resource != null) try { resource.close(); } catch (Exception ignored) {}
+        if (resource != null) {
+            try {
+                resource.close();
+            } catch (Exception ignored) {
+            }
+        }
     }
 }
