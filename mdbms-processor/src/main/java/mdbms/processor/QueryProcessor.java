@@ -15,6 +15,7 @@ import mdbms.models.schema.ColumnDefinition;
 import mdbms.models.transaction.Transaction;
 import mdbms.models.transaction.TransactionState;
 import mdbms.processor.exception.QueryExecutionException;
+import mdbms.processor.exception.TransactionAbortedException;
 import mdbms.processor.operator.IQueryMessage;
 import mdbms.processor.operator.IQueryOperator;
 import mdbms.processor.operator.IRowProducingOperator;
