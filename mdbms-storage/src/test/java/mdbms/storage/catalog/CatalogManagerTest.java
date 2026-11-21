@@ -10,6 +10,7 @@ import java.nio.file.Path;
 import java.util.List;
 import mdbms.models.schema.ColumnDefinition;
 import mdbms.models.schema.DataType;
+import mdbms.models.schema.DropBehavior;
 import mdbms.models.schema.ForeignKeyAction;
 import mdbms.models.schema.ForeignKeyConstraint;
 import mdbms.models.schema.IndexInfo;
@@ -177,5 +178,44 @@ class CatalogManagerTest {
     void blankDirectoryIsRejected() {
         assertCode(StorageErrorCode.IO_FAILURE, () -> new CatalogManager(" "));
         assertCode(StorageErrorCode.IO_FAILURE, () -> new CatalogManager(null));
+    }
+
+    @Test
+    void restrictPreservesSchemasAndIndexesWhenReferenced() {
+        catalog.saveSchema(STUDENTS);
+        catalog.saveSchema(TAKES);
+        catalog.registerIndex(IDX_NIM);
+        assertCode(StorageErrorCode.SCHEMA_VIOLATION, () -> catalog.dropTable("students"));
+        assertEquals(STUDENTS, catalog.getSchema("students"));
+        assertEquals(TAKES, catalog.getSchema("takes"));
+        assertEquals(List.of(IDX_NIM), catalog.getIndexes("students"));
+    }
+
+    @Test
+    void cascadeRemovesIncomingConstraintsAndPersistsReferencingTable() {
+        catalog.saveSchema(STUDENTS);
+        catalog.saveSchema(TAKES);
+        catalog.registerIndex(IDX_NIM);
+        catalog.dropTable("students", DropBehavior.CASCADE);
+        CatalogManager reopened = new CatalogManager(directory.toString());
+        assertEquals(List.of("takes"), reopened.listTables());
+        assertTrue(reopened.getSchema("takes").foreignKeys().isEmpty());
+        assertEquals(TAKES.columns(), reopened.getSchema("takes").columns());
+        assertEquals(TAKES.primaryKey(), reopened.getSchema("takes").primaryKey());
+        assertTrue(reopened.getAllIndexes().isEmpty());
+    }
+
+    @Test
+    void failedCascadePersistenceRestoresAllSchemasAndIndexes() throws Exception {
+        catalog.saveSchema(STUDENTS);
+        catalog.saveSchema(TAKES);
+        catalog.registerIndex(IDX_NIM);
+        Files.delete(directory.resolve("catalog.bin"));
+        Files.createDirectory(directory.resolve("catalog.bin"));
+        Files.writeString(directory.resolve("catalog.bin/blocker"), "prevent replacement");
+        assertCode(StorageErrorCode.IO_FAILURE, () -> catalog.dropTable("students", DropBehavior.CASCADE));
+        assertEquals(STUDENTS, catalog.getSchema("students"));
+        assertEquals(TAKES, catalog.getSchema("takes"));
+        assertEquals(List.of(IDX_NIM), catalog.getIndexes("students"));
     }
 }

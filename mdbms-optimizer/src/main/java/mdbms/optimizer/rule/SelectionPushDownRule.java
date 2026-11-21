@@ -163,8 +163,8 @@ public class SelectionPushDownRule implements IOptimizationRule {
 
     private static void collectTables(QueryTree node, BindingContext bindings, Set<String> out) {
         if (node.getNodeType() == QueryNodeType.TABLE_SCAN && node.getTableName() != null) {
-            TableBinding binding = bindings.getTableBinding(node.getTableName());
-            String name = binding != null ? binding.getAlias() : node.getTableName();
+            TableBinding binding = bindings.getTableBindingByAlias(node.getBindingName());
+            String name = binding != null ? binding.getAlias() : node.getBindingName();
             out.add(name.toLowerCase(Locale.ROOT));
         }
         for (QueryTree child : node.getChildren()) {

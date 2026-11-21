@@ -27,9 +27,9 @@ class CartesianJoinOperatorTest {
         CartesianJoinOperator operator = new CartesianJoinOperator(left, right);
         operator.open();
         try {
-            assertJoinedRow(operator.next(), 1, "Nafis", 3170, "Artificial Intelligence");
+            assertJoinedRow(operator.next(), 1, "Nafis", 3170, "Databases");
             assertJoinedRow(operator.next(), 1, "Nafis", 3140, "Database System");
-            assertJoinedRow(operator.next(), 2, "Habibi", 3170, "Artificial Intelligence");
+            assertJoinedRow(operator.next(), 2, "Habibi", 3170, "Databases");
             assertJoinedRow(operator.next(), 2, "Habibi", 3140, "Database System");
             assertNull(operator.next());
         } finally {

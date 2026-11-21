@@ -21,6 +21,7 @@ import mdbms.models.data.Condition;
 import mdbms.models.schema.IndexInfo;
 import mdbms.models.schema.Statistic;
 import mdbms.models.schema.TableSchema;
+import mdbms.models.schema.DropBehavior;
 import mdbms.models.schema.ColumnDefinition;
 import mdbms.storage.exception.StorageErrorCode;
 import mdbms.storage.exception.StorageException;
@@ -284,13 +285,19 @@ public final class StorageManager implements IDataAccess, ISchemaCatalog, IStati
 
     @Override
     public void dropTable(String table){
+        dropTable(table, DropBehavior.RESTRICT);
+    }
+
+    @Override
+    public void dropTable(String table, DropBehavior behavior){
         requireSchema(table);
+        catalog.validateDrop(table, behavior);
 
         indexManager.dropIndexesOf(table);
         bufferPool.discardFile(table + ".tbl");
         tables.remove(table);
         statistics.invalidate(table);
-        catalog.dropTable(table);
+        catalog.dropTable(table, behavior);
     }
 
     // kosongin semua baris tabel tapi tabelnya tetap ada, index tabel ikut dikosongin dan statistik dihitung ulang

@@ -106,7 +106,7 @@ public class ProjectionPushDownRule implements IOptimizationRule {
     private static List<ColumnReference> columnsOf(QueryTree node, BindingContext bindings) {
         List<ColumnReference> result = new ArrayList<>();
         if (node.getNodeType() == QueryNodeType.TABLE_SCAN && node.getTableName() != null) {
-            TableBinding table = bindings.getTableBinding(node.getTableName());
+            TableBinding table = bindings.getTableBindingByAlias(node.getBindingName());
             if (table != null) {
                 for (ColumnDefinition column : table.getSchema().columns()) {
                     result.add(new ColumnReference(table.getAlias(), column.name()));

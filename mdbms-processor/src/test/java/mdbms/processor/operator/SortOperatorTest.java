@@ -31,13 +31,14 @@ class SortOperatorTest {
 
     @Test
     void sortMultipleColumns() {
-        IQueryOperator input = IntegerRowUtility.source(3, 1, 2);
+        IQueryOperator input = IntegerRowUtility.source(3, 1, 4, 2, 5);
 
         SortOperator operator = new SortOperator(input, List.of(
                 new SortOperator.SortKey(null, "group", true),
                 new SortOperator.SortKey(null, "value", false)));
 
-        assertEquals(List.of(2, 3, 1), IntegerRowUtility.collect(operator));
+        // group is value % 3; equal groups use value descending.
+        assertEquals(List.of(3, 4, 1, 5, 2), IntegerRowUtility.collect(operator));
     }
 
     @Test
@@ -48,6 +49,6 @@ class SortOperatorTest {
                 new SortOperator.SortKey(null, "group", true),
                 new SortOperator.SortKey(null, "value", true)));
 
-        assertEquals(List.of(2, 5, 9), IntegerRowUtility.collect(operator));
+        assertEquals(List.of(9, 2, 5), IntegerRowUtility.collect(operator));
     }
 }
