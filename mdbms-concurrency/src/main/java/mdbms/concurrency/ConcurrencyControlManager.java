@@ -265,6 +265,7 @@ public final class ConcurrencyControlManager implements IConcurrencyControl {
      * across the callback prevents commit/abort from releasing protection
      * between the WAL preparation and the physical move.
      */
+    @Override
     public <T> T executeRelocation(
             int txId,
             DataItem oldItem,

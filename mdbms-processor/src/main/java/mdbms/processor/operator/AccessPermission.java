@@ -21,6 +21,10 @@ final class AccessPermission {
         await(transactionId, () -> concurrencyControlManager.requestWrite(transactionId, item, oldValues, newValues));
     }
 
+    static void lockWrite(IConcurrencyControl concurrency, int transactionId, DataItem item) {
+        await(transactionId, () -> concurrency.requestWrite(transactionId, item));
+    }
+
     private static void await(int transactionId, Supplier<AccessStatus> request) {
         AccessStatus status = request.get();
         while (status == AccessStatus.WAITING) {

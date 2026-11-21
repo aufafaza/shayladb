@@ -11,8 +11,10 @@ import java.lang.reflect.Proxy;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
+import mdbms.api.IDataAccess;
 import mdbms.api.IDurableStorage;
 import mdbms.api.IFailureRecoveryManager;
+import mdbms.api.ISchemaCatalog;
 import mdbms.models.access.DataRetrieval;
 import mdbms.models.log.RecoveryResult;
 import mdbms.models.schema.ColumnDefinition;
@@ -38,8 +40,9 @@ class DBMSTest {
     private DBMS withStubs(DBMSConfig config) {
         IDurableStorage storage = (IDurableStorage) Proxy.newProxyInstance(
                 IDurableStorage.class.getClassLoader(),
-                new Class<?>[] {IDurableStorage.class},
+                new Class<?>[] {IDurableStorage.class, IDataAccess.class, ISchemaCatalog.class},
                 (proxy, method, args) -> {
+                    if (method.getName().equals("listTable")) return List.of("fixture");
                     calls.add(method.getName());
                     return null;
                 });
